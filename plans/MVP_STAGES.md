@@ -1,6 +1,6 @@
 # MVP Stage Plan
 
-This file maps `plans/MVP.md` onto the current `lastty` repo rather than the greenfield scaffold described in that document.
+This file captures the repo-specific staged plan for the current `lastty` implementation.
 
 ## Stage 0: Validation Harness And Runtime Alignment
 
