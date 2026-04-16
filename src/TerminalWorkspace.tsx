@@ -121,6 +121,22 @@ export default function TerminalWorkspace() {
   const focusedPaneId = currentDesktop?.focusedPaneId ?? null;
   const [draggingPaneId, setDraggingPaneId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!draggingPaneId) return;
+    const clear = () => setDraggingPaneId(null);
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") clear();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("dragend", clear);
+      window.removeEventListener("drop", clear);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [draggingPaneId]);
+
   const theme = useThemeOverride();
 
   useEffect(() => {
@@ -956,6 +972,7 @@ function renderLayout(
             display: "grid",
             gridTemplateColumns: showInspector ? "minmax(0, 1fr) 320px" : "minmax(0, 1fr)",
             gridTemplateRows: "minmax(0, 1fr)",
+            position: "relative",
           }}
         >
           <TerminalViewport
@@ -967,6 +984,12 @@ function renderLayout(
             sessionId={pane.sessionId}
           />
           {showInspector && <AgentInspector agent={agent} />}
+          {draggingPaneId && draggingPaneId !== pane.id && (
+            <PaneDropOverlay
+              onDropEdge={(side) => onDropPaneOnEdge(draggingPaneId, pane.id, side)}
+              onDropBody={() => onDropPaneOnBody(draggingPaneId, pane.id)}
+            />
+          )}
         </div>
         {blocked ? (
           <ReplyInput
@@ -987,12 +1010,6 @@ function renderLayout(
           </div>
         )}
         <EdgeSpawner onSpawn={(direction) => onSpawnAdjacent(pane.id, direction)} />
-        {draggingPaneId && draggingPaneId !== pane.id && (
-          <PaneDropOverlay
-            onDropEdge={(side) => onDropPaneOnEdge(draggingPaneId, pane.id, side)}
-            onDropBody={() => onDropPaneOnBody(draggingPaneId, pane.id)}
-          />
-        )}
       </section>
     );
   }
