@@ -10,13 +10,15 @@
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
+        isDarwin = pkgs.stdenv.isDarwin;
 
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" ];
           targets = [];
         };
 
-        libraries = with pkgs; [
+        # Linux-specific libraries (runtime)
+        linuxLibraries = with pkgs; [
           webkitgtk_4_1
           gtk3
           cairo
@@ -33,17 +35,12 @@
           expat
         ];
 
-        buildInputs = with pkgs; [
-          rustToolchain
-          pkg-config
+        # Linux-specific build inputs
+        linuxBuildInputs = with pkgs; [
           gobject-introspection
-          cargo-tauri
-          nodejs
-          pnpm
           cmake
           fontconfig
           freetype
-          # Dev packages needed by Tauri/GTK pkg-config lookups
           webkitgtk_4_1.dev
           gtk3.dev
           cairo.dev
@@ -57,12 +54,37 @@
           harfbuzz.dev
           libsoup_3.dev
         ];
+
+        # macOS-specific build inputs
+        darwinBuildInputs = with pkgs; [
+          darwin.apple_sdk.frameworks.WebKit
+          darwin.apple_sdk.frameworks.Metal
+          darwin.apple_sdk.frameworks.CoreGraphics
+          darwin.apple_sdk.frameworks.QuartzCore
+          darwin.apple_sdk.frameworks.Security
+          darwin.apple_sdk.frameworks.AppKit
+        ];
+
+        commonBuildInputs = with pkgs; [
+          rustToolchain
+          pkg-config
+          cargo-tauri
+          nodejs
+          pnpm
+        ];
+
+        buildInputs = commonBuildInputs
+          ++ (if isDarwin then darwinBuildInputs else linuxBuildInputs);
+
+        libraries = if isDarwin then [] else linuxLibraries;
       in
       {
         devShells.default = pkgs.mkShell {
           inherit buildInputs;
 
-          shellHook = ''
+          shellHook = if isDarwin then ''
+            # macOS: Metal is used by wgpu automatically
+          '' else ''
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath libraries}:$LD_LIBRARY_PATH"
             export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS"
             export GIO_MODULE_DIR="${pkgs.glib-networking}/lib/gio/modules/"

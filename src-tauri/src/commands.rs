@@ -11,7 +11,7 @@ fn build_pane_env() -> HashMap<String, String> {
     let mut env = HashMap::new();
     env.insert("TERM".to_string(), "xterm-256color".to_string());
     env.insert("COLORTERM".to_string(), "truecolor".to_string());
-    env.insert("PANE".to_string(), "1".to_string());
+    env.insert("LASTTY".to_string(), "1".to_string());
     env
 }
 

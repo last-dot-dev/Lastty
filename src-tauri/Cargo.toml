@@ -1,7 +1,11 @@
 [package]
-name = "pane"
+name = "lastty"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "lastty"
+path = "src/main.rs"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -17,7 +21,6 @@ uuid = { version = "1", features = ["v4"] }
 dashmap = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tauri-plugin-shell = "2"
 raw-window-handle = "0.6"
 pane-protocol = { path = "../pane-protocol" }
 bytemuck = { version = "1", features = ["derive"] }

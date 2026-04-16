@@ -22,7 +22,7 @@ use terminal::session::SessionId;
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::from_default_env().add_directive("pane=debug".parse().unwrap()),
+            EnvFilter::from_default_env().add_directive("lastty=debug".parse().unwrap()),
         )
         .init();
 
@@ -43,7 +43,7 @@ fn main() {
             let mut env = HashMap::new();
             env.insert("TERM".to_string(), "xterm-256color".to_string());
             env.insert("COLORTERM".to_string(), "truecolor".to_string());
-            env.insert("PANE".to_string(), "1".to_string());
+            env.insert("LASTTY".to_string(), "1".to_string());
 
             let session_id = manager
                 .create_session(None, &cwd, &env, 80, 24)
@@ -134,5 +134,5 @@ fn main() {
             commands::key_input,
         ])
         .run(tauri::generate_context!())
-        .expect("error running Pane");
+        .expect("error running lastty");
 }
