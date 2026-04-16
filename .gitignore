@@ -36,3 +36,6 @@ Thumbs.db
 references/**
 docs/plan/**
 src-tauri/gen/
+
+# AgentOps session artifacts
+.agents/

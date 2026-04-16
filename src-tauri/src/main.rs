@@ -6,7 +6,9 @@ mod agents;
 mod bus;
 mod commands;
 mod events;
+mod font_config;
 mod input;
+mod platform;
 mod protocol;
 mod render_sync;
 mod renderer;
@@ -118,16 +120,45 @@ fn main() {
                 return Ok(());
             }
 
-            // Initialize wgpu renderer and start render loop.
+            // Initialize wgpu renderer with a child Metal view (hybrid compositing).
             let size = window.inner_size().unwrap();
+            let scale_factor = window.scale_factor().unwrap_or(1.0) as f32;
+            let font_config = font_config::FontConfig::DEFAULT;
+
+            let instance = wgpu::Instance::default();
+
+            #[cfg(target_os = "macos")]
+            let (_metal_subview, surface) = {
+                let ns_window = window.ns_window().expect("failed to get NSWindow handle");
+                let subview = unsafe { platform::macos::create_metal_subview(ns_window) };
+                let surface = unsafe {
+                    platform::macos::create_wgpu_surface(&instance, &subview)
+                        .expect("failed to create wgpu surface from Metal subview")
+                };
+                (subview, surface)
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            let surface = instance
+                .create_surface(window)
+                .expect("failed to create wgpu surface");
 
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
 
-            let renderer: anyhow::Result<TerminalRenderer> =
-                rt.block_on(async { TerminalRenderer::new(window, size.width.max(1), size.height.max(1)).await });
+            let renderer: anyhow::Result<TerminalRenderer> = rt.block_on(async {
+                TerminalRenderer::new(
+                    &instance,
+                    surface,
+                    size.width.max(1),
+                    size.height.max(1),
+                    font_config,
+                    scale_factor,
+                )
+                .await
+            });
 
             let mut renderer = match renderer {
                 Ok(r) => r,
@@ -277,6 +308,18 @@ fn main() {
                         let emit_elapsed = last_perf_emit.elapsed();
                         if emit_elapsed >= PERF_EMIT_INTERVAL {
                             let fps = frames_since_emit as f64 / emit_elapsed.as_secs_f64();
+                            tracing::debug!(
+                                "perf fps={:.1} frame_ms={:.2} cache_ms={:.2} rect_ms={:.2} prepare_ms={:.2} gpu_ms={:.2} glyphs={} cached={} gen={}",
+                                fps,
+                                avg_frame_ms,
+                                avg_cache_ms,
+                                avg_rect_ms,
+                                avg_prepare_ms,
+                                avg_gpu_ms,
+                                render_metrics.text_areas,
+                                renderer.cached_line_count(),
+                                latest_generation,
+                            );
                             app_handle
                                 .emit(
                                     "perf:stats",
@@ -340,6 +383,7 @@ fn main() {
             commands::quit_app,
             commands::get_benchmark_mode,
             commands::get_benchmark_config,
+            commands::get_font_config,
             commands::get_renderer_mode,
             commands::get_primary_session_id,
             commands::list_sessions,

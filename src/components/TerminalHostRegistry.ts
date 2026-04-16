@@ -5,6 +5,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebglAddon } from "@xterm/addon-webgl";
 
 import {
+  getFontConfig,
   getTerminalFrame,
   terminalInput,
   terminalResize,
@@ -79,6 +80,15 @@ function setStatus(entry: Entry, status: string) {
 
 async function initEntry(entry: Entry, initialProps: SessionHostProps) {
   const { host, terminal, sessionId } = entry;
+
+  try {
+    const font = await getFontConfig();
+    terminal.options.fontFamily = `${font.family}, Monaco, monospace`;
+    terminal.options.fontSize = font.size_px;
+    terminal.options.lineHeight = font.line_height;
+  } catch {
+    // keep constructor defaults if the host doesn't expose font config
+  }
 
   entry.fit = new FitAddon();
   terminal.loadAddon(entry.fit);

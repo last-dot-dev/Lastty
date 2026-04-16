@@ -13,6 +13,9 @@ tauri-build = { version = "2", features = [] }
 alacritty_terminal = "0.26"
 wgpu = "29"
 glyphon = "0.11"
+swash = "0.2"
+etagere = "0.3"
+fontdb = "0.23"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -29,6 +32,11 @@ polling = "3"
 portable-pty = "0.9.0"
 ratatui = "0.29.0"
 crossterm = "0.28.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSGeometry", "NSObject"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSResponder"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

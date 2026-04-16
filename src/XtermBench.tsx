@@ -3,7 +3,12 @@ import { Terminal } from "@xterm/xterm";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 
-import { getBenchmarkConfig, quitApp, writeBenchmarkReport } from "./lib/ipc";
+import {
+  getBenchmarkConfig,
+  getFontConfig,
+  quitApp,
+  writeBenchmarkReport,
+} from "./lib/ipc";
 
 type RendererMode = "dom" | "webgl";
 
@@ -60,6 +65,7 @@ export default function XtermBench() {
         setStatus(`failing: ${config.forceFailureMessage}`);
         throw new Error(config.forceFailureMessage);
       }
+      const font = await getFontConfig();
       const workloads = buildWorkloads(config.cols, config.rows);
       const results: BenchResult[] = [];
 
@@ -69,8 +75,9 @@ export default function XtermBench() {
           rows: config.rows,
           scrollback: 0,
           allowProposedApi: true,
-          fontFamily: "Menlo, Monaco, monospace",
-          fontSize: 14,
+          fontFamily: `${font.family}, Monaco, monospace`,
+          fontSize: font.size_px,
+          lineHeight: font.line_height,
         });
 
         let webglAddon: WebglAddon | null = null;
