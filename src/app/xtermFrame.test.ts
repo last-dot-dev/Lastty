@@ -1,9 +1,13 @@
+// @vitest-environment jsdom
+
+import xtermPkg from "@xterm/xterm";
 import { describe, expect, it } from "vitest";
 
 import type { TerminalFrame } from "../lib/ipc";
 
-import { prepareXtermFrameWrite } from "./xtermFrame";
+import { prepareXtermFrameWrite, type XtermFrameState } from "./xtermFrame";
 
+const { Terminal } = xtermPkg;
 const decoder = new TextDecoder();
 
 describe("prepareXtermFrameWrite", () => {
@@ -42,4 +46,59 @@ function makeFrame(alternateScreen: boolean, ansi: string): TerminalFrame {
     total_lines: 0,
     alternate_screen: alternateScreen,
   };
+}
+
+describe("xterm scrollback under frame transitions", () => {
+  it("keeps main-buffer scrollback reachable when frames stay on the main screen", async () => {
+    const term = new Terminal({ allowProposedApi: true, cols: 10, rows: 3, scrollback: 50 });
+    const lines = Array.from({ length: 12 }, (_, i) => `line${i}`).join("\r\n");
+
+    writeSequence(term, [makeFrame(false, lines)]);
+    await flushXterm();
+
+    expect(term.buffer.active.type).toBe("normal");
+    expect(term.buffer.active.baseY).toBeGreaterThan(0);
+  });
+
+  it("switches to the alternate buffer with no scrollback once alt-screen frames arrive", async () => {
+    const term = new Terminal({ allowProposedApi: true, cols: 10, rows: 3, scrollback: 50 });
+    const history = Array.from({ length: 12 }, (_, i) => `line${i}`).join("\r\n");
+
+    writeSequence(term, [
+      makeFrame(false, history),
+      makeFrame(true, "\u001b[HTUI"),
+    ]);
+    await flushXterm();
+
+    expect(term.buffer.active.type).toBe("alternate");
+    expect(term.buffer.active.baseY).toBe(0);
+  });
+
+  it("restores main-buffer scrollback when the session exits alt-screen", async () => {
+    const term = new Terminal({ allowProposedApi: true, cols: 10, rows: 3, scrollback: 50 });
+    const history = Array.from({ length: 12 }, (_, i) => `line${i}`).join("\r\n");
+
+    writeSequence(term, [
+      makeFrame(false, history),
+      makeFrame(true, "\u001b[HTUI"),
+      makeFrame(false, ""),
+    ]);
+    await flushXterm();
+
+    expect(term.buffer.active.type).toBe("normal");
+    expect(term.buffer.active.baseY).toBeGreaterThan(0);
+  });
+});
+
+function writeSequence(term: InstanceType<typeof Terminal>, frames: TerminalFrame[]) {
+  let state: XtermFrameState | null = null;
+  for (const frame of frames) {
+    const { bytes, state: next } = prepareXtermFrameWrite(frame, state);
+    term.write(bytes);
+    state = next;
+  }
+}
+
+async function flushXterm() {
+  await new Promise((resolve) => setTimeout(resolve, 10));
 }
