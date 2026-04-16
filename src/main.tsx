@@ -4,6 +4,8 @@ import App from "./App";
 import XtermBench from "./XtermBench";
 import XtermTerminal from "./XtermTerminal";
 import { getBenchmarkMode, getRendererMode } from "./lib/ipc";
+import "./styles/tokens.css";
+import "./styles/agent.css";
 
 function Root() {
   const [benchMode, setBenchMode] = useState<string | null | undefined>(undefined);
