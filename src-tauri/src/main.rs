@@ -46,7 +46,10 @@ fn main() {
             #[cfg(target_os = "macos")]
             {
                 window.set_title_bar_style(TitleBarStyle::Transparent)?;
-                window.set_background_color(Some(Color(69, 69, 80, 255)))?;
+                // Fully transparent so the HTML body's theme-aware background
+                // (see src/styles/tokens.css — --color-background-tertiary)
+                // shows through the title bar area in both light and dark themes.
+                window.set_background_color(Some(Color(0, 0, 0, 0)))?;
             }
 
             if benchmark_mode == Some(BenchmarkMode::Xterm) {

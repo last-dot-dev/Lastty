@@ -16,6 +16,8 @@ import {
 import { prepareXtermFrameWrite, type XtermFrameState } from "../app/xtermFrame";
 import { writeSelectionToClipboard } from "../app/xtermSelection";
 import type { PersistedTerminalSnapshot } from "../app/sessionRestore";
+import { useEffectiveTheme } from "../hooks/useThemeOverride";
+import { xtermThemeFor } from "./terminalTheme";
 
 interface TerminalViewportProps {
   blocked?: boolean;
@@ -41,6 +43,9 @@ export default function TerminalViewport({
   const onSnapshotChangeRef = useRef(onSnapshotChange);
   const restoredSnapshotRef = useRef(restoredSnapshot);
   const [status, setStatus] = useState("initializing");
+  const effectiveTheme = useEffectiveTheme();
+  const themeRef = useRef(effectiveTheme);
+  themeRef.current = effectiveTheme;
 
   useEffect(() => {
     blockedRef.current = blocked;
@@ -75,11 +80,7 @@ export default function TerminalViewport({
         fontSize: 14,
         lineHeight: 1.2,
         scrollback: 10_000,
-        theme: {
-          background: "#11131a",
-          foreground: "#d6d9e0",
-          cursor: "#f4f5f7",
-        },
+        theme: xtermThemeFor(themeRef.current),
       });
       terminalRef.current = terminal;
       fitAddon = new FitAddon();
@@ -221,6 +222,12 @@ export default function TerminalViewport({
     }
   }, [blocked, focused]);
 
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal?.options) return;
+    terminal.options.theme = xtermThemeFor(effectiveTheme);
+  }, [effectiveTheme]);
+
   return (
     <div
       style={{
@@ -228,7 +235,7 @@ export default function TerminalViewport({
         height: "100%",
         display: "grid",
         gridTemplateRows: "auto 1fr",
-        background: "#11131a",
+        background: "var(--color-background-primary)",
       }}
       onMouseDown={onActivate}
     >
@@ -236,10 +243,10 @@ export default function TerminalViewport({
         data-testid="terminal-status"
         style={{
           padding: "4px 10px",
-          color: "#7b8498",
-          fontFamily: "monospace",
+          color: "var(--color-text-tertiary)",
+          fontFamily: "var(--font-mono)",
           fontSize: 11,
-          borderBottom: "1px solid #1f2430",
+          borderBottom: "0.5px solid var(--color-border-tertiary)",
         }}
       >
         {status}
