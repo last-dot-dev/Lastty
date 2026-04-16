@@ -1,6 +1,6 @@
-use pane_protocol::parser::{OscParser, ParsedChunk};
-use pane_protocol::message::AgentUiMessage;
 use pane_protocol::encoder::encode;
+use pane_protocol::message::AgentUiMessage;
+use pane_protocol::parser::{OscParser, ParsedChunk};
 use serde_json::json;
 
 fn parse_all(data: &[u8]) -> Vec<ParsedChunk> {
@@ -227,10 +227,7 @@ fn osc_split_byte_by_byte() {
         .collect();
 
     assert_eq!(messages.len(), 1);
-    assert_eq!(
-        messages[0],
-        ParsedChunk::AgentMessage(msg)
-    );
+    assert_eq!(messages[0], ParsedChunk::AgentMessage(msg));
 }
 
 #[test]
@@ -253,9 +250,15 @@ fn split_with_terminal_data_before_and_after() {
     let c2 = parser.feed(&full[split_point..]);
 
     let all: Vec<_> = c1.into_iter().chain(c2).collect();
-    let has_prefix = all.iter().any(|c| matches!(c, ParsedChunk::TerminalData(d) if d == b"prefix "));
-    let has_msg = all.iter().any(|c| matches!(c, ParsedChunk::AgentMessage(_)));
-    let has_suffix = all.iter().any(|c| matches!(c, ParsedChunk::TerminalData(d) if d == b" suffix"));
+    let has_prefix = all
+        .iter()
+        .any(|c| matches!(c, ParsedChunk::TerminalData(d) if d == b"prefix "));
+    let has_msg = all
+        .iter()
+        .any(|c| matches!(c, ParsedChunk::AgentMessage(_)));
+    let has_suffix = all
+        .iter()
+        .any(|c| matches!(c, ParsedChunk::TerminalData(d) if d == b" suffix"));
 
     assert!(has_prefix, "should have prefix terminal data");
     assert!(has_msg, "should have agent message");
@@ -338,13 +341,19 @@ fn oversized_payload_emits_malformed() {
     let has_malformed = chunks
         .iter()
         .any(|c| matches!(c, ParsedChunk::MalformedOsc(_)));
-    assert!(has_malformed, "oversized payload should produce MalformedOsc");
+    assert!(
+        has_malformed,
+        "oversized payload should produce MalformedOsc"
+    );
 
     // Should NOT produce an AgentMessage.
     let has_agent = chunks
         .iter()
         .any(|c| matches!(c, ParsedChunk::AgentMessage(_)));
-    assert!(!has_agent, "oversized payload should not produce AgentMessage");
+    assert!(
+        !has_agent,
+        "oversized payload should not produce AgentMessage"
+    );
 }
 
 // ── ST terminator (ESC \) ────────────────────────────────────────────

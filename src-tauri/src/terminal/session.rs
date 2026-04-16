@@ -1,18 +1,27 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::event_loop::{EventLoop, Msg};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term};
 use alacritty_terminal::tty;
+use pane_protocol::{AgentUiMessage, OscParser, ParsedChunk};
+use serde::Serialize;
+use tauri::{Emitter, Manager, Runtime};
 use uuid::Uuid;
 
+use crate::bus::{BusEvent, EventBus};
+use crate::events::AgentUiEvent;
 use crate::render_sync::RenderCoordinator;
 
 use super::event_proxy::EventProxy;
@@ -48,6 +57,25 @@ pub enum SessionStatus {
     Exited(i32),
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionInfo {
+    pub session_id: String,
+    pub title: String,
+    pub agent_id: Option<String>,
+    pub cwd: String,
+    pub prompt: Option<String>,
+    pub prompt_summary: Option<String>,
+    pub worktree_path: Option<String>,
+    pub control_connected: bool,
+    pub started_at_ms: u128,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandSpec {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
 /// Dimensions helper that implements the Dimensions trait for Term::new.
 pub struct TermDimensions {
     pub cols: usize,
@@ -68,26 +96,54 @@ impl alacritty_terminal::grid::Dimensions for TermDimensions {
     }
 }
 
-pub struct TerminalSession {
+pub struct TerminalSession<R: Runtime = tauri::Wry> {
     pub id: SessionId,
-    pub term: Arc<FairMutex<Term<EventProxy>>>,
+    pub term: Arc<FairMutex<Term<EventProxy<R>>>>,
     pub event_tx: EventLoopSender,
-    _event_loop_handle: thread::JoinHandle<(EventLoop<tty::Pty, EventProxy>, alacritty_terminal::event_loop::State)>,
+    _event_loop_handle: thread::JoinHandle<(
+        EventLoop<InterceptingPty<R>, EventProxy<R>>,
+        alacritty_terminal::event_loop::State,
+    )>,
     pub status: SessionStatus,
+    pub started_at: Instant,
+    pub title: Arc<Mutex<String>>,
+    pub agent_id: Option<String>,
+    pub cwd: String,
+    pub prompt: Option<String>,
+    pub prompt_summary: Option<String>,
+    pub worktree_path: Option<String>,
+    control_socket_path: Option<std::path::PathBuf>,
+    control_connected: Arc<AtomicBool>,
+    #[cfg(unix)]
+    control_stream: Arc<Mutex<Option<std::os::unix::net::UnixStream>>>,
+    control_accept_alive: Arc<AtomicBool>,
 }
 
 pub type EventLoopSender = alacritty_terminal::event_loop::EventLoopSender;
 
-pub fn create_session(
-    command: Option<&str>,
+pub fn create_session<R: Runtime>(
+    command: Option<&CommandSpec>,
     cwd: &Path,
     env: &HashMap<String, String>,
     cols: u16,
     rows: u16,
     render_coordinator: Arc<RenderCoordinator>,
-    app: tauri::AppHandle,
-) -> anyhow::Result<TerminalSession> {
+    app: tauri::AppHandle<R>,
+    agent_id: Option<String>,
+    prompt_summary: Option<String>,
+    prompt: Option<String>,
+    worktree_path: Option<String>,
+) -> anyhow::Result<TerminalSession<R>> {
     let id = SessionId::new();
+    let title = Arc::new(Mutex::new("shell".to_string()));
+    let control_connected = Arc::new(AtomicBool::new(false));
+    let control_accept_alive = Arc::new(AtomicBool::new(true));
+    #[cfg(unix)]
+    let control_stream = Arc::new(Mutex::new(None));
+    #[cfg(unix)]
+    let control_socket_path = Some(std::env::temp_dir().join(format!("lastty-{}.sock", id)));
+    #[cfg(not(unix))]
+    let control_socket_path: Option<std::path::PathBuf> = None;
 
     // Channel for PtyWrite events (DSR responses, etc.)
     let (pty_write_tx, pty_write_rx) = mpsc::channel::<String>();
@@ -96,7 +152,10 @@ pub fn create_session(
         session_id: id,
         render_coordinator,
         pty_write_tx,
-        app,
+        app: app.clone(),
+        title: title.clone(),
+        workspace_path: Some(cwd.display().to_string()),
+        worktree_path: worktree_path.clone(),
     };
 
     // 1. Configure terminal
@@ -109,11 +168,22 @@ pub fn create_session(
     let term = Arc::new(FairMutex::new(term));
 
     // 2. Configure and open PTY
-    let shell = command.map(|c| tty::Shell::new(c.to_string(), vec![]));
+    let shell = command.map(|c| tty::Shell::new(c.program.clone(), c.args.clone()));
+    let mut env = env.clone();
+    env.insert("LASTTY_SESSION_ID".to_string(), id.to_string());
+    if let Some(agent_id) = agent_id.as_ref() {
+        env.insert("LASTTY_AGENT_ID".to_string(), agent_id.clone());
+    }
+    if let Some(socket_path) = control_socket_path.as_ref() {
+        env.insert(
+            "PANE_CONTROL_SOCKET".to_string(),
+            socket_path.to_string_lossy().to_string(),
+        );
+    }
     let pty_config = tty::Options {
         shell,
         working_directory: Some(cwd.to_path_buf()),
-        env: env.clone(),
+        env,
         ..Default::default()
     };
 
@@ -124,15 +194,36 @@ pub fn create_session(
         cell_height: 16,
     };
     let pty = tty::new(&pty_config, window_size, id.as_u64())?;
+    let pty = InterceptingPty::new(pty, app.clone(), id)?;
+
+    #[cfg(unix)]
+    if let Some(socket_path) = control_socket_path.clone() {
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)?;
+        listener.set_nonblocking(true)?;
+        let control_stream = control_stream.clone();
+        let control_connected = control_connected.clone();
+        let control_accept_alive = control_accept_alive.clone();
+        thread::spawn(move || {
+            while control_accept_alive.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        *control_stream.lock().unwrap() = Some(stream);
+                        control_connected.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = fs::remove_file(&socket_path);
+        });
+    }
 
     // 3. Start event loop (PTY I/O thread)
-    let event_loop = EventLoop::new(
-        Arc::clone(&term),
-        event_proxy,
-        pty,
-        false,
-        false,
-    )?;
+    let event_loop = EventLoop::new(Arc::clone(&term), event_proxy, pty, false, false)?;
     let event_tx = event_loop.channel();
     let handle = event_loop.spawn();
 
@@ -150,10 +241,22 @@ pub fn create_session(
         event_tx,
         _event_loop_handle: handle,
         status: SessionStatus::Running,
+        started_at: Instant::now(),
+        title,
+        agent_id,
+        cwd: cwd.display().to_string(),
+        prompt,
+        prompt_summary,
+        worktree_path,
+        control_socket_path,
+        control_connected,
+        #[cfg(unix)]
+        control_stream,
+        control_accept_alive,
     })
 }
 
-impl TerminalSession {
+impl<R: Runtime> TerminalSession<R> {
     pub fn write(&self, data: &[u8]) -> Result<(), String> {
         self.event_tx
             .send(Msg::Input(Cow::Owned(data.to_vec())))
@@ -181,6 +284,240 @@ impl TerminalSession {
     }
 
     pub fn shutdown(&self) {
+        self.control_accept_alive.store(false, Ordering::Relaxed);
+        if let Some(socket_path) = self.control_socket_path.as_ref() {
+            let _ = fs::remove_file(socket_path);
+        }
         let _ = self.event_tx.send(Msg::Shutdown);
+    }
+
+    pub fn send_control_message(&self, message: &str) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let mut guard = self.control_stream.lock().unwrap();
+            let Some(stream) = guard.as_mut() else {
+                return Err("agent control socket not connected".to_string());
+            };
+            stream
+                .write_all(message.as_bytes())
+                .and_then(|_| stream.write_all(b"\n"))
+                .map_err(|error| error.to_string())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = message;
+            Err("control socket unsupported on this platform".to_string())
+        }
+    }
+
+    pub fn info(&self) -> SessionInfo {
+        SessionInfo {
+            session_id: self.id.to_string(),
+            title: self.title.lock().unwrap().clone(),
+            agent_id: self.agent_id.clone(),
+            cwd: self.cwd.clone(),
+            prompt: self.prompt.clone(),
+            prompt_summary: self.prompt_summary.clone(),
+            worktree_path: self.worktree_path.clone(),
+            control_connected: self.control_connected.load(Ordering::Relaxed),
+            started_at_ms: self.started_at.elapsed().as_millis(),
+        }
+    }
+}
+
+struct InterceptingPty<R: Runtime = tauri::Wry> {
+    inner: tty::Pty,
+    reader: ProtocolReader<R>,
+    writer: File,
+}
+
+impl<R: Runtime> InterceptingPty<R> {
+    fn new(inner: tty::Pty, app: tauri::AppHandle<R>, session_id: SessionId) -> io::Result<Self> {
+        let reader = ProtocolReader::new(inner.file().try_clone()?, app, session_id);
+        let writer = inner.file().try_clone()?;
+        Ok(Self {
+            inner,
+            reader,
+            writer,
+        })
+    }
+}
+
+impl<R: Runtime> tty::EventedReadWrite for InterceptingPty<R> {
+    type Reader = ProtocolReader<R>;
+    type Writer = File;
+
+    unsafe fn register(
+        &mut self,
+        poll: &Arc<polling::Poller>,
+        interest: polling::Event,
+        poll_opts: polling::PollMode,
+    ) -> io::Result<()> {
+        unsafe { self.inner.register(poll, interest, poll_opts) }
+    }
+
+    fn reregister(
+        &mut self,
+        poll: &Arc<polling::Poller>,
+        interest: polling::Event,
+        poll_opts: polling::PollMode,
+    ) -> io::Result<()> {
+        self.inner.reregister(poll, interest, poll_opts)
+    }
+
+    fn deregister(&mut self, poll: &Arc<polling::Poller>) -> io::Result<()> {
+        self.inner.deregister(poll)
+    }
+
+    fn reader(&mut self) -> &mut Self::Reader {
+        &mut self.reader
+    }
+
+    fn writer(&mut self) -> &mut Self::Writer {
+        &mut self.writer
+    }
+}
+
+impl<R: Runtime> tty::EventedPty for InterceptingPty<R> {
+    fn next_child_event(&mut self) -> Option<tty::ChildEvent> {
+        self.inner.next_child_event()
+    }
+}
+
+impl<R: Runtime> alacritty_terminal::event::OnResize for InterceptingPty<R> {
+    fn on_resize(&mut self, window_size: WindowSize) {
+        self.inner.on_resize(window_size);
+    }
+}
+
+struct ProtocolReader<R: Runtime = tauri::Wry> {
+    source: File,
+    parser: OscParser,
+    pending_terminal: std::collections::VecDeque<u8>,
+    app: tauri::AppHandle<R>,
+    session_id: SessionId,
+}
+
+impl<R: Runtime> ProtocolReader<R> {
+    fn new(source: File, app: tauri::AppHandle<R>, session_id: SessionId) -> Self {
+        Self {
+            source,
+            parser: OscParser::new(),
+            pending_terminal: std::collections::VecDeque::new(),
+            app,
+            session_id,
+        }
+    }
+
+    fn drain_pending(&mut self, buf: &mut [u8]) -> usize {
+        let count = buf.len().min(self.pending_terminal.len());
+        for slot in buf.iter_mut().take(count) {
+            *slot = self.pending_terminal.pop_front().unwrap_or_default();
+        }
+        count
+    }
+
+    fn handle_chunks(&mut self, chunks: Vec<ParsedChunk>) {
+        for chunk in chunks {
+            match chunk {
+                ParsedChunk::TerminalData(bytes) | ParsedChunk::MalformedOsc(bytes) => {
+                    self.app
+                        .state::<EventBus<R>>()
+                        .publish(BusEvent::PtyOutput {
+                            session_id: self.session_id.to_string(),
+                            bytes: bytes.clone(),
+                        });
+                    self.pending_terminal.extend(bytes);
+                }
+                ParsedChunk::AgentMessage(message) => {
+                    emit_agent_ui(&self.app, self.session_id, message);
+                }
+            }
+        }
+    }
+}
+
+impl<R: Runtime> Read for ProtocolReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if !self.pending_terminal.is_empty() {
+            return Ok(self.drain_pending(buf));
+        }
+
+        loop {
+            let mut raw = vec![0u8; buf.len().max(4096)];
+            match self.source.read(&mut raw) {
+                Ok(0) => return Ok(0),
+                Ok(read) => {
+                    let chunks = self.parser.feed(&raw[..read]);
+                    self.handle_chunks(chunks);
+                    if !self.pending_terminal.is_empty() {
+                        return Ok(self.drain_pending(buf));
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
+fn emit_agent_ui<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    session_id: SessionId,
+    message: AgentUiMessage,
+) {
+    let session_id_text = session_id.to_string();
+    let agent_id = app
+        .try_state::<crate::terminal::manager::TerminalManager<R>>()
+        .and_then(|manager| {
+            manager
+                .get(&session_id)
+                .and_then(|session| session.agent_id.clone())
+        });
+    let bus_event = match &message {
+        AgentUiMessage::Status { phase, detail } => Some(BusEvent::AgentStatus {
+            session_id: session_id_text.clone(),
+            agent_id: agent_id.clone(),
+            phase: phase.clone(),
+            detail: detail.clone(),
+        }),
+        AgentUiMessage::ToolCall { name, args, .. } => Some(BusEvent::AgentToolCall {
+            session_id: session_id_text.clone(),
+            agent_id: agent_id.clone(),
+            tool: name.clone(),
+            args: args.clone(),
+        }),
+        AgentUiMessage::FileEdit { path, .. }
+        | AgentUiMessage::FileCreate { path }
+        | AgentUiMessage::FileDelete { path } => Some(BusEvent::AgentFileEdit {
+            session_id: session_id_text.clone(),
+            agent_id: agent_id.clone(),
+            path: path.clone(),
+        }),
+        AgentUiMessage::Finished { summary, exit_code } => Some(BusEvent::AgentFinished {
+            session_id: session_id_text.clone(),
+            agent_id,
+            summary: summary.clone(),
+            exit_code: *exit_code,
+        }),
+        _ => None,
+    };
+    let message_value = serde_json::to_value(&message).unwrap_or(serde_json::Value::Null);
+    let payload = AgentUiEvent {
+        session_id: session_id_text.clone(),
+        message: message_value.clone(),
+    };
+    let _ = app.emit("agent:ui", payload);
+    app.state::<EventBus<R>>()
+        .record_agent_ui_message(&session_id_text, &message_value);
+    if let Some(bus_event) = bus_event {
+        app.state::<EventBus<R>>().publish(bus_event);
     }
 }
