@@ -32,3 +32,4 @@ Thumbs.db
 # Project docs - ignored from git but un-ignored in .ignore for Claude Code
 references/**
 docs/plan/**
+src-tauri/gen/
