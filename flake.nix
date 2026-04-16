@@ -25,6 +25,12 @@
           dbus
           openssl
           librsvg
+          vulkan-loader
+          libxkbcommon
+          wayland
+          freetype
+          fontconfig
+          expat
         ];
 
         buildInputs = with pkgs; [
@@ -34,6 +40,22 @@
           cargo-tauri
           nodejs
           pnpm
+          cmake
+          fontconfig
+          freetype
+          # Dev packages needed by Tauri/GTK pkg-config lookups
+          webkitgtk_4_1.dev
+          gtk3.dev
+          cairo.dev
+          gdk-pixbuf.dev
+          glib.dev
+          dbus.dev
+          openssl.dev
+          librsvg.dev
+          pango.dev
+          atk.dev
+          harfbuzz.dev
+          libsoup_3.dev
         ];
       in
       {
