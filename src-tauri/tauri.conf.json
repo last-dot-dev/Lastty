@@ -5,7 +5,9 @@
   "identifier": "com.lastty.app",
   "build": {
     "frontendDist": "../dist",
-    "beforeBuildCommand": "pnpm build"
+    "beforeBuildCommand": "pnpm build",
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420"
   },
   "app": {
     "macOSPrivateApi": true,
