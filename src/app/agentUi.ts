@@ -3,10 +3,23 @@ export type AgentUiMessage =
   | { type: "Status"; data: { phase: string; detail?: string | null } }
   | { type: "Progress"; data: { pct: number; message: string } }
   | { type: "Finished"; data: { summary: string; exit_code?: number | null } }
-  | { type: "ToolCall"; data: { id: string; name: string; args: unknown } }
+  | {
+      type: "ToolCall";
+      data: {
+        id: string;
+        name: string;
+        args: unknown;
+        parent_id?: string | null;
+      };
+    }
   | {
       type: "ToolResult";
-      data: { id: string; result: unknown; error?: string | null };
+      data: {
+        id: string;
+        result: unknown;
+        error?: string | null;
+        parent_id?: string | null;
+      };
     }
   | { type: "FileEdit"; data: { path: string; diff?: string | null } }
   | { type: "FileCreate"; data: { path: string } }
@@ -21,6 +34,8 @@ export interface ToolCallRecord {
   args: unknown;
   result?: unknown;
   error?: string | null;
+  parentId: string | null;
+  depth: number;
   timestamp: number;
 }
 
@@ -29,7 +44,10 @@ export interface AgentSessionState {
   status: { phase: string; detail?: string | null } | null;
   progress: { pct: number; message: string } | null;
   finished: { summary: string; exitCode?: number | null } | null;
-  toolCalls: ToolCallRecord[];
+  toolCallsById: Record<string, ToolCallRecord>;
+  toolCallOrder: string[];
+  rootToolCallIds: string[];
+  childrenByParentId: Record<string, string[]>;
   fileEdits: Array<{ path: string; diff?: string | null; kind: "edit" | "create" | "delete" }>;
   pendingApprovals: Array<{ id: string; message: string; options: string[] }>;
   notifications: Array<{ level: string; message: string; timestamp: number }>;
@@ -44,7 +62,10 @@ export function emptyAgentSessionState(): AgentSessionState {
     status: null,
     progress: null,
     finished: null,
-    toolCalls: [],
+    toolCallsById: {},
+    toolCallOrder: [],
+    rootToolCallIds: [],
+    childrenByParentId: {},
     fileEdits: [],
     pendingApprovals: [],
     notifications: [],
@@ -72,32 +93,54 @@ export function reduceAgentMessage(
           exitCode: message.data.exit_code,
         },
       };
-    case "ToolCall":
+    case "ToolCall": {
+      const { id, name, args } = message.data;
+      const parentId = message.data.parent_id ?? null;
+      if (state.toolCallsById[id]) {
+        return state;
+      }
+      const parentDepth = parentId
+        ? (state.toolCallsById[parentId]?.depth ?? 0) + 1
+        : 0;
+      const record: ToolCallRecord = {
+        id,
+        name,
+        args,
+        parentId,
+        depth: parentDepth,
+        timestamp,
+      };
+      const nextChildren = parentId
+        ? {
+            ...state.childrenByParentId,
+            [parentId]: [...(state.childrenByParentId[parentId] ?? []), id],
+          }
+        : state.childrenByParentId;
       return {
         ...state,
-        toolCalls: [
-          ...state.toolCalls,
-          {
-            id: message.data.id,
-            name: message.data.name,
-            args: message.data.args,
-            timestamp,
+        toolCallsById: { ...state.toolCallsById, [id]: record },
+        toolCallOrder: [...state.toolCallOrder, id],
+        rootToolCallIds: parentId
+          ? state.rootToolCallIds
+          : [...state.rootToolCallIds, id],
+        childrenByParentId: nextChildren,
+      };
+    }
+    case "ToolResult": {
+      const existing = state.toolCallsById[message.data.id];
+      if (!existing) return state;
+      return {
+        ...state,
+        toolCallsById: {
+          ...state.toolCallsById,
+          [message.data.id]: {
+            ...existing,
+            result: message.data.result,
+            error: message.data.error,
           },
-        ].slice(-50),
+        },
       };
-    case "ToolResult":
-      return {
-        ...state,
-        toolCalls: state.toolCalls.map((call) =>
-          call.id === message.data.id
-            ? {
-                ...call,
-                result: message.data.result,
-                error: message.data.error,
-              }
-            : call,
-        ),
-      };
+    }
     case "FileEdit":
       return {
         ...state,
@@ -163,6 +206,21 @@ export function visibleNotifications(
   ttlMs = 5_000,
 ) {
   return state.notifications.filter((notification) => now - notification.timestamp <= ttlMs);
+}
+
+export function toolCallCount(state: AgentSessionState): {
+  root: number;
+  sub: number;
+  total: number;
+} {
+  const total = state.toolCallOrder.length;
+  const root = state.rootToolCallIds.length;
+  return { root, sub: total - root, total };
+}
+
+export function latestToolCall(state: AgentSessionState): ToolCallRecord | null {
+  const id = state.toolCallOrder[state.toolCallOrder.length - 1];
+  return id ? state.toolCallsById[id] ?? null : null;
 }
 
 function fileEdit(path: string, kind: FileEditKind, diff?: string | null) {

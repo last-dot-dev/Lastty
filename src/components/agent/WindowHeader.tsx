@@ -9,6 +9,9 @@ export default function WindowHeader({
   progressPct,
   status,
   controls,
+  onDragStart,
+  onDragEnd,
+  draggable = false,
 }: {
   taskName: string;
   branch: string;
@@ -16,6 +19,9 @@ export default function WindowHeader({
   progressPct: number;
   status: AgentStatus;
   controls: TrafficLightActions;
+  onDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: (event: React.DragEvent<HTMLDivElement>) => void;
+  draggable?: boolean;
 }) {
   const pctCls =
     status === "needs_help"
@@ -26,6 +32,9 @@ export default function WindowHeader({
   return (
     <div
       className={`agent-window-header ${status === "needs_help" ? "is-needs-help" : ""}`}
+      draggable={draggable}
+      onDragStart={draggable ? onDragStart : undefined}
+      onDragEnd={draggable ? onDragEnd : undefined}
     >
       <TrafficLights {...controls} />
       <span className="agent-window-header__task" title={taskName}>

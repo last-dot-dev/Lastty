@@ -167,6 +167,7 @@ vi.mock("@xterm/xterm", () => ({
 }));
 
 import TerminalViewport from "./TerminalViewport";
+import { resetTerminalHostRegistryForTests } from "./TerminalHostRegistry";
 
 const decoder = new TextDecoder();
 let container: HTMLDivElement;
@@ -175,6 +176,7 @@ let root: Root;
 describe("TerminalViewport", () => {
   beforeEach(() => {
     harness.reset();
+    resetTerminalHostRegistryForTests();
     (
       globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
     ).IS_REACT_ACT_ENVIRONMENT = true;

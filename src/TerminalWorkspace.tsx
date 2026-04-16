@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 
+import KeyboardHelpOverlay from "./components/KeyboardHelpOverlay";
+import { detectPlatform, matchBinding } from "./app/keybindings";
+
 import {
   emptyAgentSessionState,
   parseAgentMessage,
   reduceAgentMessage,
   resolveApproval,
+  toolCallCount,
   visibleNotifications,
   type AgentSessionState,
+  type ToolCallRecord,
 } from "./app/agentUi";
 import {
   assignBranchColor,
@@ -25,21 +30,36 @@ import ReplyInput from "./components/agent/ReplyInput";
 import EdgeSpawner, { type SpawnDirection } from "./components/agent/EdgeSpawner";
 import ThemeToggle from "./components/agent/ThemeToggle";
 import type { BranchRow } from "./components/agent/BranchList";
-import type { TabEntry } from "./components/agent/TabStrip";
+import type { DesktopEntry } from "./components/agent/DesktopStrip";
 import type { BlockedSessionRef } from "./components/agent/AlertBar";
 import { useThemeOverride } from "./hooks/useThemeOverride";
 import {
+  activeDesktop,
+  attachPaneToDesktop,
+  closeDesktop,
   closePane,
+  createDesktop,
   createPaneRecord,
   createWorkspace,
+  detachPane,
+  findDesktopForPane,
   focusAdjacentPane,
   focusPane,
+  nextDesktopIdInDirection,
+  orderedPaneIds,
+  renameDesktop,
   renamePane,
   resizeSplit,
+  splitAtPane,
   splitPane,
+  swapPanes,
+  switchDesktop,
+  toggleMaximize,
+  type DesktopState,
   type LayoutPath,
   type LayoutNode,
   type SplitDirection,
+  type SplitSide,
   type WorkspaceState,
 } from "./app/layout";
 import {
@@ -50,6 +70,8 @@ import {
   type PersistedTerminalSnapshot,
 } from "./app/sessionRestore";
 import TerminalViewport from "./components/TerminalViewport";
+import { releaseTerminalHost } from "./components/TerminalHostRegistry";
+import ViewPreview from "./components/agent/ViewPreview";
 import {
   createTerminal,
   getPrimarySessionId,
@@ -75,6 +97,8 @@ export default function TerminalWorkspace() {
     Record<string, AgentSessionState>
   >({});
   const [launcherOpen, setLauncherOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const platform = useMemo(() => detectPlatform(), []);
   const [launching, setLaunching] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [agentPrompt, setAgentPrompt] = useState("");
@@ -88,13 +112,14 @@ export default function TerminalWorkspace() {
   const [restoredSnapshotsBySessionId, setRestoredSnapshotsBySessionId] = useState<
     Record<string, PersistedTerminalSnapshot>
   >({});
-  const [minimizedPaneIds, setMinimizedPaneIds] = useState<Set<string>>(new Set());
-  const [maximizedPaneId, setMaximizedPaneId] = useState<string | null>(null);
-
   const sessionCreationOrder = useMemo(
     () => Object.keys(sessionInfoById),
     [sessionInfoById],
   );
+
+  const currentDesktop: DesktopState | null = workspace ? activeDesktop(workspace) : null;
+  const focusedPaneId = currentDesktop?.focusedPaneId ?? null;
+  const [draggingPaneId, setDraggingPaneId] = useState<string | null>(null);
 
   const theme = useThemeOverride();
 
@@ -268,41 +293,76 @@ export default function TerminalWorkspace() {
     if (!workspace) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || !event.shiftKey || !workspace.focusedPaneId) return;
-      if (event.key === "H" || event.key === "h") {
-        event.preventDefault();
-        void handleSplit(workspace.focusedPaneId, "horizontal");
-      } else if (event.key === "V" || event.key === "v") {
-        event.preventDefault();
-        void handleSplit(workspace.focusedPaneId, "vertical");
-      } else if (event.key === "W" || event.key === "w") {
-        event.preventDefault();
-        void handleClose(workspace.focusedPaneId);
-      } else if (event.key === "L" || event.key === "l") {
-        event.preventDefault();
-        setLauncherOpen(true);
-      } else if (
-        event.key === "ArrowLeft" ||
-        event.key === "ArrowUp" ||
-        event.key === "ArrowRight" ||
-        event.key === "ArrowDown"
-      ) {
-        event.preventDefault();
-        const direction =
-          event.key === "ArrowLeft"
-            ? "left"
-            : event.key === "ArrowRight"
-              ? "right"
-              : event.key === "ArrowUp"
-                ? "up"
-                : "down";
-        setWorkspace((current) => (current ? focusAdjacentPane(current, direction) : current));
+      const match = matchBinding(event, platform);
+      if (!match) return;
+      const { binding } = match;
+      const activePaneId = activeDesktop(workspace).focusedPaneId;
+
+      switch (binding.id) {
+        case "help.toggle":
+          event.preventDefault();
+          setHelpOpen((open) => !open);
+          return;
+        case "desktop.new":
+          event.preventDefault();
+          void handleNewDesktop();
+          return;
+        case "desktop.next":
+          event.preventDefault();
+          handleCycleDesktop(1);
+          return;
+        case "desktop.prev":
+          event.preventDefault();
+          handleCycleDesktop(-1);
+          return;
+        case "desktop.jump":
+          if (binding.payload === undefined) return;
+          event.preventDefault();
+          handleJumpToDesktopIndex(binding.payload - 1);
+          return;
+        case "focus.left":
+        case "focus.down":
+        case "focus.up":
+        case "focus.right": {
+          event.preventDefault();
+          const direction =
+            binding.id === "focus.left"
+              ? "left"
+              : binding.id === "focus.right"
+                ? "right"
+                : binding.id === "focus.up"
+                  ? "up"
+                  : "down";
+          setWorkspace((current) =>
+            current ? focusAdjacentPane(current, direction) : current,
+          );
+          return;
+        }
+        case "pane.split.horizontal":
+          if (!activePaneId) return;
+          event.preventDefault();
+          void handleSplit(activePaneId, "horizontal");
+          return;
+        case "pane.split.vertical":
+          if (!activePaneId) return;
+          event.preventDefault();
+          void handleSplit(activePaneId, "vertical");
+          return;
+        case "pane.close":
+          if (!activePaneId) return;
+          event.preventDefault();
+          void handleClose(activePaneId);
+          return;
+        case "agent.launch":
+          event.preventDefault();
+          setLauncherOpen(true);
+          return;
       }
     };
 
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [workspace]);
+  }, [workspace, platform]);
 
   async function handleSplit(paneId: string, direction: SplitDirection) {
     const sessionId = await createTerminal();
@@ -329,10 +389,12 @@ export default function TerminalWorkspace() {
   }
 
   async function handleLaunchAgent() {
-    if (!workspace?.focusedPaneId || !selectedAgentId) return;
+    if (!workspace || !selectedAgentId) return;
+    const activePaneId = activeDesktop(workspace).focusedPaneId;
+    if (!activePaneId) return;
     setLaunching(true);
     try {
-      const focusedPane = workspace.panes[workspace.focusedPaneId];
+      const focusedPane = workspace.panes[activePaneId];
       const focusedSession = focusedPane ? sessionInfoById[focusedPane.sessionId] : undefined;
       const result = await launchAgent({
         agent_id: selectedAgentId,
@@ -341,7 +403,7 @@ export default function TerminalWorkspace() {
         isolate_in_worktree: isolateWorktree,
         branch_name: isolateWorktree ? branchName || null : null,
       });
-      applyLaunchedSession(workspace.focusedPaneId, result);
+      applyLaunchedSession(activePaneId, result);
       setLauncherOpen(false);
       setAgentPrompt("");
       setBranchName("");
@@ -356,21 +418,12 @@ export default function TerminalWorkspace() {
   async function handleClose(paneId: string) {
     const pane = workspace?.panes[paneId];
     if (!pane) return;
-    await killTerminal(pane.sessionId).catch((error) => {
+    const sessionId = pane.sessionId;
+    await killTerminal(sessionId).catch((error) => {
       console.error("failed to kill terminal", error);
     });
+    releaseTerminalHost(sessionId);
     setWorkspace((current) => (current ? closePane(current, paneId) : current));
-  }
-
-  function handleResizeSplit(
-    path: LayoutPath,
-    handleIndex: number,
-    delta: number,
-    baseWeights: number[],
-  ) {
-    setWorkspace((current) =>
-      current ? resizeSplit(current, path, handleIndex, delta, baseWeights) : current,
-    );
   }
 
   function upsertSession(session: SessionInfo) {
@@ -380,48 +433,138 @@ export default function TerminalWorkspace() {
     }));
   }
 
-  function minimizePane(paneId: string) {
-    setMinimizedPaneIds((current) => {
-      if (current.has(paneId)) return current;
-      const next = new Set(current);
-      next.add(paneId);
-      return next;
+  function handleToggleMaximizePane(paneId: string) {
+    setWorkspace((current) => (current ? toggleMaximize(current, paneId) : current));
+  }
+
+  async function handleNewDesktop() {
+    const sessionId = await createTerminal();
+    const title = `shell ${Object.keys(sessionInfoById).length + 1}`;
+    upsertSession({
+      session_id: sessionId,
+      title,
+      cwd: "",
+      prompt: null,
+      agent_id: null,
+      prompt_summary: null,
+      worktree_path: null,
+      control_connected: false,
+      started_at_ms: 0,
     });
-    if (maximizedPaneId === paneId) {
-      setMaximizedPaneId(null);
+    setWorkspace((current) =>
+      current
+        ? createDesktop(current, createPaneRecord(sessionId, title))
+        : createWorkspace(createPaneRecord(sessionId, title)),
+    );
+  }
+
+  async function handleNewShellInActiveDesktop() {
+    if (!workspace) return;
+    const desktopId = workspace.activeDesktopId;
+    const desktop = activeDesktop(workspace);
+    if (desktop.layout) return;
+    const sessionId = await createTerminal();
+    const title = `shell ${Object.keys(sessionInfoById).length + 1}`;
+    const pane = createPaneRecord(sessionId, title);
+    upsertSession({
+      session_id: sessionId,
+      title,
+      cwd: "",
+      prompt: null,
+      agent_id: null,
+      prompt_summary: null,
+      worktree_path: null,
+      control_connected: false,
+      started_at_ms: 0,
+    });
+    setWorkspace((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        panes: { ...current.panes, [pane.id]: pane },
+        desktops: current.desktops.map((entry) =>
+          entry.id === desktopId
+            ? {
+                ...entry,
+                layout: { type: "leaf", paneId: pane.id },
+                focusedPaneId: pane.id,
+              }
+            : entry,
+        ),
+      };
+    });
+  }
+
+  function handleSwitchDesktop(desktopId: string) {
+    setWorkspace((current) => (current ? switchDesktop(current, desktopId) : current));
+  }
+
+  function handleRenameDesktop(desktopId: string, name: string) {
+    setWorkspace((current) => (current ? renameDesktop(current, desktopId, name) : current));
+  }
+
+  async function handleCloseDesktop(desktopId: string) {
+    if (!workspace) return;
+    const { workspace: next, removedSessionIds } = closeDesktop(workspace, desktopId);
+    if (next === workspace) return;
+    setWorkspace(next);
+    for (const sessionId of removedSessionIds) {
+      killTerminal(sessionId).catch((error) => {
+        console.error("failed to kill terminal", error);
+      });
+      releaseTerminalHost(sessionId);
     }
   }
 
-  function toggleMaximizePane(paneId: string) {
-    setMaximizedPaneId((current) => (current === paneId ? null : paneId));
-    setMinimizedPaneIds((current) => {
-      if (!current.has(paneId)) return current;
-      const next = new Set(current);
-      next.delete(paneId);
+  function handleDropPaneOnDesktop(paneId: string, desktopId: string) {
+    setWorkspace((current) => {
+      if (!current) return current;
+      const detached = detachPane(current, paneId);
+      const attached = attachPaneToDesktop(detached, paneId, desktopId);
+      return switchDesktop(attached, desktopId);
+    });
+  }
+
+  function handleDropPaneOnEdge(
+    sourcePaneId: string,
+    targetPaneId: string,
+    side: SplitSide,
+  ) {
+    if (sourcePaneId === targetPaneId) return;
+    setWorkspace((current) => {
+      if (!current) return current;
+      const targetDesktop = findDesktopForPane(current, targetPaneId);
+      const next = splitAtPane(current, targetPaneId, sourcePaneId, side);
+      if (targetDesktop) return switchDesktop(next, targetDesktop.id);
       return next;
     });
   }
 
-  function restoreFromTab(paneId: string) {
-    setMinimizedPaneIds((current) => {
-      if (!current.has(paneId)) return current;
-      const next = new Set(current);
-      next.delete(paneId);
-      return next;
+  function handleDropPaneOnBody(sourcePaneId: string, targetPaneId: string) {
+    if (sourcePaneId === targetPaneId) return;
+    setWorkspace((current) => {
+      if (!current) return current;
+      const swapped = swapPanes(current, sourcePaneId, targetPaneId);
+      const sourceDesktop = findDesktopForPane(swapped, sourcePaneId);
+      return sourceDesktop ? switchDesktop(swapped, sourceDesktop.id) : swapped;
     });
-    setMaximizedPaneId((current) => (current && current !== paneId ? null : current));
-    setWorkspace((current) => (current ? focusPane(current, paneId) : current));
   }
 
-  async function handleCloseFromChrome(paneId: string) {
-    setMinimizedPaneIds((current) => {
-      if (!current.has(paneId)) return current;
-      const next = new Set(current);
-      next.delete(paneId);
-      return next;
+  function handleJumpToDesktopIndex(index: number) {
+    setWorkspace((current) => {
+      if (!current) return current;
+      const target = current.desktops[index];
+      if (!target) return current;
+      return switchDesktop(current, target.id);
     });
-    setMaximizedPaneId((current) => (current === paneId ? null : current));
-    await handleClose(paneId);
+  }
+
+  function handleCycleDesktop(direction: 1 | -1) {
+    setWorkspace((current) => {
+      if (!current) return current;
+      const targetId = nextDesktopIdInDirection(current, direction);
+      return targetId ? switchDesktop(current, targetId) : current;
+    });
   }
 
   function handleJumpToBlocked(sessionId: string) {
@@ -430,8 +573,14 @@ export default function TerminalWorkspace() {
       (entry) => entry.sessionId === sessionId,
     );
     if (!pane) return;
-    restoreFromTab(pane.id);
-    setWorkspace((current) => (current ? focusPane(current, pane.id) : current));
+    const owningDesktop = findDesktopForPane(workspace, pane.id);
+    setWorkspace((current) => {
+      if (!current) return current;
+      const switched = owningDesktop
+        ? switchDesktop(current, owningDesktop.id)
+        : current;
+      return focusPane(switched, pane.id, owningDesktop?.id ?? switched.activeDesktopId);
+    });
   }
 
   function handleTerminalSnapshot(sessionId: string, snapshot: PersistedTerminalSnapshot) {
@@ -503,7 +652,7 @@ export default function TerminalWorkspace() {
           branch: deriveBranchName(info),
           status,
           color: assignBranchColor(sessionId, sessionCreationOrder),
-          focused: pane?.id === workspace.focusedPaneId,
+          focused: pane?.id === focusedPaneId,
           merged: false,
         };
       })
@@ -516,36 +665,22 @@ export default function TerminalWorkspace() {
       taskName: deriveTaskName(sessionInfoById[sessionId]),
     }));
 
-  const tabEntries: TabEntry[] = workspace
-    ? (() => {
-        const panes = Object.values(workspace.panes);
-        const minimized = panes
-          .filter((pane) => minimizedPaneIds.has(pane.id))
-          .map((pane) => ({ pane, reason: "minimized" as const }));
-        const displaced =
-          maximizedPaneId && workspace.panes[maximizedPaneId]
-            ? panes
-                .filter(
-                  (pane) =>
-                    pane.id !== maximizedPaneId && !minimizedPaneIds.has(pane.id),
-                )
-                .map((pane) => ({ pane, reason: "displaced" as const }))
-            : [];
-        return [...minimized, ...displaced].map(({ pane, reason }) => {
-          const info = sessionInfoById[pane.sessionId];
-          const ui = agentUiBySession[pane.sessionId];
-          const status = deriveAgentStatus(ui, Boolean(ui?.finished));
-          return {
-            paneId: pane.id,
-            sessionId: pane.sessionId,
-            taskName: deriveTaskName(info),
-            progressPct: deriveProgressPct(ui),
-            status,
-            color: assignBranchColor(pane.sessionId, sessionCreationOrder),
-            reason,
-          };
+  const desktopEntries: DesktopEntry[] = workspace
+    ? workspace.desktops.map((desktop) => {
+        const paneIds = desktop.layout ? orderedPaneIds(desktop.layout) : [];
+        const hasBlocked = paneIds.some((paneId) => {
+          const pane = workspace.panes[paneId];
+          return pane
+            ? (agentUiBySession[pane.sessionId]?.pendingApprovals.length ?? 0) > 0
+            : false;
         });
-      })()
+        return {
+          id: desktop.id,
+          name: desktop.name,
+          paneCount: paneIds.length,
+          hasBlocked,
+        };
+      })
     : [];
 
   const doneCount = Object.values(agentUiBySession).filter(
@@ -578,8 +713,29 @@ export default function TerminalWorkspace() {
         onFocusBranch={(paneId) =>
           setWorkspace((current) => (current ? focusPane(current, paneId) : current))
         }
-        tabs={tabEntries}
-        onRestoreTab={restoreFromTab}
+        desktops={desktopEntries}
+        activeDesktopId={workspace.activeDesktopId}
+        onSwitchDesktop={handleSwitchDesktop}
+        onNewDesktop={() => void handleNewDesktop()}
+        onCloseDesktop={(id) => void handleCloseDesktop(id)}
+        onRenameDesktop={handleRenameDesktop}
+        canAcceptPaneDrop={Boolean(draggingPaneId)}
+        onDropPaneOnDesktop={(desktopId) => {
+          if (draggingPaneId) handleDropPaneOnDesktop(draggingPaneId, desktopId);
+        }}
+        renderDesktopPreview={(desktopId) => {
+          const desktop = workspace.desktops.find((entry) => entry.id === desktopId);
+          if (!desktop) return null;
+          return (
+            <ViewPreview
+              desktop={desktop}
+              workspace={workspace}
+              sessionInfoById={sessionInfoById}
+              agentUiBySession={agentUiBySession}
+              sessionCreationOrder={sessionCreationOrder}
+            />
+          );
+        }}
         sidebarFooterExtras={
           <ThemeToggle override={theme.override} onCycle={theme.cycle} />
         }
@@ -594,37 +750,75 @@ export default function TerminalWorkspace() {
               flexDirection: "column",
             }}
           >
-          {renderLayout(workspace.layout, {
-            workspace,
-            sessionInfoById,
-            agentUiBySession,
-            restoredSnapshotsBySessionId,
-            minimizedPaneIds,
-            maximizedPaneId,
-            onCloseChrome: handleCloseFromChrome,
-            onMinimize: minimizePane,
-            onToggleMaximize: toggleMaximizePane,
-            onResize: handleResizeSplit,
-            onFocus: (paneId) =>
-              setWorkspace((current) => (current ? focusPane(current, paneId) : current)),
-            onSnapshot: handleTerminalSnapshot,
-            onApproval: (sessionId, approvalId, choice) => {
-              void respondToApproval(sessionId, approvalId, choice).then(() => {
-                setAgentUiBySession((current) => ({
-                  ...current,
-                  [sessionId]: resolveApproval(
-                    current[sessionId] ?? emptyAgentSessionState(),
-                    approvalId,
-                  ),
-                }));
-              });
-            },
-            onSpawnAdjacent: (paneId, direction) =>
-              void handleSplit(
-                paneId,
-                direction === "right" ? "horizontal" : "vertical",
-              ),
-          })}
+            {workspace.desktops.map((desktop) => {
+              const active = desktop.id === workspace.activeDesktopId;
+              return (
+                <div
+                  key={desktop.id}
+                  className="agent-desktop-layer"
+                  style={{
+                    display: active ? "flex" : "none",
+                    flex: 1,
+                    minHeight: 0,
+                    minWidth: 0,
+                    flexDirection: "column",
+                  }}
+                >
+                  {desktop.layout ? (
+                    renderLayout(desktop.layout, {
+                      desktop,
+                      workspace,
+                      sessionInfoById,
+                      agentUiBySession,
+                      restoredSnapshotsBySessionId,
+                      onCloseChrome: (paneId) => handleClose(paneId),
+                      onToggleMaximize: handleToggleMaximizePane,
+                      onResize: (path, handleIndex, delta, baseWeights) =>
+                        setWorkspace((current) =>
+                          current
+                            ? resizeSplit(
+                                current,
+                                path,
+                                handleIndex,
+                                delta,
+                                baseWeights,
+                                desktop.id,
+                              )
+                            : current,
+                        ),
+                      onFocus: (paneId) =>
+                        setWorkspace((current) =>
+                          current ? focusPane(current, paneId, desktop.id) : current,
+                        ),
+                      onSnapshot: handleTerminalSnapshot,
+                      onApproval: (sessionId, approvalId, choice) => {
+                        void respondToApproval(sessionId, approvalId, choice).then(() => {
+                          setAgentUiBySession((current) => ({
+                            ...current,
+                            [sessionId]: resolveApproval(
+                              current[sessionId] ?? emptyAgentSessionState(),
+                              approvalId,
+                            ),
+                          }));
+                        });
+                      },
+                      onSpawnAdjacent: (paneId, direction) =>
+                        void handleSplit(
+                          paneId,
+                          direction === "right" ? "horizontal" : "vertical",
+                        ),
+                      draggingPaneId,
+                      onDragStartPane: (paneId) => setDraggingPaneId(paneId),
+                      onDragEndPane: () => setDraggingPaneId(null),
+                      onDropPaneOnEdge: handleDropPaneOnEdge,
+                      onDropPaneOnBody: handleDropPaneOnBody,
+                    })
+                  ) : (
+                    <EmptyDesktop onNewShell={() => void handleNewShellInActiveDesktop()} />
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </AgentShell>
@@ -644,20 +838,23 @@ export default function TerminalWorkspace() {
           selectedAgentId={selectedAgentId}
         />
       )}
+      <KeyboardHelpOverlay
+        onClose={() => setHelpOpen(false)}
+        open={helpOpen}
+        platform={platform}
+      />
       <ToastStack notifications={toastNotifications} sessionInfoById={sessionInfoById} />
     </div>
   );
 }
 
 interface RenderLayoutCtx {
+  desktop: DesktopState;
   workspace: WorkspaceState;
   sessionInfoById: Record<string, SessionInfo>;
   agentUiBySession: Record<string, AgentSessionState>;
   restoredSnapshotsBySessionId: Record<string, PersistedTerminalSnapshot>;
-  minimizedPaneIds: Set<string>;
-  maximizedPaneId: string | null;
   onCloseChrome: (paneId: string) => Promise<void>;
-  onMinimize: (paneId: string) => void;
   onToggleMaximize: (paneId: string) => void;
   onResize: (
     path: LayoutPath,
@@ -669,6 +866,11 @@ interface RenderLayoutCtx {
   onSnapshot: (sessionId: string, snapshot: PersistedTerminalSnapshot) => void;
   onApproval: (sessionId: string, approvalId: string, choice: string) => void;
   onSpawnAdjacent: (paneId: string, direction: SpawnDirection) => void;
+  draggingPaneId: string | null;
+  onDragStartPane: (paneId: string) => void;
+  onDragEndPane: () => void;
+  onDropPaneOnEdge: (sourcePaneId: string, targetPaneId: string, side: SplitSide) => void;
+  onDropPaneOnBody: (sourcePaneId: string, targetPaneId: string) => void;
 }
 
 function renderLayout(
@@ -677,39 +879,44 @@ function renderLayout(
   path: LayoutPath = [],
 ): ReactNode {
   const {
+    desktop,
     workspace,
     sessionInfoById,
     agentUiBySession,
     restoredSnapshotsBySessionId,
-    minimizedPaneIds,
-    maximizedPaneId,
     onCloseChrome,
-    onMinimize,
     onToggleMaximize,
     onResize,
     onFocus,
     onSnapshot,
     onApproval,
     onSpawnAdjacent,
+    draggingPaneId,
+    onDragStartPane,
+    onDragEndPane,
+    onDropPaneOnEdge,
+    onDropPaneOnBody,
   } = ctx;
+
+  const maximizedPaneId = desktop.maximizedPaneId;
 
   if (node.type === "leaf") {
     const pane = workspace.panes[node.paneId];
     if (!pane) return null;
-    if (minimizedPaneIds.has(pane.id)) return null;
     if (maximizedPaneId && maximizedPaneId !== pane.id) return null;
 
     const session = sessionInfoById[pane.sessionId];
     const agent = agentUiBySession[pane.sessionId] ?? emptyAgentSessionState();
     const blocked = agent.pendingApprovals.length > 0;
-    const focused = workspace.focusedPaneId === pane.id;
+    const focused = desktop.focusedPaneId === pane.id;
     const status: AgentStatus = deriveAgentStatus(agent, Boolean(agent.finished));
     const taskName = deriveTaskName(session);
     const branch = deriveBranchName(session);
     const agentType = deriveAgentType(session);
     const progressPct = deriveProgressPct(agent);
+    const toolCounts = toolCallCount(agent);
     const showInspector =
-      agent.toolCalls.length > 0 ||
+      toolCounts.total > 0 ||
       agent.fileEdits.length > 0 ||
       agent.widgets.length > 0;
 
@@ -729,10 +936,22 @@ function renderLayout(
           status={status}
           controls={{
             onClose: () => void onCloseChrome(pane.id),
-            onMinimize: () => onMinimize(pane.id),
             onMaximize: () => onToggleMaximize(pane.id),
             maximized: maximizedPaneId === pane.id,
           }}
+          draggable
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("application/x-lastty-pane", pane.id);
+            const ghost = document.createElement("div");
+            ghost.style.position = "absolute";
+            ghost.style.left = "-9999px";
+            document.body.appendChild(ghost);
+            event.dataTransfer.setDragImage(ghost, 0, 0);
+            window.setTimeout(() => ghost.remove(), 0);
+            onDragStartPane(pane.id);
+          }}
+          onDragEnd={onDragEndPane}
         />
         <ProgressBar pct={progressPct} status={status} />
         <div
@@ -764,13 +983,22 @@ function renderLayout(
           />
         ) : (
           <div className="agent-pane-footer">
-            <span>{agent.toolCalls.length} tool calls</span>
+            <span>
+              {toolCounts.root} tool call{toolCounts.root === 1 ? "" : "s"}
+              {toolCounts.sub > 0 ? ` (+${toolCounts.sub} subagent)` : ""}
+            </span>
             <span>
               {session?.worktree_path ? "isolated" : "shared"} · {agentType}
             </span>
           </div>
         )}
         <EdgeSpawner onSpawn={(direction) => onSpawnAdjacent(pane.id, direction)} />
+        {draggingPaneId && draggingPaneId !== pane.id && (
+          <PaneDropOverlay
+            onDropEdge={(side) => onDropPaneOnEdge(draggingPaneId, pane.id, side)}
+            onDropBody={() => onDropPaneOnBody(draggingPaneId, pane.id)}
+          />
+        )}
       </section>
     );
   }
@@ -840,8 +1068,9 @@ function renderLayout(
 
 function isLayoutNodeFullyHidden(node: LayoutNode, ctx: RenderLayoutCtx): boolean {
   if (node.type === "leaf") {
-    if (ctx.minimizedPaneIds.has(node.paneId)) return true;
-    if (ctx.maximizedPaneId && ctx.maximizedPaneId !== node.paneId) return true;
+    if (ctx.desktop.maximizedPaneId && ctx.desktop.maximizedPaneId !== node.paneId) {
+      return true;
+    }
     return false;
   }
   return node.children.every((child) => isLayoutNodeFullyHidden(child, ctx));
@@ -910,6 +1139,111 @@ function ResizeHandle({
   );
 }
 
+function PaneDropOverlay({
+  onDropEdge,
+  onDropBody,
+}: {
+  onDropEdge: (side: SplitSide) => void;
+  onDropBody: () => void;
+}) {
+  const [hovered, setHovered] = useState<SplitSide | "body" | null>(null);
+
+  const makeEdgeHandlers = (side: SplitSide) => ({
+    onDragEnter: (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      setHovered(side);
+    },
+    onDragOver: (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    },
+    onDragLeave: () => setHovered((current) => (current === side ? null : current)),
+    onDrop: (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setHovered(null);
+      onDropEdge(side);
+    },
+  });
+
+  const bodyHandlers = {
+    onDragEnter: (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      setHovered("body");
+    },
+    onDragOver: (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    },
+    onDragLeave: () => setHovered((current) => (current === "body" ? null : current)),
+    onDrop: (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setHovered(null);
+      onDropBody();
+    },
+  };
+
+  return (
+    <div className="agent-pane-dropzone-layer" aria-hidden>
+      <div
+        className={`agent-pane-dropzone is-top ${hovered === "top" ? "is-hovered" : ""}`}
+        {...makeEdgeHandlers("top")}
+      />
+      <div
+        className={`agent-pane-dropzone is-bottom ${hovered === "bottom" ? "is-hovered" : ""}`}
+        {...makeEdgeHandlers("bottom")}
+      />
+      <div
+        className={`agent-pane-dropzone is-left ${hovered === "left" ? "is-hovered" : ""}`}
+        {...makeEdgeHandlers("left")}
+      />
+      <div
+        className={`agent-pane-dropzone is-right ${hovered === "right" ? "is-hovered" : ""}`}
+        {...makeEdgeHandlers("right")}
+      />
+      <div
+        className={`agent-pane-dropzone is-body ${hovered === "body" ? "is-hovered" : ""}`}
+        {...bodyHandlers}
+      />
+    </div>
+  );
+}
+
+function EmptyDesktop({ onNewShell }: { onNewShell: () => void }) {
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: "grid",
+        placeItems: "center",
+        color: "var(--color-text-secondary)",
+        fontFamily: "var(--font-mono)",
+        gap: 10,
+        padding: 24,
+      }}
+    >
+      <div style={{ fontSize: 12 }}>This desktop has no panes.</div>
+      <button
+        type="button"
+        onClick={onNewShell}
+        style={{
+          borderRadius: "var(--border-radius-md)",
+          border: "0.5px solid var(--color-border-secondary)",
+          background: "var(--color-background-secondary)",
+          color: "var(--color-text-primary)",
+          padding: "6px 12px",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          fontSize: 12,
+        }}
+      >
+        New shell
+      </button>
+    </div>
+  );
+}
+
 function AgentInspector({ agent }: { agent: AgentSessionState }) {
   const latestWidget = agent.widgets.at(-1);
   return (
@@ -935,29 +1269,15 @@ function AgentInspector({ agent }: { agent: AgentSessionState }) {
           </div>
         )}
       </InspectorBlock>
-      {agent.toolCalls.length > 0 && (
+      {agent.toolCallOrder.length > 0 && (
         <InspectorBlock label="Tool Calls">
-          {agent.toolCalls.slice(-6).map((call) => (
-            <div
-              key={call.id}
-              style={{
-                borderBottom: "0.5px solid var(--color-border-tertiary)",
-                paddingBottom: 6,
-              }}
-            >
-              <div>{call.name}</div>
-              <div style={{ color: "var(--color-text-secondary)" }}>
-                {JSON.stringify(call.args)}
-              </div>
-              {call.result !== undefined && (
-                <div style={{ color: "var(--color-text-success)" }}>
-                  {JSON.stringify(call.result)}
-                </div>
-              )}
-              {call.error && (
-                <div style={{ color: "var(--color-text-danger)" }}>{call.error}</div>
-              )}
-            </div>
+          {agent.rootToolCallIds.map((id) => (
+            <ToolCallNode
+              key={id}
+              id={id}
+              toolCallsById={agent.toolCallsById}
+              childrenByParentId={agent.childrenByParentId}
+            />
           ))}
         </InspectorBlock>
       )}
@@ -976,6 +1296,67 @@ function AgentInspector({ agent }: { agent: AgentSessionState }) {
         </InspectorBlock>
       )}
     </aside>
+  );
+}
+
+function ToolCallNode({
+  id,
+  toolCallsById,
+  childrenByParentId,
+}: {
+  id: string;
+  toolCallsById: Record<string, ToolCallRecord>;
+  childrenByParentId: Record<string, string[]>;
+}) {
+  const call = toolCallsById[id];
+  if (!call) return null;
+  const children = childrenByParentId[id] ?? [];
+  const isSubagent = call.name === "Agent" || call.name === "Task";
+  return (
+    <div
+      style={{
+        borderBottom: "0.5px solid var(--color-border-tertiary)",
+        paddingBottom: 6,
+        paddingLeft: call.depth > 0 ? 10 : 0,
+        borderLeft:
+          call.depth > 0 ? "1px solid var(--color-border-tertiary)" : undefined,
+        marginLeft: call.depth > 0 ? call.depth * 8 : 0,
+      }}
+    >
+      <div>
+        {call.depth > 0 && (
+          <span style={{ color: "var(--color-text-tertiary)" }}>↳ </span>
+        )}
+        {isSubagent && (
+          <span
+            aria-hidden
+            style={{ color: "var(--color-text-secondary)", marginRight: 4 }}
+          >
+            ▸
+          </span>
+        )}
+        {call.name}
+      </div>
+      <div style={{ color: "var(--color-text-secondary)" }}>
+        {JSON.stringify(call.args)}
+      </div>
+      {call.result !== undefined && (
+        <div style={{ color: "var(--color-text-success)" }}>
+          {JSON.stringify(call.result)}
+        </div>
+      )}
+      {call.error && (
+        <div style={{ color: "var(--color-text-danger)" }}>{call.error}</div>
+      )}
+      {children.map((childId) => (
+        <ToolCallNode
+          key={childId}
+          id={childId}
+          toolCallsById={toolCallsById}
+          childrenByParentId={childrenByParentId}
+        />
+      ))}
+    </div>
   );
 }
 

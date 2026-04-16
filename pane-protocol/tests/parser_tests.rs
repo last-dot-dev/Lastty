@@ -68,6 +68,7 @@ fn parse_tool_call_message() {
         id: "t1".into(),
         name: "read_file".into(),
         args: json!({"path": "src/main.rs"}),
+        parent_id: None,
     };
     let encoded = encode(&msg);
     let chunks = parse_all(&encoded);
@@ -82,12 +83,85 @@ fn parse_tool_result_message() {
         id: "t1".into(),
         result: json!("file contents"),
         error: None,
+        parent_id: None,
     };
     let encoded = encode(&msg);
     let chunks = parse_all(&encoded);
 
     assert_eq!(chunks.len(), 1);
     assert_eq!(chunks[0], ParsedChunk::AgentMessage(msg));
+}
+
+#[test]
+fn parse_tool_call_with_parent_id() {
+    let msg = AgentUiMessage::ToolCall {
+        id: "child-t1".into(),
+        name: "grep".into(),
+        args: json!({"pattern": "TODO"}),
+        parent_id: Some("parent-agent-1".into()),
+    };
+    let encoded = encode(&msg);
+    let chunks = parse_all(&encoded);
+
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0], ParsedChunk::AgentMessage(msg));
+}
+
+#[test]
+fn parse_tool_call_without_parent_id_backward_compat() {
+    // Hand-crafted legacy payload without parent_id field.
+    let raw = b"\x1b]7770;{\"type\":\"ToolCall\",\"data\":{\"id\":\"t1\",\"name\":\"x\",\"args\":{}}}\x07";
+    let chunks = parse_all(raw);
+    assert_eq!(chunks.len(), 1);
+    match &chunks[0] {
+        ParsedChunk::AgentMessage(AgentUiMessage::ToolCall {
+            id,
+            name,
+            args,
+            parent_id,
+        }) => {
+            assert_eq!(id, "t1");
+            assert_eq!(name, "x");
+            assert_eq!(args, &json!({}));
+            assert!(parent_id.is_none());
+        }
+        other => panic!("expected ToolCall, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_nested_tool_calls_chain() {
+    let parent = AgentUiMessage::ToolCall {
+        id: "p1".into(),
+        name: "Agent".into(),
+        args: json!({"subagent_type": "general-purpose", "prompt": "find TODOs"}),
+        parent_id: None,
+    };
+    let child = AgentUiMessage::ToolCall {
+        id: "c1".into(),
+        name: "Grep".into(),
+        args: json!({"pattern": "TODO"}),
+        parent_id: Some("p1".into()),
+    };
+    let grandchild_result = AgentUiMessage::ToolResult {
+        id: "c1".into(),
+        result: json!(["src/main.rs:10"]),
+        error: None,
+        parent_id: Some("p1".into()),
+    };
+    let mut encoded = encode(&parent);
+    encoded.extend(encode(&child));
+    encoded.extend(encode(&grandchild_result));
+
+    let chunks = parse_all(&encoded);
+    assert_eq!(
+        chunks,
+        vec![
+            ParsedChunk::AgentMessage(parent),
+            ParsedChunk::AgentMessage(child),
+            ParsedChunk::AgentMessage(grandchild_result),
+        ]
+    );
 }
 
 #[test]
@@ -399,11 +473,19 @@ fn roundtrip_encode_parse() {
             id: "t1".into(),
             name: "grep".into(),
             args: json!({"pattern": "TODO"}),
+            parent_id: None,
         },
         AgentUiMessage::ToolResult {
             id: "t1".into(),
             result: json!(["match1", "match2"]),
             error: None,
+            parent_id: None,
+        },
+        AgentUiMessage::ToolCall {
+            id: "nested-t1".into(),
+            name: "Read".into(),
+            args: json!({"file_path": "src/main.rs"}),
+            parent_id: Some("agent-root".into()),
         },
         AgentUiMessage::FileEdit {
             path: "a.rs".into(),

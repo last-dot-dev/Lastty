@@ -592,17 +592,36 @@ fn format_agent_message(message: &AgentUiMessage) -> String {
             Some(exit_code) => format!("Finished\nexit: {exit_code}\nsummary: {summary}"),
             None => format!("Finished\nsummary: {summary}"),
         },
-        AgentUiMessage::ToolCall { id, name, args } => format!(
-            "Tool Call\nid: {id}\n{name} {}",
-            truncate_text(&json_value_text(args), 120)
-        ),
-        AgentUiMessage::ToolResult { id, result, error } => {
+        AgentUiMessage::ToolCall {
+            id,
+            name,
+            args,
+            parent_id,
+        } => {
+            let mut body = format!(
+                "Tool Call\nid: {id}\n{name} {}",
+                truncate_text(&json_value_text(args), 120)
+            );
+            if let Some(parent) = parent_id {
+                body.push_str(&format!("\nparent: {parent}"));
+            }
+            body
+        }
+        AgentUiMessage::ToolResult {
+            id,
+            result,
+            error,
+            parent_id,
+        } => {
             let mut body = format!(
                 "Tool Result\nid: {id}\n{}",
                 truncate_text(&json_value_text(result), 120)
             );
             if let Some(error) = error {
                 body.push_str(&format!("\nerror: {error}"));
+            }
+            if let Some(parent) = parent_id {
+                body.push_str(&format!("\nparent: {parent}"));
             }
             body
         }

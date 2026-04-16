@@ -20,6 +20,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, Runtime};
 use uuid::Uuid;
 
+use crate::adapters::{runner, AgentAdapter};
 use crate::bus::{BusEvent, EventBus};
 use crate::events::AgentUiEvent;
 use crate::render_sync::RenderCoordinator;
@@ -133,9 +134,11 @@ pub fn create_session<R: Runtime>(
     prompt_summary: Option<String>,
     prompt: Option<String>,
     worktree_path: Option<String>,
+    adapter: Option<Box<dyn AgentAdapter>>,
 ) -> anyhow::Result<TerminalSession<R>> {
     let id = SessionId::new();
     let title = Arc::new(Mutex::new("shell".to_string()));
+    let adapter_active = adapter.is_some();
     let control_connected = Arc::new(AtomicBool::new(false));
     let control_accept_alive = Arc::new(AtomicBool::new(true));
     #[cfg(unix)]
@@ -168,7 +171,18 @@ pub fn create_session<R: Runtime>(
     let term = Arc::new(FairMutex::new(term));
 
     // 2. Configure and open PTY
-    let shell = command.map(|c| tty::Shell::new(c.program.clone(), c.args.clone()));
+    let shell = if adapter_active {
+        // Adapter mode: run a keepalive child that disables terminal echo
+        // and cats its stdin to stdout. The adapter writes synthesized
+        // OSC 7770 bytes into the PTY master, cat relays them to the
+        // slave's stdout, and `ProtocolReader` parses them back out.
+        Some(tty::Shell::new(
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), "stty -echo; exec cat".to_string()],
+        ))
+    } else {
+        command.map(|c| tty::Shell::new(c.program.clone(), c.args.clone()))
+    };
     let mut env = env.clone();
     env.insert("LASTTY_SESSION_ID".to_string(), id.to_string());
     if let Some(agent_id) = agent_id.as_ref() {
@@ -194,6 +208,11 @@ pub fn create_session<R: Runtime>(
         cell_height: 16,
     };
     let pty = tty::new(&pty_config, window_size, id.as_u64())?;
+    let adapter_sink = if adapter_active {
+        Some(pty.file().try_clone()?)
+    } else {
+        None
+    };
     let pty = InterceptingPty::new(pty, app.clone(), id)?;
 
     #[cfg(unix)]
@@ -234,6 +253,18 @@ pub fn create_session<R: Runtime>(
             let _ = pty_event_tx.send(Msg::Input(Cow::Owned(text.into_bytes())));
         }
     });
+
+    // 5. If an adapter is attached, spawn the real CLI process and pump
+    //    its output through the PTY master.
+    if let (Some(adapter), Some(sink)) = (adapter, adapter_sink) {
+        if let Err(error) = runner::spawn_adapter(adapter, sink) {
+            tracing::warn!(
+                session_id = %id,
+                %error,
+                "failed to spawn adapter; session will run with an inert keepalive child"
+            );
+        }
+    }
 
     Ok(TerminalSession {
         id,

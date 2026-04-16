@@ -1,13 +1,11 @@
 export interface TrafficLightActions {
   onClose: () => void;
-  onMinimize: () => void;
   onMaximize: () => void;
   maximized: boolean;
 }
 
 export default function TrafficLights({
   onClose,
-  onMinimize,
   onMaximize,
   maximized,
 }: TrafficLightActions) {
@@ -30,19 +28,6 @@ export default function TrafficLights({
         aria-label="close"
       >
         ✕
-      </button>
-      <button
-        type="button"
-        className="wd is-amber"
-        onMouseDown={stopPropagation}
-        onClick={(e) => {
-          e.stopPropagation();
-          onMinimize();
-        }}
-        title="Minimize"
-        aria-label="minimize"
-      >
-        −
       </button>
       <button
         type="button"

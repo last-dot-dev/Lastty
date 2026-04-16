@@ -5,6 +5,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use tauri::Runtime;
 
+use crate::adapters::adapter_for;
 use crate::terminal::manager::TerminalManager;
 use crate::terminal::session::CommandSpec;
 
@@ -210,7 +211,7 @@ pub fn launch_agent<R: Runtime>(
         (base_cwd, None)
     };
 
-    let command_spec = build_command_spec(&agent, request.prompt.as_deref())?;
+    let adapter = adapter_for(&agent.id, request.prompt.as_deref());
     let mut env = build_agent_env();
     env.extend(agent.env.clone());
 
@@ -218,33 +219,51 @@ pub fn launch_agent<R: Runtime>(
         .prompt
         .as_deref()
         .map(|prompt| summarize_prompt(prompt));
-    let session_id = manager.create_session(
-        Some(command_spec.clone()),
-        &cwd,
-        &env,
-        80,
-        24,
-        Some(agent.id.clone()),
-        prompt_summary.clone(),
-        request.prompt.clone(),
-        worktree_path.clone(),
-    )?;
 
-    if matches!(agent.prompt_transport.kind(), "stdin") {
-        if let Some(prompt) = request.prompt.as_ref() {
-            if let Some(session) = manager.get(&session_id) {
-                let mut payload = prompt.clone();
-                payload.push('\n');
-                if let Some(marker) = agent.prompt_transport.eof_marker() {
-                    payload.push_str(marker);
+    let session_id = if adapter.is_some() {
+        manager.create_session_with_adapter(
+            None,
+            &cwd,
+            &env,
+            80,
+            24,
+            Some(agent.id.clone()),
+            prompt_summary.clone(),
+            request.prompt.clone(),
+            worktree_path.clone(),
+            adapter,
+        )?
+    } else {
+        let command_spec = build_command_spec(&agent, request.prompt.as_deref())?;
+        let session_id = manager.create_session(
+            Some(command_spec.clone()),
+            &cwd,
+            &env,
+            80,
+            24,
+            Some(agent.id.clone()),
+            prompt_summary.clone(),
+            request.prompt.clone(),
+            worktree_path.clone(),
+        )?;
+
+        if matches!(agent.prompt_transport.kind(), "stdin") {
+            if let Some(prompt) = request.prompt.as_ref() {
+                if let Some(session) = manager.get(&session_id) {
+                    let mut payload = prompt.clone();
                     payload.push('\n');
+                    if let Some(marker) = agent.prompt_transport.eof_marker() {
+                        payload.push_str(marker);
+                        payload.push('\n');
+                    }
+                    session
+                        .write(payload.as_bytes())
+                        .map_err(anyhow::Error::msg)?;
                 }
-                session
-                    .write(payload.as_bytes())
-                    .map_err(anyhow::Error::msg)?;
             }
         }
-    }
+        session_id
+    };
 
     Ok(LaunchAgentResult {
         session_id: session_id.to_string(),

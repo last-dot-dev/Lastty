@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import { buildRecordingReplayModel, formatBytes } from "../app/recordings";
+import { latestToolCall as latestToolCallRecord } from "../app/agentUi";
 
 interface RecordingReplayProps {
   contents: string;
@@ -83,7 +84,7 @@ export default function RecordingReplay({ contents }: RecordingReplayProps) {
 
   const lastIndex = Math.max(0, replay.playbackSteps.length - 1);
   const activeAgentState = currentStep?.agentState ?? replay.agentState;
-  const latestToolCall = activeAgentState.toolCalls[activeAgentState.toolCalls.length - 1] ?? null;
+  const latestToolCall = latestToolCallRecord(activeAgentState);
   const latestFileEdit = activeAgentState.fileEdits[activeAgentState.fileEdits.length - 1] ?? null;
 
   return (

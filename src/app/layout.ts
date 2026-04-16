@@ -17,10 +17,30 @@ export type LayoutNode =
       weights: number[];
     };
 
+export interface DesktopState {
+  id: string;
+  name: string;
+  layout: LayoutNode | null;
+  focusedPaneId: string | null;
+  maximizedPaneId: string | null;
+}
+
 export interface WorkspaceState {
   panes: Record<string, PaneRecord>;
-  layout: LayoutNode;
-  focusedPaneId: string | null;
+  desktops: DesktopState[];
+  activeDesktopId: string;
+}
+
+export interface CloseDesktopResult {
+  workspace: WorkspaceState;
+  removedSessionIds: string[];
+}
+
+let desktopCounter = 0;
+
+function nextDesktopId(): string {
+  desktopCounter += 1;
+  return `desktop-${Date.now().toString(36)}-${desktopCounter}`;
 }
 
 export function createPaneRecord(sessionId: string, title = "shell"): PaneRecord {
@@ -31,27 +51,78 @@ export function createPaneRecord(sessionId: string, title = "shell"): PaneRecord
   };
 }
 
-export function createWorkspace(rootPane: PaneRecord): WorkspaceState {
+export function createDesktopState(
+  rootPane: PaneRecord | null,
+  name: string,
+  id: string = nextDesktopId(),
+): DesktopState {
   return {
-    panes: { [rootPane.id]: rootPane },
-    layout: { type: "leaf", paneId: rootPane.id },
-    focusedPaneId: rootPane.id,
+    id,
+    name,
+    layout: rootPane ? { type: "leaf", paneId: rootPane.id } : null,
+    focusedPaneId: rootPane?.id ?? null,
+    maximizedPaneId: null,
   };
 }
 
-export function focusPane(state: WorkspaceState, paneId: string): WorkspaceState {
+export function createWorkspace(rootPane: PaneRecord): WorkspaceState {
+  const desktop = createDesktopState(rootPane, "View 1");
+  return {
+    panes: { [rootPane.id]: rootPane },
+    desktops: [desktop],
+    activeDesktopId: desktop.id,
+  };
+}
+
+export function activeDesktop(state: WorkspaceState): DesktopState {
+  const desktop = state.desktops.find((entry) => entry.id === state.activeDesktopId);
+  return desktop ?? state.desktops[0]!;
+}
+
+export function findDesktopForPane(
+  state: WorkspaceState,
+  paneId: string,
+): DesktopState | null {
+  return (
+    state.desktops.find((desktop) =>
+      desktop.layout ? orderedPaneIds(desktop.layout).includes(paneId) : false,
+    ) ?? null
+  );
+}
+
+function updateDesktop(
+  state: WorkspaceState,
+  desktopId: string,
+  updater: (desktop: DesktopState) => DesktopState,
+): WorkspaceState {
+  const desktops = state.desktops.map((desktop) =>
+    desktop.id === desktopId ? updater(desktop) : desktop,
+  );
+  return { ...state, desktops };
+}
+
+export function focusPane(
+  state: WorkspaceState,
+  paneId: string,
+  desktopId: string = state.activeDesktopId,
+): WorkspaceState {
   if (!(paneId in state.panes)) return state;
-  return { ...state, focusedPaneId: paneId };
+  return updateDesktop(state, desktopId, (desktop) =>
+    desktop.layout && orderedPaneIds(desktop.layout).includes(paneId)
+      ? { ...desktop, focusedPaneId: paneId }
+      : desktop,
+  );
 }
 
 export function focusAdjacentPane(
   state: WorkspaceState,
   direction: FocusDirection,
+  desktopId: string = state.activeDesktopId,
 ): WorkspaceState {
-  const paneId = state.focusedPaneId;
-  if (!paneId) return state;
-  const nextPaneId = findAdjacentPaneId(state.layout, paneId, direction);
-  return nextPaneId ? focusPane(state, nextPaneId) : state;
+  const desktop = state.desktops.find((entry) => entry.id === desktopId);
+  if (!desktop || !desktop.layout || !desktop.focusedPaneId) return state;
+  const nextPaneId = findAdjacentPaneId(desktop.layout, desktop.focusedPaneId, direction);
+  return nextPaneId ? focusPane(state, nextPaneId, desktopId) : state;
 }
 
 export function renamePane(
@@ -65,10 +136,7 @@ export function renamePane(
     ...state,
     panes: {
       ...state.panes,
-      [pane.id]: {
-        ...pane,
-        title,
-      },
+      [pane.id]: { ...pane, title },
     },
   };
 }
@@ -78,9 +146,14 @@ export function splitPane(
   paneId: string,
   direction: SplitDirection,
   nextPane: PaneRecord,
+  desktopId: string = state.activeDesktopId,
 ): WorkspaceState {
   if (!(paneId in state.panes)) return state;
-  const layout = replaceLeaf(state.layout, paneId, {
+  const desktop = state.desktops.find((entry) => entry.id === desktopId);
+  if (!desktop || !desktop.layout) return state;
+  if (!orderedPaneIds(desktop.layout).includes(paneId)) return state;
+
+  const layout = replaceLeaf(desktop.layout, paneId, {
     type: "split",
     direction,
     children: [
@@ -89,13 +162,15 @@ export function splitPane(
     ],
     weights: [1, 1],
   });
+
   return {
-    panes: {
-      ...state.panes,
-      [nextPane.id]: nextPane,
-    },
-    layout,
-    focusedPaneId: nextPane.id,
+    ...state,
+    panes: { ...state.panes, [nextPane.id]: nextPane },
+    desktops: state.desktops.map((entry) =>
+      entry.id === desktopId
+        ? { ...entry, layout, focusedPaneId: nextPane.id }
+        : entry,
+    ),
   };
 }
 
@@ -105,8 +180,12 @@ export function resizeSplit(
   handleIndex: number,
   delta: number,
   baseWeights?: number[],
+  desktopId: string = state.activeDesktopId,
 ): WorkspaceState {
-  const layout = updateSplitAtPath(state.layout, path, (node) => {
+  const desktop = state.desktops.find((entry) => entry.id === desktopId);
+  if (!desktop || !desktop.layout) return state;
+
+  const layout = updateSplitAtPath(desktop.layout, path, (node) => {
     const sourceWeights =
       baseWeights && baseWeights.length === node.weights.length ? baseWeights : node.weights;
     const nextWeights = resizeSplitWeights(sourceWeights, handleIndex, delta);
@@ -116,39 +195,286 @@ export function resizeSplit(
     ) {
       return node;
     }
-    return {
-      ...node,
-      weights: nextWeights,
-    };
+    return { ...node, weights: nextWeights };
   });
 
-  return layout === state.layout
-    ? state
-    : {
-        ...state,
-        layout,
-      };
+  if (layout === desktop.layout) return state;
+  return updateDesktop(state, desktopId, (entry) => ({ ...entry, layout }));
 }
 
-export function closePane(state: WorkspaceState, paneId: string): WorkspaceState {
-  if (!(paneId in state.panes) || Object.keys(state.panes).length === 1) {
-    return state;
-  }
+export function closePane(
+  state: WorkspaceState,
+  paneId: string,
+  desktopId: string = state.activeDesktopId,
+): WorkspaceState {
+  if (!(paneId in state.panes)) return state;
+  const desktop = state.desktops.find((entry) => entry.id === desktopId);
+  if (!desktop || !desktop.layout) return state;
+  if (!orderedPaneIds(desktop.layout).includes(paneId)) return state;
 
-  const layout = removeLeaf(state.layout, paneId);
-  if (!layout) return state;
+  const layout = removeLeaf(desktop.layout, paneId);
+  const ordered = layout ? orderedPaneIds(layout) : [];
 
   const panes = { ...state.panes };
   delete panes[paneId];
-  const ordered = orderedPaneIds(layout);
 
   return {
+    ...state,
     panes,
-    layout,
-    focusedPaneId: ordered.includes(state.focusedPaneId ?? "")
-      ? state.focusedPaneId
-      : ordered[0] ?? null,
+    desktops: state.desktops.map((entry) =>
+      entry.id === desktopId
+        ? {
+            ...entry,
+            layout,
+            focusedPaneId: ordered.includes(entry.focusedPaneId ?? "")
+              ? entry.focusedPaneId
+              : ordered[0] ?? null,
+            maximizedPaneId:
+              entry.maximizedPaneId && ordered.includes(entry.maximizedPaneId)
+                ? entry.maximizedPaneId
+                : null,
+          }
+        : entry,
+    ),
   };
+}
+
+export function toggleMaximize(
+  state: WorkspaceState,
+  paneId: string,
+  desktopId: string = state.activeDesktopId,
+): WorkspaceState {
+  return updateDesktop(state, desktopId, (desktop) =>
+    desktop.layout && orderedPaneIds(desktop.layout).includes(paneId)
+      ? {
+          ...desktop,
+          maximizedPaneId: desktop.maximizedPaneId === paneId ? null : paneId,
+        }
+      : desktop,
+  );
+}
+
+export function detachPane(state: WorkspaceState, paneId: string): WorkspaceState {
+  const desktop = findDesktopForPane(state, paneId);
+  if (!desktop || !desktop.layout) return state;
+  const layout = removeLeaf(desktop.layout, paneId);
+  const ordered = layout ? orderedPaneIds(layout) : [];
+  return {
+    ...state,
+    desktops: state.desktops.map((entry) =>
+      entry.id === desktop.id
+        ? {
+            ...entry,
+            layout,
+            focusedPaneId: ordered.includes(entry.focusedPaneId ?? "")
+              ? entry.focusedPaneId
+              : ordered[0] ?? null,
+            maximizedPaneId:
+              entry.maximizedPaneId && ordered.includes(entry.maximizedPaneId)
+                ? entry.maximizedPaneId
+                : null,
+          }
+        : entry,
+    ),
+  };
+}
+
+export function attachPaneToDesktop(
+  state: WorkspaceState,
+  paneId: string,
+  desktopId: string,
+): WorkspaceState {
+  if (!(paneId in state.panes)) return state;
+  const desktop = state.desktops.find((entry) => entry.id === desktopId);
+  if (!desktop) return state;
+  if (desktop.layout && orderedPaneIds(desktop.layout).includes(paneId)) return state;
+
+  const leaf: LayoutNode = { type: "leaf", paneId };
+  const layout: LayoutNode = desktop.layout
+    ? {
+        type: "split",
+        direction: "horizontal",
+        children: [desktop.layout, leaf],
+        weights: [1, 1],
+      }
+    : leaf;
+
+  return updateDesktop(state, desktopId, (entry) => ({
+    ...entry,
+    layout,
+    focusedPaneId: paneId,
+  }));
+}
+
+export type SplitSide = "left" | "right" | "top" | "bottom";
+
+export function splitAtPane(
+  state: WorkspaceState,
+  targetPaneId: string,
+  sourcePaneId: string,
+  side: SplitSide,
+): WorkspaceState {
+  if (targetPaneId === sourcePaneId) return state;
+  if (!(sourcePaneId in state.panes) || !(targetPaneId in state.panes)) return state;
+  const targetDesktop = findDesktopForPane(state, targetPaneId);
+  if (!targetDesktop || !targetDesktop.layout) return state;
+
+  const direction: SplitDirection =
+    side === "left" || side === "right" ? "horizontal" : "vertical";
+  const sourceFirst = side === "left" || side === "top";
+
+  const replacement: LayoutNode = {
+    type: "split",
+    direction,
+    children: sourceFirst
+      ? [
+          { type: "leaf", paneId: sourcePaneId },
+          { type: "leaf", paneId: targetPaneId },
+        ]
+      : [
+          { type: "leaf", paneId: targetPaneId },
+          { type: "leaf", paneId: sourcePaneId },
+        ],
+    weights: [1, 1],
+  };
+
+  const detached = detachPane(state, sourcePaneId);
+  const desktopAfterDetach = detached.desktops.find((entry) => entry.id === targetDesktop.id);
+  if (!desktopAfterDetach || !desktopAfterDetach.layout) return state;
+  if (!orderedPaneIds(desktopAfterDetach.layout).includes(targetPaneId)) return state;
+
+  const layout = replaceLeaf(desktopAfterDetach.layout, targetPaneId, replacement);
+  return updateDesktop(detached, targetDesktop.id, (entry) => ({
+    ...entry,
+    layout,
+    focusedPaneId: sourcePaneId,
+  }));
+}
+
+export function swapPanes(
+  state: WorkspaceState,
+  paneA: string,
+  paneB: string,
+): WorkspaceState {
+  if (paneA === paneB) return state;
+  if (!(paneA in state.panes) || !(paneB in state.panes)) return state;
+  const desktopA = findDesktopForPane(state, paneA);
+  const desktopB = findDesktopForPane(state, paneB);
+  if (!desktopA || !desktopB || !desktopA.layout || !desktopB.layout) return state;
+
+  return {
+    ...state,
+    desktops: state.desktops.map((entry) => {
+      if (entry.id === desktopA.id && entry.id === desktopB.id) {
+        const layout = swapLeaves(entry.layout!, paneA, paneB);
+        return { ...entry, layout };
+      }
+      if (entry.id === desktopA.id) {
+        const layout = replaceLeaf(entry.layout!, paneA, { type: "leaf", paneId: paneB });
+        return {
+          ...entry,
+          layout,
+          focusedPaneId: entry.focusedPaneId === paneA ? paneB : entry.focusedPaneId,
+        };
+      }
+      if (entry.id === desktopB.id) {
+        const layout = replaceLeaf(entry.layout!, paneB, { type: "leaf", paneId: paneA });
+        return {
+          ...entry,
+          layout,
+          focusedPaneId: entry.focusedPaneId === paneB ? paneA : entry.focusedPaneId,
+        };
+      }
+      return entry;
+    }),
+  };
+}
+
+function swapLeaves(node: LayoutNode, a: string, b: string): LayoutNode {
+  if (node.type === "leaf") {
+    if (node.paneId === a) return { type: "leaf", paneId: b };
+    if (node.paneId === b) return { type: "leaf", paneId: a };
+    return node;
+  }
+  return {
+    ...node,
+    children: node.children.map((child) => swapLeaves(child, a, b)),
+  };
+}
+
+export function createDesktop(
+  state: WorkspaceState,
+  rootPane: PaneRecord,
+  name?: string,
+): WorkspaceState {
+  const desktopName = name || `View ${state.desktops.length + 1}`;
+  const desktop = createDesktopState(rootPane, desktopName);
+  return {
+    panes: { ...state.panes, [rootPane.id]: rootPane },
+    desktops: [...state.desktops, desktop],
+    activeDesktopId: desktop.id,
+  };
+}
+
+export function closeDesktop(
+  state: WorkspaceState,
+  desktopId: string,
+): CloseDesktopResult {
+  if (state.desktops.length <= 1) {
+    return { workspace: state, removedSessionIds: [] };
+  }
+  const target = state.desktops.find((entry) => entry.id === desktopId);
+  if (!target) {
+    return { workspace: state, removedSessionIds: [] };
+  }
+
+  const removedPaneIds = target.layout ? orderedPaneIds(target.layout) : [];
+  const removedSessionIds = removedPaneIds
+    .map((paneId) => state.panes[paneId]?.sessionId)
+    .filter((sessionId): sessionId is string => Boolean(sessionId));
+
+  const panes = { ...state.panes };
+  for (const paneId of removedPaneIds) delete panes[paneId];
+
+  const desktops = state.desktops.filter((entry) => entry.id !== desktopId);
+  const activeDesktopId =
+    state.activeDesktopId === desktopId ? desktops[0]!.id : state.activeDesktopId;
+
+  return {
+    workspace: { panes, desktops, activeDesktopId },
+    removedSessionIds,
+  };
+}
+
+export function switchDesktop(
+  state: WorkspaceState,
+  desktopId: string,
+): WorkspaceState {
+  if (!state.desktops.some((entry) => entry.id === desktopId)) return state;
+  if (state.activeDesktopId === desktopId) return state;
+  return { ...state, activeDesktopId: desktopId };
+}
+
+export function renameDesktop(
+  state: WorkspaceState,
+  desktopId: string,
+  name: string,
+): WorkspaceState {
+  const trimmed = name.trim();
+  if (!trimmed) return state;
+  return updateDesktop(state, desktopId, (desktop) => ({ ...desktop, name: trimmed }));
+}
+
+export function nextDesktopIdInDirection(
+  state: WorkspaceState,
+  direction: 1 | -1,
+): string | null {
+  const count = state.desktops.length;
+  if (count <= 1) return null;
+  const index = state.desktops.findIndex((entry) => entry.id === state.activeDesktopId);
+  if (index < 0) return state.desktops[0]?.id ?? null;
+  const nextIndex = (index + direction + count) % count;
+  return state.desktops[nextIndex]!.id;
 }
 
 export function orderedPaneIds(node: LayoutNode): string[] {

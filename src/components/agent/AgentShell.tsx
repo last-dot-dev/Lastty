@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import AlertBar, { type BlockedSessionRef } from "./AlertBar";
 import Sidebar from "./Sidebar";
-import TabStrip, { type TabEntry } from "./TabStrip";
+import DesktopStrip, { type DesktopEntry } from "./DesktopStrip";
 import type { BranchRow } from "./BranchList";
 
 export default function AgentShell({
@@ -11,8 +11,15 @@ export default function AgentShell({
   branchRows,
   doneCount,
   onFocusBranch,
-  tabs,
-  onRestoreTab,
+  desktops,
+  activeDesktopId,
+  onSwitchDesktop,
+  onNewDesktop,
+  onCloseDesktop,
+  onRenameDesktop,
+  onDropPaneOnDesktop,
+  canAcceptPaneDrop,
+  renderDesktopPreview,
   sidebarFooterExtras,
   children,
 }: {
@@ -21,15 +28,32 @@ export default function AgentShell({
   branchRows: BranchRow[];
   doneCount: number;
   onFocusBranch: (paneId: string) => void;
-  tabs: TabEntry[];
-  onRestoreTab: (paneId: string) => void;
+  desktops: DesktopEntry[];
+  activeDesktopId: string;
+  onSwitchDesktop: (id: string) => void;
+  onNewDesktop: () => void;
+  onCloseDesktop: (id: string) => void;
+  onRenameDesktop: (id: string, name: string) => void;
+  onDropPaneOnDesktop?: (desktopId: string) => void;
+  canAcceptPaneDrop?: boolean;
+  renderDesktopPreview?: (desktopId: string) => ReactNode;
   sidebarFooterExtras?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <>
       <AlertBar blocked={blocked} onJump={onJumpToBlocked} />
-      <TabStrip tabs={tabs} onRestore={onRestoreTab} />
+      <DesktopStrip
+        desktops={desktops}
+        activeDesktopId={activeDesktopId}
+        onSwitch={onSwitchDesktop}
+        onNewDesktop={onNewDesktop}
+        onCloseDesktop={onCloseDesktop}
+        onRenameDesktop={onRenameDesktop}
+        onDropPaneOnDesktop={onDropPaneOnDesktop}
+        canAcceptPaneDrop={canAcceptPaneDrop}
+        renderPreview={renderDesktopPreview}
+      />
       <div className="agent-body">
         <Sidebar
           rows={branchRows}

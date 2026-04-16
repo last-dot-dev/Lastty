@@ -5,6 +5,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tauri::{AppHandle, Runtime};
 
+use crate::adapters::AgentAdapter;
 use crate::render_sync::RenderCoordinator;
 
 use super::session::{self, CommandSpec, SessionId, SessionInfo, TerminalSession};
@@ -37,6 +38,33 @@ impl<R: Runtime> TerminalManager<R> {
         prompt: Option<String>,
         worktree_path: Option<String>,
     ) -> anyhow::Result<SessionId> {
+        self.create_session_with_adapter(
+            command,
+            cwd,
+            env,
+            cols,
+            rows,
+            agent_id,
+            prompt_summary,
+            prompt,
+            worktree_path,
+            None,
+        )
+    }
+
+    pub fn create_session_with_adapter(
+        &self,
+        command: Option<CommandSpec>,
+        cwd: &Path,
+        env: &HashMap<String, String>,
+        cols: u16,
+        rows: u16,
+        agent_id: Option<String>,
+        prompt_summary: Option<String>,
+        prompt: Option<String>,
+        worktree_path: Option<String>,
+        adapter: Option<Box<dyn AgentAdapter>>,
+    ) -> anyhow::Result<SessionId> {
         let session = session::create_session(
             command.as_ref(),
             cwd,
@@ -49,6 +77,7 @@ impl<R: Runtime> TerminalManager<R> {
             prompt_summary,
             prompt,
             worktree_path,
+            adapter,
         )?;
         let session_id = session.id;
         self.sessions.insert(session_id, session);
