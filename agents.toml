@@ -1,0 +1,13 @@
+[[agent]]
+id = "codex"
+name = "Codex CLI"
+command = "codex"
+default_args = []
+prompt_transport = "argv"
+
+[[agent]]
+id = "claude"
+name = "Claude Code"
+command = "claude"
+default_args = []
+prompt_transport = "argv"
