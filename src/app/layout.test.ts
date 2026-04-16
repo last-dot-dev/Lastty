@@ -12,6 +12,7 @@ import {
   findAdjacentPaneId,
   findDesktopForPane,
   focusAdjacentPane,
+  focusPane,
   nextDesktopIdInDirection,
   orderedPaneIds,
   renameDesktop,
@@ -47,6 +48,23 @@ describe("layout state", () => {
     const desktop = activeDesktop(updated);
     expect(desktop.focusedPaneId).toBe(next.id);
     expect(desktop.layout && orderedPaneIds(desktop.layout)).toEqual([root.id, next.id]);
+  });
+
+  it("returns the same reference when focusing a pane that is already focused", () => {
+    const root = createPaneRecord("session-a", "root");
+    const state = createWorkspace(root);
+
+    expect(focusPane(state, root.id)).toBe(state);
+  });
+
+  it("produces a new reference when focus actually moves", () => {
+    const root = createPaneRecord("session-a", "root");
+    const next = createPaneRecord("session-b", "secondary");
+    const state = splitPane(createWorkspace(root), root.id, "horizontal", next);
+
+    const refocused = focusPane(state, root.id);
+    expect(refocused).not.toBe(state);
+    expect(activeDesktop(refocused).focusedPaneId).toBe(root.id);
   });
 
   it("collapses a split when one pane is removed", () => {

@@ -107,11 +107,11 @@ export function focusPane(
   desktopId: string = state.activeDesktopId,
 ): WorkspaceState {
   if (!(paneId in state.panes)) return state;
-  return updateDesktop(state, desktopId, (desktop) =>
-    desktop.layout && orderedPaneIds(desktop.layout).includes(paneId)
-      ? { ...desktop, focusedPaneId: paneId }
-      : desktop,
-  );
+  const desktop = state.desktops.find((entry) => entry.id === desktopId);
+  if (!desktop) return state;
+  if (desktop.focusedPaneId === paneId) return state;
+  if (!desktop.layout || !orderedPaneIds(desktop.layout).includes(paneId)) return state;
+  return updateDesktop(state, desktopId, (entry) => ({ ...entry, focusedPaneId: paneId }));
 }
 
 export function focusAdjacentPane(
