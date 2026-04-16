@@ -127,13 +127,11 @@ impl TerminalRenderer {
     }
 
     pub async fn new(
-        window: impl Into<wgpu::SurfaceTarget<'static>>,
+        instance: &wgpu::Instance,
+        surface: wgpu::Surface<'static>,
         width: u32,
         height: u32,
     ) -> anyhow::Result<Self> {
-        let instance = wgpu::Instance::default();
-        let surface = instance.create_surface(window.into())?;
-
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,

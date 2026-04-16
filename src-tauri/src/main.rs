@@ -6,6 +6,7 @@ mod bus;
 mod commands;
 mod events;
 mod input;
+mod platform;
 mod protocol;
 mod render_sync;
 mod renderer;
@@ -117,8 +118,26 @@ fn main() {
                 return Ok(());
             }
 
-            // Initialize wgpu renderer and start render loop.
+            // Initialize wgpu renderer with a child Metal view (hybrid compositing).
             let size = window.inner_size().unwrap();
+
+            let instance = wgpu::Instance::default();
+
+            #[cfg(target_os = "macos")]
+            let (_metal_subview, surface) = {
+                let ns_window = window.ns_window().expect("failed to get NSWindow handle");
+                let subview = unsafe { platform::macos::create_metal_subview(ns_window) };
+                let surface = unsafe {
+                    platform::macos::create_wgpu_surface(&instance, &subview)
+                        .expect("failed to create wgpu surface from Metal subview")
+                };
+                (subview, surface)
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            let surface = instance
+                .create_surface(window)
+                .expect("failed to create wgpu surface");
 
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -126,7 +145,7 @@ fn main() {
                 .unwrap();
 
             let renderer: anyhow::Result<TerminalRenderer> =
-                rt.block_on(async { TerminalRenderer::new(window, size.width.max(1), size.height.max(1)).await });
+                rt.block_on(async { TerminalRenderer::new(&instance, surface, size.width.max(1), size.height.max(1)).await });
 
             let mut renderer = match renderer {
                 Ok(r) => r,
