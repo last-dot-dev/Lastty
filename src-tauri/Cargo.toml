@@ -8,7 +8,7 @@ name = "lastty"
 path = "src/main.rs"
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "test"] }
 tauri-build = { version = "2", features = [] }
 alacritty_terminal = "0.26"
 wgpu = "29"
@@ -24,6 +24,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 raw-window-handle = "0.6"
 pane-protocol = { path = "../pane-protocol" }
 bytemuck = { version = "1", features = ["derive"] }
+toml = "0.8"
+polling = "3"
+portable-pty = "0.9.0"
+ratatui = "0.29.0"
+crossterm = "0.28.1"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

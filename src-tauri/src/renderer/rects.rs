@@ -32,11 +32,29 @@ impl RectVertex {
 /// Build a quad (two triangles) for a rect.
 pub fn rect_quad(x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) -> [RectVertex; 6] {
     [
-        RectVertex { position: [x, y], color },
-        RectVertex { position: [x + w, y], color },
-        RectVertex { position: [x, y + h], color },
-        RectVertex { position: [x + w, y], color },
-        RectVertex { position: [x + w, y + h], color },
-        RectVertex { position: [x, y + h], color },
+        RectVertex {
+            position: [x, y],
+            color,
+        },
+        RectVertex {
+            position: [x + w, y],
+            color,
+        },
+        RectVertex {
+            position: [x, y + h],
+            color,
+        },
+        RectVertex {
+            position: [x + w, y],
+            color,
+        },
+        RectVertex {
+            position: [x + w, y + h],
+            color,
+        },
+        RectVertex {
+            position: [x, y + h],
+            color,
+        },
     ]
 }

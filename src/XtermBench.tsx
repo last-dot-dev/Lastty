@@ -1,48 +1,72 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { quitApp, writeBenchmarkReport } from "./lib/ipc";
+
+import { getBenchmarkConfig, quitApp, writeBenchmarkReport } from "./lib/ipc";
 
 type RendererMode = "dom" | "webgl";
 
 interface BenchResult {
   renderer: RendererMode;
   workload: string;
+  cols: number;
+  rows: number;
+  frameCount: number;
   iterations: number;
+  warmupIterations: number;
   totalMs: number;
   meanMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  maxMs: number;
 }
 
-const COLS = 221;
-const ROWS = 61;
-const ITERATIONS = 20;
-const OUTPUT_PATH = "/tmp/lastty-xterm-bench.json";
+interface BenchConfig {
+  cols: number;
+  rows: number;
+  iterations: number;
+  warmupIterations: number;
+  outputPath: string;
+  forceFailureMessage?: string | null;
+}
+
+interface Workload {
+  name: string;
+  frames: string[];
+}
 
 export default function XtermBench() {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const configRef = useRef<BenchConfig | null>(null);
   const [status, setStatus] = useState("initializing");
-  const workloads = useMemo(
-    () => [
-      { name: "uniform_full_redraw", frame: makeUniformFrame() },
-      { name: "mixed_full_redraw", frame: makeMixedFrame() },
-      { name: "dense_logs_full_redraw", frame: makeLogsFrame() },
-      { name: "unicode_color_full_redraw", frame: makeUnicodeFrame() },
-    ],
-    [],
-  );
 
   useEffect(() => {
     let cancelled = false;
 
     async function run() {
       if (!hostRef.current) return;
+      const rawConfig = await getBenchmarkConfig();
+      const config: BenchConfig = {
+        cols: rawConfig.cols,
+        rows: rawConfig.rows,
+        iterations: rawConfig.iterations,
+        warmupIterations: rawConfig.warmup_iterations,
+        outputPath: rawConfig.output_path,
+        forceFailureMessage: rawConfig.force_failure_message,
+      };
+      configRef.current = config;
+      if (config.forceFailureMessage) {
+        setStatus(`failing: ${config.forceFailureMessage}`);
+        throw new Error(config.forceFailureMessage);
+      }
+      const workloads = buildWorkloads(config.cols, config.rows);
       const results: BenchResult[] = [];
 
       for (const renderer of ["dom", "webgl"] as RendererMode[]) {
         const term = new Terminal({
-          cols: COLS,
-          rows: ROWS,
+          cols: config.cols,
+          rows: config.rows,
           scrollback: 0,
           allowProposedApi: true,
           fontFamily: "Menlo, Monaco, monospace",
@@ -60,14 +84,25 @@ export default function XtermBench() {
         await nextFrame();
 
         for (const workload of workloads) {
+          setStatus(`warming ${renderer} ${workload.name}`);
+          await warmup(term, workload.frames, config.warmupIterations);
+
           setStatus(`running ${renderer} ${workload.name}`);
-          const totalMs = await measureWrite(term, workload.frame, ITERATIONS);
+          const samples = await measureFrames(term, workload.frames, config.iterations);
+          const totalMs = samples.reduce((sum, value) => sum + value, 0);
           results.push({
             renderer,
             workload: workload.name,
-            iterations: ITERATIONS,
+            cols: config.cols,
+            rows: config.rows,
+            frameCount: workload.frames.length,
+            iterations: config.iterations,
+            warmupIterations: config.warmupIterations,
             totalMs,
-            meanMs: totalMs / ITERATIONS,
+            meanMs: totalMs / samples.length,
+            p50Ms: percentile(samples, 50),
+            p95Ms: percentile(samples, 95),
+            maxMs: Math.max(...samples),
           });
         }
 
@@ -77,18 +112,18 @@ export default function XtermBench() {
 
       if (cancelled) return;
 
-      setStatus(`writing ${OUTPUT_PATH}`);
-      await writeBenchmarkReport(OUTPUT_PATH, JSON.stringify(results, null, 2));
+      setStatus(`writing ${config.outputPath}`);
+      await writeBenchmarkReport(config.outputPath, JSON.stringify(results, null, 2));
       setStatus("complete");
       await quitApp();
     }
 
     run().catch(async (error) => {
-      const message =
-        error instanceof Error ? error.stack || error.message : String(error);
+      const message = formatError(error);
       setStatus(`failed: ${message}`);
+      const outputPath = configRef.current?.outputPath ?? "/tmp/lastty-xterm-bench.json";
       await writeBenchmarkReport(
-        OUTPUT_PATH,
+        outputPath,
         JSON.stringify({ error: message }, null, 2),
       ).catch(() => {});
       await quitApp().catch(() => {});
@@ -97,7 +132,7 @@ export default function XtermBench() {
     return () => {
       cancelled = true;
     };
-  }, [workloads]);
+  }, []);
 
   return (
     <div
@@ -125,60 +160,147 @@ export default function XtermBench() {
   );
 }
 
-async function measureWrite(
-  term: Terminal,
-  frame: string,
-  iterations: number,
-): Promise<number> {
-  const start = performance.now();
-  for (let i = 0; i < iterations; i += 1) {
-    await new Promise<void>((resolve) => {
-      term.write(frame, () => resolve());
-    });
+async function warmup(term: Terminal, frames: string[], iterations: number) {
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    for (const frame of frames) {
+      await writeFrame(term, frame);
+    }
   }
-  return performance.now() - start;
+}
+
+async function measureFrames(
+  term: Terminal,
+  frames: string[],
+  iterations: number,
+): Promise<number[]> {
+  const samples: number[] = [];
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    for (const frame of frames) {
+      const startedAt = performance.now();
+      await writeFrame(term, frame);
+      samples.push(performance.now() - startedAt);
+    }
+  }
+  return samples;
+}
+
+function writeFrame(term: Terminal, frame: string) {
+  return new Promise<void>((resolve) => {
+    term.write(frame, () => resolve());
+  });
+}
+
+function percentile(values: number[], percentileValue: number) {
+  const sorted = [...values].sort((left, right) => left - right);
+  const idx = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.ceil((percentileValue / 100) * sorted.length) - 1),
+  );
+  return sorted[idx] ?? 0;
 }
 
 function nextFrame() {
   return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-function makeUniformFrame() {
-  const rows = Array.from({ length: ROWS }, (_, i) =>
-    `${"\u001b[0m\u001b[38;2;220;220;220m"}file_${String(i).padStart(3, "0")}.rs Cargo.toml README.md src target scripts docs`,
-  );
-  return `\u001b[H\u001b[2J${rows.join("\r\n")}\u001b[0m`;
+function formatError(error: unknown) {
+  if (error instanceof Error) {
+    if (error.stack && error.stack.includes(error.message)) {
+      return error.stack;
+    }
+    return error.message
+      ? `${error.message}${error.stack ? `\n${error.stack}` : ""}`
+      : error.stack || String(error);
+  }
+  return String(error);
 }
 
-function makeMixedFrame() {
-  const rows = Array.from({ length: ROWS }, (_, i) => {
-    return [
+function buildWorkloads(cols: number, rows: number): Workload[] {
+  return [
+    { name: "uniform_full_redraw", frames: [makeUniformFrame(cols, rows)] },
+    { name: "mixed_full_redraw", frames: [makeMixedFrame(cols, rows)] },
+    { name: "dense_logs_full_redraw", frames: [makeLogsFrame(cols, rows)] },
+    { name: "unicode_color_full_redraw", frames: [makeUnicodeFrame(cols, rows)] },
+    { name: "append_burst", frames: makeAppendBurstFrames(cols, rows) },
+    { name: "scroll_like_shift", frames: makeScrollFrames(cols, rows) },
+  ];
+}
+
+function makeUniformFrame(cols: number, rows: number) {
+  const rowText = `file_000.rs Cargo.toml README.md src target scripts benches docs`.padEnd(
+    cols,
+    " ",
+  );
+  const lines = Array.from({ length: rows }, (_, index) =>
+    `\u001b[0m\u001b[38;2;220;220;220m${rowText.replace("000", String(index).padStart(3, "0"))}`,
+  );
+  return `\u001b[H\u001b[2J${lines.join("\r\n")}\u001b[0m`;
+}
+
+function makeMixedFrame(cols: number, rows: number) {
+  const lines = Array.from({ length: rows }, (_, index) =>
+    [
       "\u001b[0m\u001b[38;2;180;180;180m@@ ",
-      `-${i + 1},4 +${i + 1},4 `,
+      `-${index + 1},4 +${index + 1},4 `.padEnd(Math.max(0, cols - 24), " "),
       "\u001b[38;2;255;90;90m-old_value() ",
       "\u001b[38;2;90;220;120m\u001b[1m+new_value()",
-    ].join("");
-  });
-  return `\u001b[H\u001b[2J${rows.join("\r\n")}\u001b[0m`;
+    ].join(""),
+  );
+  return `\u001b[H\u001b[2J${lines.join("\r\n")}\u001b[0m`;
 }
 
-function makeLogsFrame() {
-  const rows = Array.from({ length: ROWS }, (_, i) => {
-    return [
-      `\u001b[38;2;140;180;255m2026-04-16T06:${String(i % 60).padStart(2, "0")}:12.123Z `,
+function makeLogsFrame(cols: number, rows: number) {
+  const message =
+    "compiler.pipeline: finished chunk render and flushed viewport cache";
+  const lines = Array.from({ length: rows }, (_, index) =>
+    [
+      `\u001b[38;2;140;180;255m2026-04-16T06:${String(index % 60).padStart(2, "0")}:12.123Z `,
       "\u001b[38;2;120;220;180m\u001b[1mINFO ",
-      "\u001b[38;2;220;220;220mcompiler.pipeline: finished chunk render and flushed viewport cache",
-    ].join("");
-  });
-  return `\u001b[H\u001b[2J${rows.join("\r\n")}\u001b[0m`;
+      `\u001b[38;2;220;220;220m${message.slice(0, Math.max(0, cols - 31))}`,
+    ].join(""),
+  );
+  return `\u001b[H\u001b[2J${lines.join("\r\n")}\u001b[0m`;
 }
 
-function makeUnicodeFrame() {
-  const rows = Array.from({ length: ROWS }, (_, i) => {
-    const palette = i % 3;
+function makeUnicodeFrame(cols: number, rows: number) {
+  const lines = Array.from({ length: rows }, (_, index) => {
+    const palette = index % 3;
     const color =
       palette === 0 ? "255;160;90" : palette === 1 ? "120;220;255" : "180;255;140";
-    return `\u001b[38;2;${color}mλ render ✓ café 👩‍💻 日本語 résumé naïve — row ${i}`;
+    return `\u001b[38;2;${color}m${`λ render ✓ café 👩‍💻 日本語 résumé naïve row ${index}`.slice(
+      0,
+      cols,
+    )}`;
   });
-  return `\u001b[H\u001b[2J${rows.join("\r\n")}\u001b[0m`;
+  return `\u001b[H\u001b[2J${lines.join("\r\n")}\u001b[0m`;
+}
+
+function makeAppendBurstFrames(cols: number, rows: number) {
+  const frames: string[] = [];
+  for (let frameIndex = 0; frameIndex < 12; frameIndex += 1) {
+    const lines = Array.from({ length: rows }, (_, rowIndex) => {
+      const absoluteIndex = Math.max(0, frameIndex - rows + rowIndex + 1);
+      if (absoluteIndex <= 0) return "";
+      return [
+        `\u001b[38;2;140;180;255m2026-04-16T07:${String(absoluteIndex % 60).padStart(2, "0")}:45.500Z `,
+        "\u001b[38;2;120;220;180mINFO ",
+        `\u001b[38;2;220;220;220mappend burst line ${absoluteIndex}`.slice(0, cols),
+      ].join("");
+    });
+    frames.push(`\u001b[H\u001b[2J${lines.join("\r\n")}\u001b[0m`);
+  }
+  return frames;
+}
+
+function makeScrollFrames(cols: number, rows: number) {
+  const corpus = Array.from({ length: rows + 10 }, (_, index) =>
+    `\u001b[38;2;220;220;220mline ${String(index).padStart(3, "0")} cargo test --color=always ${".".repeat(
+      Math.max(0, cols - 36),
+    )}`,
+  );
+
+  return Array.from({ length: 10 }, (_, offset) => {
+    const lines = corpus.slice(offset, offset + rows);
+    return `\u001b[H\u001b[2J${lines.join("\r\n")}\u001b[0m`;
+  });
 }

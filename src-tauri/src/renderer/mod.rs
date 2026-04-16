@@ -2,16 +2,16 @@ pub mod rects;
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Line;
-use alacritty_terminal::term::TermDamage;
 use alacritty_terminal::term::cell::Flags as CellFlags;
 use alacritty_terminal::term::Term;
+use alacritty_terminal::term::TermDamage;
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight as GlyphonWeight,
 };
-use wgpu::util::DeviceExt;
 use std::time::{Duration, Instant};
+use wgpu::util::DeviceExt;
 
 use self::rects::{rect_quad, RectVertex};
 use crate::terminal::event_proxy::EventProxy;
@@ -160,7 +160,10 @@ impl TerminalRenderer {
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: if surface_caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+            alpha_mode: if surface_caps
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::Opaque)
+            {
                 wgpu::CompositeAlphaMode::Opaque
             } else {
                 surface_caps.alpha_modes[0]
@@ -208,12 +211,8 @@ impl TerminalRenderer {
         let cache = Cache::new(&device);
         let viewport = Viewport::new(&device, &cache);
         let mut atlas = TextAtlas::new(&device, &queue, &cache, format);
-        let text_renderer = TextRenderer::new(
-            &mut atlas,
-            &device,
-            wgpu::MultisampleState::default(),
-            None,
-        );
+        let text_renderer =
+            TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
 
         // Measure cell size using a monospace glyph
         let line_height = (FONT_SIZE * 1.4).ceil();
@@ -314,8 +313,7 @@ impl TerminalRenderer {
                     .unwrap_or(true);
 
             if needs_rebuild {
-                let mut buffer = self
-                    .line_cache[*row_idx]
+                let mut buffer = self.line_cache[*row_idx]
                     .take()
                     .map(|cached| cached.buffer)
                     .unwrap_or_else(|| Buffer::new(&mut self.font_system, metrics));
@@ -335,13 +333,7 @@ impl TerminalRenderer {
                         } else {
                             GlyphonWeight::NORMAL
                         });
-                    buffer.set_text(
-                        &mut self.font_system,
-                        &text,
-                        &attrs,
-                        Shaping::Basic,
-                        None,
-                    );
+                    buffer.set_text(&mut self.font_system, &text, &attrs, Shaping::Basic, None);
                 } else {
                     let mut spans: Vec<(String, Attrs)> = Vec::new();
                     let mut last_col = 0usize;
@@ -385,7 +377,10 @@ impl TerminalRenderer {
 
                 buffer.shape_until_scroll(&mut self.font_system, false);
 
-                self.line_cache[*row_idx] = Some(CachedLine { cells: cells.clone(), buffer });
+                self.line_cache[*row_idx] = Some(CachedLine {
+                    cells: cells.clone(),
+                    buffer,
+                });
             }
         }
         self.layout_dirty = false;
@@ -405,12 +400,13 @@ impl TerminalRenderer {
                     let ndc_y = 1.0 - ((py + cell_h) / sh) * 2.0;
                     let ndc_w = (cell_w / sw) * 2.0;
                     let ndc_h = (cell_h / sh) * 2.0;
-                    rect_vertices.extend_from_slice(&rect_quad(ndc_x, ndc_y, ndc_w, ndc_h, [
-                        cell.bg[0],
-                        cell.bg[1],
-                        cell.bg[2],
-                        1.0,
-                    ]));
+                    rect_vertices.extend_from_slice(&rect_quad(
+                        ndc_x,
+                        ndc_y,
+                        ndc_w,
+                        ndc_h,
+                        [cell.bg[0], cell.bg[1], cell.bg[2], 1.0],
+                    ));
                 }
             }
         }
@@ -443,25 +439,24 @@ impl TerminalRenderer {
         );
 
         // Build TextAreas from line buffers
-        let text_areas: Vec<TextArea> = self.line_cache
+        let text_areas: Vec<TextArea> = self
+            .line_cache
             .iter()
             .enumerate()
             .filter_map(|(row_idx, cached)| cached.as_ref().map(|cached| (row_idx, cached)))
-            .map(|(row_idx, cached)| {
-                TextArea {
-                    buffer: &cached.buffer,
-                    left: 0.0,
-                    top: row_idx as f32 * cell_h,
-                    scale: 1.0,
-                    bounds: TextBounds {
-                        left: 0,
-                        top: 0,
-                        right: self.surface_width as i32,
-                        bottom: self.surface_height as i32,
-                    },
-                    default_color: GlyphonColor::rgb(220, 220, 220),
-                    custom_glyphs: &[],
-                }
+            .map(|(row_idx, cached)| TextArea {
+                buffer: &cached.buffer,
+                left: 0.0,
+                top: row_idx as f32 * cell_h,
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: 0,
+                    top: 0,
+                    right: self.surface_width as i32,
+                    bottom: self.surface_height as i32,
+                },
+                default_color: GlyphonColor::rgb(220, 220, 220),
+                custom_glyphs: &[],
             })
             .collect();
         let text_areas_len = text_areas.len();
@@ -546,10 +541,7 @@ impl TerminalRenderer {
 }
 
 /// Resolve a terminal color to RGB floats.
-fn resolve_color(
-    color: Color,
-    colors: &alacritty_terminal::term::color::Colors,
-) -> [f32; 3] {
+fn resolve_color(color: Color, colors: &alacritty_terminal::term::color::Colors) -> [f32; 3] {
     match color {
         Color::Named(name) => {
             if let Some(rgb) = colors[name] {
@@ -633,7 +625,13 @@ fn ansi_256_color(idx: u8) -> [f32; 3] {
         let r = (idx / 36) % 6;
         let g = (idx / 6) % 6;
         let b = idx % 6;
-        let to_f = |v: u8| if v == 0 { 0.0 } else { (55.0 + 40.0 * v as f32) / 255.0 };
+        let to_f = |v: u8| {
+            if v == 0 {
+                0.0
+            } else {
+                (55.0 + 40.0 * v as f32) / 255.0
+            }
+        };
         return [to_f(r), to_f(g), to_f(b)];
     }
     let v = (8 + 10 * (idx - 232)) as f32 / 255.0;
@@ -685,16 +683,19 @@ fn attrs_for_style(style: LineStyle) -> Attrs<'static> {
 fn uniform_line_style(cells: &[CellInfo]) -> Option<LineStyle> {
     let first = cells.first()?;
     let style = cell_style(first);
-    cells.iter().all(|cell| cell_style(cell) == style).then_some(style)
+    cells
+        .iter()
+        .all(|cell| cell_style(cell) == style)
+        .then_some(style)
 }
 
 fn build_line_text(cells: &[CellInfo]) -> String {
-    let mut text = String::new();
+    let mut text = String::with_capacity(cells.len());
     let mut last_col = 0usize;
 
     for cell in cells {
         if cell.col > last_col {
-            text.push_str(&" ".repeat(cell.col - last_col));
+            push_spaces(&mut text, cell.col - last_col);
         }
         text.push(if cell.c == '\0' { ' ' } else { cell.c });
         last_col = cell.col + 1;
@@ -712,11 +713,13 @@ fn flush_run(
         return;
     }
 
-    let style = run_style
-        .take()
-        .unwrap_or(LineStyle {
-            fg: [220, 220, 220],
-            bold: false,
-        });
+    let style = run_style.take().unwrap_or(LineStyle {
+        fg: [220, 220, 220],
+        bold: false,
+    });
     spans.push((std::mem::take(run_text), attrs_for_style(style)));
+}
+
+fn push_spaces(text: &mut String, count: usize) {
+    text.extend(std::iter::repeat_n(' ', count));
 }

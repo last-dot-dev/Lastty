@@ -1,12 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(dead_code)]
 
+mod agents;
+mod bus;
 mod commands;
 mod events;
 mod input;
 mod protocol;
 mod render_sync;
 mod renderer;
+mod runtime_modes;
 mod terminal;
 
 use std::collections::HashMap;
@@ -21,8 +24,9 @@ use tracing_subscriber::EnvFilter;
 
 use render_sync::RenderCoordinator;
 use renderer::TerminalRenderer;
-use terminal::render::{TerminalFrameEvent, render_viewport};
+use runtime_modes::{resolved_benchmark_mode, resolved_renderer_mode, BenchmarkMode, RendererMode};
 use terminal::manager::TerminalManager;
+use terminal::render::spawn_frame_emitter;
 
 const PERF_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -36,8 +40,8 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
-            let benchmark_mode = std::env::var("LASTTY_BENCH_MODE").ok();
-            let renderer_mode = std::env::var("LASTTY_RENDERER").ok();
+            let benchmark_mode = resolved_benchmark_mode();
+            let renderer_mode = resolved_renderer_mode();
 
             #[cfg(target_os = "macos")]
             {
@@ -45,13 +49,16 @@ fn main() {
                 window.set_background_color(Some(Color(69, 69, 80, 255)))?;
             }
 
-            if benchmark_mode.as_deref() == Some("xterm") {
+            if benchmark_mode == Some(BenchmarkMode::Xterm) {
                 tracing::info!("starting in benchmark mode: xterm");
                 return Ok(());
             }
 
             let render_coordinator = Arc::new(RenderCoordinator::new());
             let app_handle = app.handle().clone();
+            let event_bus =
+                bus::EventBus::new(app.handle().clone(), PathBuf::from(".lastty-recordings"));
+            app.manage(event_bus);
 
             // Create terminal manager.
             let manager = TerminalManager::new(app.handle().clone(), render_coordinator.clone());
@@ -66,55 +73,44 @@ fn main() {
             env.insert("LASTTY".to_string(), "1".to_string());
 
             let session_id = manager
-                .create_session(None, &cwd, &env, 80, 24)
+                .create_session(None, &cwd, &env, 80, 24, None, None, None, None)
                 .expect("failed to create initial terminal session");
+            app.handle().state::<bus::EventBus>().publish(bus::BusEvent::SessionCreated {
+                session_id: session_id.to_string(),
+                agent_id: None,
+            });
 
             tracing::info!("created initial session: {}", session_id);
 
             app.manage(manager);
-
-            if renderer_mode.as_deref() == Some("xterm") {
-                tracing::info!("starting in renderer mode: xterm");
-                std::thread::spawn(move || {
-                    let manager = app_handle.state::<TerminalManager>();
-                    let term_arc = manager.get(&session_id).map(|s| s.term.clone());
-                    drop(manager);
-                    if let Some(term_arc) = term_arc {
-                        let term = term_arc.lock();
-                        let frame = render_viewport(&term);
-                        app_handle
-                            .emit(
-                                "term:frame",
-                                TerminalFrameEvent {
-                                    session_id: session_id.to_string(),
-                                    frame,
-                                },
-                            )
-                            .ok();
+            match std::env::current_dir() {
+                Ok(workspace_root) => {
+                    let rule_count = app
+                        .handle()
+                        .state::<bus::EventBus>()
+                        .start_rule_executor(workspace_root)
+                        .unwrap_or_else(|error| {
+                            tracing::warn!("failed to start rule executor: {error}");
+                            0
+                        });
+                    if rule_count > 0 {
+                        tracing::info!("started rule executor with {rule_count} rule(s)");
                     }
+                }
+                Err(error) => {
+                    tracing::warn!("failed to resolve workspace root for rule executor: {error}");
+                }
+            }
 
-                    let mut rendered_generation = 0u64;
-                    loop {
-                        let dirty = render_coordinator.wait_for_next(rendered_generation);
-                        let manager = app_handle.state::<TerminalManager>();
-                        let term_arc = manager.get(&dirty.session_id).map(|s| s.term.clone());
-                        drop(manager);
-                        if let Some(term_arc) = term_arc {
-                            let term = term_arc.lock();
-                            let frame = render_viewport(&term);
-                            app_handle
-                                .emit(
-                                    "term:frame",
-                                    TerminalFrameEvent {
-                                        session_id: dirty.session_id.to_string(),
-                                        frame,
-                                    },
-                                )
-                                .ok();
-                            rendered_generation = dirty.generation;
-                        }
-                    }
-                });
+            if matches!(renderer_mode, RendererMode::Xterm | RendererMode::AlacrittySpike) {
+                if renderer_mode == RendererMode::AlacrittySpike {
+                    tracing::warn!(
+                        "renderer mode alacritty_spike is not implemented yet; using xterm path"
+                    );
+                } else {
+                    tracing::info!("starting in renderer mode: xterm");
+                }
+                spawn_frame_emitter(app_handle, render_coordinator, session_id);
                 return Ok(());
             }
 
@@ -339,8 +335,17 @@ fn main() {
             commands::write_benchmark_report,
             commands::quit_app,
             commands::get_benchmark_mode,
+            commands::get_benchmark_config,
             commands::get_renderer_mode,
             commands::get_primary_session_id,
+            commands::list_sessions,
+            commands::restore_terminal_sessions,
+            commands::list_agents,
+            commands::list_rules,
+            commands::launch_agent,
+            commands::respond_to_approval,
+            commands::list_recordings,
+            commands::read_recording,
             commands::terminal_input,
             commands::get_terminal_frame,
         ])
