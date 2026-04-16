@@ -7,6 +7,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 
 import {
+  getFontConfig,
   getTerminalFrame,
   terminalInput,
   terminalResize,
@@ -73,12 +74,13 @@ export default function TerminalViewport({
       if (!hostRef.current) return;
       const hostElement = hostRef.current;
 
+      const font = await getFontConfig();
       const terminal = new Terminal({
         allowProposedApi: true,
         cursorBlink: true,
-        fontFamily: "Menlo, Monaco, monospace",
-        fontSize: 14,
-        lineHeight: 1.2,
+        fontFamily: `${font.family}, Monaco, monospace`,
+        fontSize: font.size_px,
+        lineHeight: font.line_height,
         scrollback: 10_000,
         theme: xtermThemeFor(themeRef.current),
       });

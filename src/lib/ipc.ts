@@ -66,6 +66,16 @@ export async function getRendererMode(): Promise<string | null> {
   return invoke("get_renderer_mode");
 }
 
+export interface FontConfig {
+  family: string;
+  size_px: number;
+  line_height: number;
+}
+
+export async function getFontConfig(): Promise<FontConfig> {
+  return invoke("get_font_config");
+}
+
 export async function getPrimarySessionId(): Promise<string | null> {
   return invoke("get_primary_session_id");
 }

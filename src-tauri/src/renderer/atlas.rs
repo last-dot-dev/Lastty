@@ -16,6 +16,8 @@ use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::Format;
 use swash::{FontRef, GlyphId};
 
+use crate::font_config::FontConfig;
+
 /// Atlas texture side length in pixels. 2048x2048 × R8 = 4 MiB. Plenty for
 /// thousands of glyphs; if we ever exhaust it we can grow or reset it.
 const ATLAS_SIZE: u32 = 2048;
@@ -72,12 +74,18 @@ pub struct GlyphAtlas {
 impl GlyphAtlas {
     /// Build the atlas: load a monospace font, measure it, pre-rasterize the
     /// ASCII printable range, and allocate the GPU texture.
+    ///
+    /// `config` gives the logical-pixel font size and family; `scale_factor`
+    /// is the window's backing scale (2.0 on Retina) so the rasterized size
+    /// matches the surface's physical pixel dimensions.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        font_size: f32,
+        config: FontConfig,
+        scale_factor: f32,
     ) -> anyhow::Result<Self> {
-        let (font_data, font_index) = load_monospace_font()?;
+        let font_size = config.size_px * scale_factor;
+        let (font_data, font_index) = load_monospace_font(config.family)?;
         let font_data = Arc::new(font_data);
 
         // Derive metrics from the font itself.
@@ -97,13 +105,18 @@ impl GlyphAtlas {
         };
         let cell_width = advance.round().max(1.0);
 
-        // Cell height follows the font's own line metrics. swash reports
-        // descent as a positive distance below the baseline, so the sum of
-        // ascent + descent + leading is the intended line-to-line spacing.
-        let cell_height = (metrics.ascent + metrics.descent + metrics.leading)
-            .ceil()
-            .max(1.0);
-        let baseline = metrics.ascent.round();
+        // Cell height matches xterm.js semantics: `font_size * line_height`.
+        // This keeps both renderer paths laying out the same grid without the
+        // wgpu side drifting to whatever happens to be in the font's hhea
+        // table. Any extra vertical room shows up as padding around the
+        // glyph inside each cell, which is exactly what xterm does.
+        let cell_height = (font_size * config.line_height).ceil().max(1.0);
+
+        // Center the glyph within the cell: pad above the font's ascent by
+        // half the extra space.
+        let natural_line = metrics.ascent + metrics.descent + metrics.leading;
+        let extra = (cell_height - natural_line).max(0.0);
+        let baseline = (metrics.ascent + extra * 0.5).round();
 
         tracing::info!(
             "atlas font metrics: cell={:.1}x{:.1}, baseline={:.1}, ascent={:.2}, descent={:.2}, leading={:.2}",
@@ -328,14 +341,42 @@ impl GlyphAtlas {
     }
 }
 
-/// Resolve a monospace font on the host. We ask fontdb for a generic monospace
-/// match and fall back to a platform-specific explicit name if the query can't
-/// decide (some macOS setups come back empty for generic families).
-fn load_monospace_font() -> anyhow::Result<(Vec<u8>, u32)> {
+/// Resolve a monospace font on the host. Tries a fast-path direct read from
+/// known macOS system-font paths first (avoiding `fontdb::load_system_fonts()`
+/// which scans hundreds of files), then falls back to a generic fontdb query.
+fn load_monospace_font(preferred_family: &str) -> anyhow::Result<(Vec<u8>, u32)> {
+    #[cfg(target_os = "macos")]
+    {
+        // Map well-known family names to their canonical system font files.
+        // Each entry is (family, path, face index of Regular within the .ttc).
+        let fast_paths: &[(&str, &str, u32)] = &[
+            ("Menlo", "/System/Library/Fonts/Menlo.ttc", 0),
+            ("Monaco", "/System/Library/Fonts/Monaco.ttf", 0),
+            ("SF Mono", "/System/Library/Fonts/SFNSMono.ttf", 0),
+        ];
+        for (family, path, index) in fast_paths {
+            if !family.eq_ignore_ascii_case(preferred_family) {
+                continue;
+            }
+            if let Ok(data) = std::fs::read(path) {
+                tracing::info!(
+                    "loaded monospace font (fast path): family={}, path={}, bytes={}, index={}",
+                    family,
+                    path,
+                    data.len(),
+                    index
+                );
+                return Ok((data, *index));
+            }
+        }
+    }
+
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
 
+    let preferred = fontdb::Family::Name(preferred_family);
     let queries = [
+        preferred,
         fontdb::Family::Monospace,
         fontdb::Family::Name("Menlo"),
         fontdb::Family::Name("SF Mono"),

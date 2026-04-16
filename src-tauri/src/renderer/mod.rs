@@ -14,6 +14,7 @@ use wgpu::util::DeviceExt;
 
 use self::atlas::GlyphAtlas;
 use self::rects::{rect_quad, RectVertex};
+use crate::font_config::FontConfig;
 use crate::terminal::event_proxy::EventProxy;
 
 /// Default terminal background color (dark theme).
@@ -23,11 +24,6 @@ const BG_COLOR: wgpu::Color = wgpu::Color {
     b: 0.08,
     a: 1.0,
 };
-
-/// Font size in physical pixels. The surface is configured in physical pixels
-/// (see `main.rs` → `window.inner_size()` which returns physical px on
-/// Retina), so we rasterize at the same unit.
-const FONT_SIZE: f32 = 18.0;
 
 #[derive(Clone, PartialEq)]
 pub struct TerminalSnapshot {
@@ -171,6 +167,8 @@ impl TerminalRenderer {
         surface: wgpu::Surface<'static>,
         width: u32,
         height: u32,
+        font_config: FontConfig,
+        scale_factor: f32,
     ) -> anyhow::Result<Self> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -246,7 +244,7 @@ impl TerminalRenderer {
         // Build the glyph atlas. This loads the system monospace font and
         // pre-rasterizes ASCII, giving us stable cell metrics before anything
         // else runs.
-        let atlas = GlyphAtlas::new(&device, &queue, FONT_SIZE)?;
+        let atlas = GlyphAtlas::new(&device, &queue, font_config, scale_factor)?;
         let cell_width = atlas.cell_width;
         let cell_height = atlas.cell_height;
 

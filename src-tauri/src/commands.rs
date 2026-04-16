@@ -7,6 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::agents::{self, AgentDefinition, LaunchAgentRequest, LaunchAgentResult, RuleDefinition};
 use crate::bus::{BusEvent, EventBus, RecordingInfo};
+use crate::font_config::FontConfig;
 use crate::runtime_modes;
 use crate::terminal::manager::TerminalManager;
 use crate::terminal::render::TerminalFrame;
@@ -158,6 +159,11 @@ pub async fn get_renderer_mode() -> Result<Option<String>, String> {
 #[tauri::command]
 pub async fn get_benchmark_config() -> Result<runtime_modes::BenchmarkConfig, String> {
     Ok(runtime_modes::benchmark_config())
+}
+
+#[tauri::command]
+pub fn get_font_config() -> FontConfig {
+    FontConfig::DEFAULT
 }
 
 #[tauri::command]
