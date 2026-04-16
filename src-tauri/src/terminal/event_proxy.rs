@@ -1,19 +1,19 @@
-use std::borrow::Cow;
 use std::sync::mpsc;
 
 use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::event_loop::Msg;
 use tauri::{AppHandle, Emitter};
 
-use super::session::{EventLoopSender, SessionId};
+use crate::render_sync::RenderCoordinator;
+
+use super::session::SessionId;
 
 /// Bridges alacritty_terminal events to our app.
 /// Implements EventListener which Term<T> requires.
 #[derive(Clone)]
 pub struct EventProxy {
     pub session_id: SessionId,
-    /// Sender to notify the renderer that the grid changed.
-    pub wakeup_tx: mpsc::Sender<SessionId>,
+    /// Notifier to mark the latest terminal state as dirty.
+    pub render_coordinator: std::sync::Arc<RenderCoordinator>,
     /// Sender to write back to the PTY (for DSR responses etc.).
     pub pty_write_tx: mpsc::Sender<String>,
     /// Tauri app handle for emitting events to webview.
@@ -24,7 +24,7 @@ impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         match event {
             Event::Wakeup => {
-                let _ = self.wakeup_tx.send(self.session_id);
+                self.render_coordinator.mark_dirty(self.session_id);
             }
             Event::PtyWrite(text) => {
                 // Forward DSR responses and other pty-write-back requests.

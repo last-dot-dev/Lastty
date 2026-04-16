@@ -1,5 +1,12 @@
 use alacritty_terminal::term::TermMode;
 
+pub fn key_requires_mode_lookup(code: &str) -> bool {
+    matches!(
+        code,
+        "ArrowUp" | "ArrowDown" | "ArrowRight" | "ArrowLeft" | "Home" | "End"
+    )
+}
+
 /// Translate a keyboard event from the webview into terminal byte sequences.
 pub fn key_to_bytes(
     key: &str,
@@ -8,7 +15,7 @@ pub fn key_to_bytes(
     alt: bool,
     shift: bool,
     _meta: bool,
-    mode: TermMode,
+    mode: Option<TermMode>,
 ) -> Option<Vec<u8>> {
     // Handle ctrl+key combinations.
     if ctrl {
@@ -21,7 +28,9 @@ pub fn key_to_bytes(
     }
 
     // Handle special keys.
-    let app_cursor = mode.contains(TermMode::APP_CURSOR);
+    let app_cursor = mode
+        .map(|value| value.contains(TermMode::APP_CURSOR))
+        .unwrap_or(false);
 
     let bytes: Option<Vec<u8>> = match code {
         "Enter" | "NumpadEnter" => Some(vec![0x0d]),

@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::terminal::manager::TerminalManager;
+use crate::terminal::render::TerminalFrame;
 use crate::terminal::session::SessionId;
 
 /// Build environment variables for the terminal session.
@@ -64,11 +66,65 @@ pub async fn key_input(
     let session_id = state.first_session_id().ok_or("no active session")?;
     let session = state.get(&session_id).ok_or("session not found")?;
 
-    // Get terminal mode for input translation.
-    let mode = *session.term.lock().mode();
+    let mode = if crate::input::key_requires_mode_lookup(&code) {
+        Some(*session.term.lock().mode())
+    } else {
+        None
+    };
 
     if let Some(bytes) = crate::input::key_to_bytes(&key, &code, ctrl, alt, shift, meta, mode) {
         session.write(&bytes)?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn write_benchmark_report(path: String, contents: String) -> Result<(), String> {
+    fs::write(path, contents).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn quit_app(app: AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_benchmark_mode() -> Result<Option<String>, String> {
+    Ok(std::env::var("LASTTY_BENCH_MODE").ok())
+}
+
+#[tauri::command]
+pub async fn get_renderer_mode() -> Result<Option<String>, String> {
+    Ok(std::env::var("LASTTY_RENDERER").ok())
+}
+
+#[tauri::command]
+pub async fn get_primary_session_id(
+    state: State<'_, TerminalManager>,
+) -> Result<Option<String>, String> {
+    Ok(state.first_session_id().map(|id| id.to_string()))
+}
+
+#[tauri::command]
+pub async fn terminal_input(
+    session_id: String,
+    bytes: Vec<u8>,
+    state: State<'_, TerminalManager>,
+) -> Result<(), String> {
+    let id = SessionId::parse(&session_id)?;
+    let session = state.get(&id).ok_or("session not found")?;
+    session.write(&bytes)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_terminal_frame(
+    session_id: String,
+    state: State<'_, TerminalManager>,
+) -> Result<TerminalFrame, String> {
+    let id = SessionId::parse(&session_id)?;
+    let session = state.get(&id).ok_or("session not found")?;
+    let term = session.term.lock();
+    Ok(crate::terminal::render::render_viewport(&term))
 }

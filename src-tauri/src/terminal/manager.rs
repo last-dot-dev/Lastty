@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use tauri::AppHandle;
+
+use crate::render_sync::RenderCoordinator;
 
 use super::session::{self, SessionId, TerminalSession};
 
@@ -11,15 +13,15 @@ use super::session::{self, SessionId, TerminalSession};
 pub struct TerminalManager {
     sessions: DashMap<SessionId, TerminalSession>,
     app: AppHandle,
-    wakeup_tx: mpsc::Sender<SessionId>,
+    render_coordinator: Arc<RenderCoordinator>,
 }
 
 impl TerminalManager {
-    pub fn new(app: AppHandle, wakeup_tx: mpsc::Sender<SessionId>) -> Self {
+    pub fn new(app: AppHandle, render_coordinator: Arc<RenderCoordinator>) -> Self {
         Self {
             sessions: DashMap::new(),
             app,
-            wakeup_tx,
+            render_coordinator,
         }
     }
 
@@ -37,7 +39,7 @@ impl TerminalManager {
             env,
             cols,
             rows,
-            self.wakeup_tx.clone(),
+            self.render_coordinator.clone(),
             self.app.clone(),
         )?;
         let session_id = session.id;

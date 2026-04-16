@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 
 use alacritty_terminal::event::WindowSize;
@@ -10,8 +11,9 @@ use alacritty_terminal::event_loop::{EventLoop, Msg};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term};
 use alacritty_terminal::tty;
-use std::sync::Arc;
 use uuid::Uuid;
+
+use crate::render_sync::RenderCoordinator;
 
 use super::event_proxy::EventProxy;
 
@@ -82,7 +84,7 @@ pub fn create_session(
     env: &HashMap<String, String>,
     cols: u16,
     rows: u16,
-    wakeup_tx: mpsc::Sender<SessionId>,
+    render_coordinator: Arc<RenderCoordinator>,
     app: tauri::AppHandle,
 ) -> anyhow::Result<TerminalSession> {
     let id = SessionId::new();
@@ -92,7 +94,7 @@ pub fn create_session(
 
     let event_proxy = EventProxy {
         session_id: id,
-        wakeup_tx,
+        render_coordinator,
         pty_write_tx,
         app,
     };
