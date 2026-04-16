@@ -8,7 +8,7 @@ name = "lastty"
 path = "src/main.rs"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-build = { version = "2", features = [] }
 alacritty_terminal = "0.26"
 wgpu = "29"

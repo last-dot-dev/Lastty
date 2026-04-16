@@ -57,23 +57,23 @@ fn main() {
             let size = window.inner_size().unwrap();
             let app_handle = app.handle().clone();
 
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            let renderer: anyhow::Result<TerminalRenderer> =
+                rt.block_on(async { TerminalRenderer::new(window, size.width.max(1), size.height.max(1)).await });
+
+            let mut renderer = match renderer {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("failed to create renderer: {}", e);
+                    return Err(e.into());
+                }
+            };
+
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-
-                let renderer: anyhow::Result<TerminalRenderer> = rt.block_on(async {
-                    TerminalRenderer::new(window, size.width.max(1), size.height.max(1)).await
-                });
-
-                let mut renderer = match renderer {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::error!("failed to create renderer: {}", e);
-                        return;
-                    }
-                };
 
                 tracing::info!(
                     "renderer initialized: {}x{}, cell: {:.1}x{:.1}",
@@ -100,6 +100,20 @@ fn main() {
                         let dims = terminal::session::TermDimensions { cols: cols as usize, lines: rows as usize };
                         term_arc.lock().resize(dims);
                         tracing::info!("resized terminal to {}x{}", cols, rows);
+                    }
+                }
+
+                // Paint an initial frame immediately so the window is visible
+                // before the PTY emits its first wakeup event.
+                {
+                    let manager = app_handle.state::<TerminalManager>();
+                    let term_arc = manager.get(&session_id).map(|s| s.term.clone());
+                    drop(manager);
+                    if let Some(term_arc) = term_arc {
+                        let term = term_arc.lock();
+                        if let Err(e) = renderer.render(&term) {
+                            tracing::error!("initial render error: {}", e);
+                        }
                     }
                 }
 
