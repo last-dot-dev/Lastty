@@ -1,0 +1,3 @@
+[workspace]
+members = ["pane-protocol", "pane-cli"]
+resolver = "2"
