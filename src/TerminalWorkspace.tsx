@@ -943,12 +943,6 @@ function renderLayout(
           onDragStart={(event) => {
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("application/x-lastty-pane", pane.id);
-            const ghost = document.createElement("div");
-            ghost.style.position = "absolute";
-            ghost.style.left = "-9999px";
-            document.body.appendChild(ghost);
-            event.dataTransfer.setDragImage(ghost, 0, 0);
-            window.setTimeout(() => ghost.remove(), 0);
             onDragStartPane(pane.id);
           }}
           onDragEnd={onDragEndPane}

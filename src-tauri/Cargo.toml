@@ -2,6 +2,7 @@
 name = "lastty"
 version = "0.1.0"
 edition = "2021"
+default-run = "lastty"
 
 [[bin]]
 name = "lastty"

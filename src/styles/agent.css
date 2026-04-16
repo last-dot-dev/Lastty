@@ -471,6 +471,16 @@
   color: var(--color-text-primary);
   flex-shrink: 0;
   min-width: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.agent-window-header[draggable="true"] {
+  cursor: grab;
+}
+
+.agent-window-header[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .agent-window-header.is-needs-help {
