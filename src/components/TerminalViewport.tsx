@@ -27,6 +27,11 @@ interface TerminalViewportProps {
   onSnapshotChange?: (snapshot: PersistedTerminalSnapshot) => void;
   restoredSnapshot?: PersistedTerminalSnapshot | null;
   sessionId: string;
+  /// "wgpu" means Rust renders the terminal grid into a native subview that
+  /// overlays this component's host div. In that mode we skip xterm entirely
+  /// and just measure our host rect so the workspace can push it to Rust.
+  rendererMode?: string | null;
+  onRectChange?: (sessionId: string, rect: DOMRect | null) => void;
 }
 
 export default function TerminalViewport({
@@ -36,6 +41,8 @@ export default function TerminalViewport({
   onSnapshotChange,
   restoredSnapshot = null,
   sessionId,
+  rendererMode,
+  onRectChange,
 }: TerminalViewportProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -43,10 +50,12 @@ export default function TerminalViewport({
   const blockedRef = useRef(blocked);
   const onSnapshotChangeRef = useRef(onSnapshotChange);
   const restoredSnapshotRef = useRef(restoredSnapshot);
+  const onRectChangeRef = useRef(onRectChange);
   const [status, setStatus] = useState("initializing");
   const effectiveTheme = useEffectiveTheme();
   const themeRef = useRef(effectiveTheme);
   themeRef.current = effectiveTheme;
+  const wgpuMode = rendererMode === "wgpu";
 
   useEffect(() => {
     blockedRef.current = blocked;
@@ -61,6 +70,32 @@ export default function TerminalViewport({
   }, [restoredSnapshot]);
 
   useEffect(() => {
+    onRectChangeRef.current = onRectChange;
+  }, [onRectChange]);
+
+  useEffect(() => {
+    if (!wgpuMode) return;
+    const host = hostRef.current;
+    if (!host) return;
+
+    const push = () => {
+      onRectChangeRef.current?.(sessionId, host.getBoundingClientRect());
+    };
+    push();
+
+    const observer = new ResizeObserver(push);
+    observer.observe(host);
+    window.addEventListener("resize", push);
+    setStatus(`session ${sessionId}`);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", push);
+      onRectChangeRef.current?.(sessionId, null);
+    };
+  }, [sessionId, wgpuMode]);
+
+  useEffect(() => {
+    if (wgpuMode) return;
     let disposed = false;
     let fitAddon: FitAddon | null = null;
     let serializeAddon: SerializeAddon | null = null;
@@ -216,7 +251,7 @@ export default function TerminalViewport({
         setStatus("disposed");
       }
     };
-  }, [sessionId]);
+  }, [sessionId, wgpuMode]);
 
   useEffect(() => {
     if (focused && !blocked) {

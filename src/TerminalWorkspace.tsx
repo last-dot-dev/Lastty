@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import {
@@ -59,15 +67,23 @@ import {
   listSessions,
   respondToApproval,
   restoreTerminalSessions,
+  sendKeyEvent,
+  updatePaneLayout,
   type AgentDefinition,
   type AgentUiEvent,
   type LaunchAgentResult,
+  type PaneLayoutEntry,
   type SessionExitEvent,
   type SessionInfo,
   type SessionTitleEvent,
 } from "./lib/ipc";
 
-export default function TerminalWorkspace() {
+interface TerminalWorkspaceProps {
+  rendererMode: string;
+}
+
+export default function TerminalWorkspace({ rendererMode }: TerminalWorkspaceProps) {
+  const wgpuMode = rendererMode === "wgpu";
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [sessionInfoById, setSessionInfoById] = useState<Record<string, SessionInfo>>({});
@@ -95,6 +111,112 @@ export default function TerminalWorkspace() {
     () => Object.keys(sessionInfoById),
     [sessionInfoById],
   );
+
+  // wgpu mode: TerminalViewport reports its host rect here; we aggregate and
+  // push the whole pane list to Rust with a 16ms trailing debounce so drag
+  // resizes don't spam the IPC command.
+  const paneRectsRef = useRef<Map<string, DOMRect>>(new Map());
+  const pushTimerRef = useRef<number | null>(null);
+
+  const flushPaneLayout = useCallback(() => {
+    const entries: PaneLayoutEntry[] = [];
+    paneRectsRef.current.forEach((rect, sessionId) => {
+      entries.push({
+        session_id: sessionId,
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      });
+    });
+    updatePaneLayout(entries).catch((error) => {
+      console.error("updatePaneLayout failed", error);
+    });
+  }, []);
+
+  const schedulePaneLayoutPush = useCallback(() => {
+    if (pushTimerRef.current !== null) return;
+    pushTimerRef.current = window.setTimeout(() => {
+      pushTimerRef.current = null;
+      flushPaneLayout();
+    }, 16);
+  }, [flushPaneLayout]);
+
+  const handlePaneRect = useCallback(
+    (sessionId: string, rect: DOMRect | null) => {
+      if (rect) {
+        paneRectsRef.current.set(sessionId, rect);
+      } else {
+        paneRectsRef.current.delete(sessionId);
+      }
+      schedulePaneLayoutPush();
+    },
+    [schedulePaneLayoutPush],
+  );
+
+  // In wgpu mode xterm never mounts, so it can't capture keystrokes. Route
+  // them globally to the focused pane's session.
+  const focusedSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!workspace?.focusedPaneId) {
+      focusedSessionIdRef.current = null;
+      return;
+    }
+    focusedSessionIdRef.current =
+      workspace.panes[workspace.focusedPaneId]?.sessionId ?? null;
+  }, [workspace]);
+
+  useEffect(() => {
+    if (!wgpuMode) return;
+    const handler = (event: KeyboardEvent) => {
+      // Defer to the split/close/launcher chord handler below.
+      if (event.ctrlKey && event.shiftKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const sessionId = focusedSessionIdRef.current;
+      if (!sessionId) return;
+      event.preventDefault();
+      sendKeyEvent(
+        event.key,
+        event.code,
+        event.ctrlKey,
+        event.altKey,
+        event.shiftKey,
+        event.metaKey,
+        sessionId,
+      ).catch((error) => {
+        console.error("sendKeyEvent failed", error);
+      });
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [wgpuMode]);
+
+  useEffect(() => {
+    if (!wgpuMode) return;
+    // Scale-factor change: Rust's atlas rebuild keys off the next layout
+    // push, so a re-push here is enough to trigger it.
+    let unlistenFn: (() => void) | null = null;
+    void listen<{ scale_factor: number }>("tauri://scale-change", () => {
+      schedulePaneLayoutPush();
+    }).then((fn) => {
+      unlistenFn = fn;
+    });
+    return () => {
+      unlistenFn?.();
+      if (pushTimerRef.current !== null) {
+        window.clearTimeout(pushTimerRef.current);
+        pushTimerRef.current = null;
+      }
+    };
+  }, [wgpuMode, schedulePaneLayoutPush]);
 
   const theme = useThemeOverride();
 
@@ -601,6 +723,8 @@ export default function TerminalWorkspace() {
             restoredSnapshotsBySessionId,
             minimizedPaneIds,
             maximizedPaneId,
+            rendererMode,
+            onPaneRect: handlePaneRect,
             onCloseChrome: handleCloseFromChrome,
             onMinimize: minimizePane,
             onToggleMaximize: toggleMaximizePane,
@@ -656,6 +780,8 @@ interface RenderLayoutCtx {
   restoredSnapshotsBySessionId: Record<string, PersistedTerminalSnapshot>;
   minimizedPaneIds: Set<string>;
   maximizedPaneId: string | null;
+  rendererMode: string;
+  onPaneRect: (sessionId: string, rect: DOMRect | null) => void;
   onCloseChrome: (paneId: string) => Promise<void>;
   onMinimize: (paneId: string) => void;
   onToggleMaximize: (paneId: string) => void;
@@ -683,6 +809,8 @@ function renderLayout(
     restoredSnapshotsBySessionId,
     minimizedPaneIds,
     maximizedPaneId,
+    rendererMode,
+    onPaneRect,
     onCloseChrome,
     onMinimize,
     onToggleMaximize,
@@ -750,6 +878,8 @@ function renderLayout(
             focused={focused}
             onActivate={() => onFocus(pane.id)}
             onSnapshotChange={(snapshot) => onSnapshot(pane.sessionId, snapshot)}
+            onRectChange={onPaneRect}
+            rendererMode={rendererMode}
             restoredSnapshot={restoredSnapshotsBySessionId[pane.sessionId] ?? null}
             sessionId={pane.sessionId}
           />

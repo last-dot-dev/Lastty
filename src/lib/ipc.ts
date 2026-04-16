@@ -30,8 +30,9 @@ export async function sendKeyEvent(
   alt: boolean,
   shift: boolean,
   meta: boolean,
+  sessionId?: string,
 ): Promise<void> {
-  return invoke("key_input", { key, code, ctrl, alt, shift, meta });
+  return invoke("key_input", { key, code, ctrl, alt, shift, meta, sessionId });
 }
 
 export async function writeBenchmarkReport(
@@ -276,4 +277,17 @@ export async function getTerminalFrame(
   sessionId: string,
 ): Promise<TerminalFrame> {
   return invoke("get_terminal_frame", { sessionId });
+}
+
+export interface PaneLayoutEntry {
+  session_id: string;
+  /// AppKit points (≈ CSS px on macOS) relative to the window's content view.
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export async function updatePaneLayout(panes: PaneLayoutEntry[]): Promise<void> {
+  return invoke("update_pane_layout", { panes });
 }
