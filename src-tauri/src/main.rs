@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-use tauri::Manager;
+use tauri::{window::Color, Manager, TitleBarStyle};
 use tracing_subscriber::EnvFilter;
 
 use renderer::TerminalRenderer;
@@ -29,6 +29,12 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
+
+            #[cfg(target_os = "macos")]
+            {
+                window.set_title_bar_style(TitleBarStyle::Transparent)?;
+                window.set_background_color(Some(Color(69, 69, 80, 255)))?;
+            }
 
             // Create wakeup channel for render coordination.
             let (wakeup_tx, wakeup_rx) = mpsc::channel::<SessionId>();

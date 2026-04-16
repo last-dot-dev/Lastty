@@ -211,7 +211,6 @@ impl TerminalRenderer {
         let cell_h = self.cell_height;
         let sw = self.surface_width as f32;
         let sh = self.surface_height as f32;
-        let cols = term.columns();
         let rows = term.screen_lines();
 
         let mut rect_vertices: Vec<RectVertex> = Vec::new();
