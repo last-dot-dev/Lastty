@@ -2,6 +2,11 @@
 name = "lastty"
 version = "0.1.0"
 edition = "2021"
+default-run = "lastty"
+
+[lib]
+name = "lastty"
+path = "src/lib.rs"
 
 [[bin]]
 name = "lastty"
@@ -12,7 +17,6 @@ tauri = { version = "2", features = ["macos-private-api", "test"] }
 tauri-build = { version = "2", features = [] }
 alacritty_terminal = "0.26"
 wgpu = "29"
-glyphon = "0.11"
 swash = "0.2"
 etagere = "0.3"
 fontdb = "0.23"
@@ -29,14 +33,13 @@ pane-protocol = { path = "../pane-protocol" }
 bytemuck = { version = "1", features = ["derive"] }
 toml = "0.8"
 polling = "3"
-portable-pty = "0.9.0"
-ratatui = "0.29.0"
-crossterm = "0.28.1"
+pollster = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSGeometry", "NSObject"] }
-objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSResponder"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSResponder", "objc2-quartz-core"] }
+objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

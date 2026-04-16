@@ -16,7 +16,7 @@ use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::Format;
 use swash::{FontRef, GlyphId};
 
-use crate::font_config::FontConfig;
+use crate::font_config::{self, CellMetrics, FontConfig};
 
 /// Atlas texture side length in pixels. 2048x2048 × R8 = 4 MiB. Plenty for
 /// thousands of glyphs; if we ever exhaust it we can grow or reset it.
@@ -54,6 +54,7 @@ pub struct GlyphAtlas {
     font_index: u32,
     scale_context: ScaleContext,
     font_size: f32,
+    config: FontConfig,
 
     // GPU resources.
     pub texture: wgpu::Texture,
@@ -84,48 +85,19 @@ impl GlyphAtlas {
         config: FontConfig,
         scale_factor: f32,
     ) -> anyhow::Result<Self> {
-        let font_size = config.size_px * scale_factor;
-        let (font_data, font_index) = load_monospace_font(config.family)?;
-        let font_data = Arc::new(font_data);
-
-        // Derive metrics from the font itself.
-        let font = FontRef::from_index(&font_data, font_index as usize)
-            .ok_or_else(|| anyhow::anyhow!("failed to parse font data"))?;
-        let metrics = font.metrics(&[]).scale(font_size);
-        let glyph_metrics = font.glyph_metrics(&[]).scale(font_size);
-        let charmap = font.charmap();
-
-        // Cell width: advance of an unambiguously full-width glyph in a
-        // monospace font. 'M' is a conventional choice; fall back to 'x'.
-        let probe = charmap.map('M' as u32);
-        let advance = if probe != 0 {
-            glyph_metrics.advance_width(probe)
-        } else {
-            glyph_metrics.advance_width(charmap.map('x' as u32))
-        };
-        let cell_width = advance.round().max(1.0);
-
-        // Cell height matches xterm.js semantics: `font_size * line_height`.
-        // This keeps both renderer paths laying out the same grid without the
-        // wgpu side drifting to whatever happens to be in the font's hhea
-        // table. Any extra vertical room shows up as padding around the
-        // glyph inside each cell, which is exactly what xterm does.
-        let cell_height = (font_size * config.line_height).ceil().max(1.0);
-
-        // Center the glyph within the cell: pad above the font's ascent by
-        // half the extra space.
-        let natural_line = metrics.ascent + metrics.descent + metrics.leading;
-        let extra = (cell_height - natural_line).max(0.0);
-        let baseline = (metrics.ascent + extra * 0.5).round();
-
-        tracing::info!(
-            "atlas font metrics: cell={:.1}x{:.1}, baseline={:.1}, ascent={:.2}, descent={:.2}, leading={:.2}",
+        let (font_data, font_index) = font_config::load_monospace_font(config.family)?;
+        let CellMetrics {
+            font_size,
             cell_width,
             cell_height,
             baseline,
-            metrics.ascent,
-            metrics.descent,
-            metrics.leading,
+        } = font_config::cell_metrics(&font_data, font_index, config, scale_factor)?;
+
+        tracing::info!(
+            "atlas font metrics: cell={:.1}x{:.1}, baseline={:.1}",
+            cell_width,
+            cell_height,
+            baseline,
         );
 
         // GPU texture — R8 alpha mask. We write glyph coverage into red and
@@ -167,6 +139,7 @@ impl GlyphAtlas {
             font_index,
             scale_context: ScaleContext::new(),
             font_size,
+            config,
             texture,
             texture_view,
             sampler,
@@ -339,75 +312,39 @@ impl GlyphAtlas {
     pub fn atlas_size(&self) -> u32 {
         ATLAS_SIZE
     }
-}
 
-/// Resolve a monospace font on the host. Tries a fast-path direct read from
-/// known macOS system-font paths first (avoiding `fontdb::load_system_fonts()`
-/// which scans hundreds of files), then falls back to a generic fontdb query.
-fn load_monospace_font(preferred_family: &str) -> anyhow::Result<(Vec<u8>, u32)> {
-    #[cfg(target_os = "macos")]
-    {
-        // Map well-known family names to their canonical system font files.
-        // Each entry is (family, path, face index of Regular within the .ttc).
-        let fast_paths: &[(&str, &str, u32)] = &[
-            ("Menlo", "/System/Library/Fonts/Menlo.ttc", 0),
-            ("Monaco", "/System/Library/Fonts/Monaco.ttf", 0),
-            ("SF Mono", "/System/Library/Fonts/SFNSMono.ttf", 0),
-        ];
-        for (family, path, index) in fast_paths {
-            if !family.eq_ignore_ascii_case(preferred_family) {
-                continue;
-            }
-            if let Ok(data) = std::fs::read(path) {
-                tracing::info!(
-                    "loaded monospace font (fast path): family={}, path={}, bytes={}, index={}",
-                    family,
-                    path,
-                    data.len(),
-                    index
-                );
-                return Ok((data, *index));
-            }
-        }
-    }
+    /// Re-rasterize the atlas at a fresh `scale_factor`. Clears the cache,
+    /// resets the allocator, recomputes cell metrics, and pre-rasterizes
+    /// ASCII. Called on a DPR change when dragging the window between
+    /// displays of different scale.
+    pub fn rebuild(&mut self, queue: &wgpu::Queue, scale_factor: f32) -> anyhow::Result<()> {
+        let CellMetrics {
+            font_size,
+            cell_width,
+            cell_height,
+            baseline,
+        } = font_config::cell_metrics(&self.font_data, self.font_index, self.config, scale_factor)?;
 
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
+        self.font_size = font_size;
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
+        self.baseline = baseline;
+        self.cache.clear();
+        self.allocator = BucketedAtlasAllocator::new(size2(ATLAS_SIZE as i32, ATLAS_SIZE as i32));
+        self.scale_context = ScaleContext::new();
 
-    let preferred = fontdb::Family::Name(preferred_family);
-    let queries = [
-        preferred,
-        fontdb::Family::Monospace,
-        fontdb::Family::Name("Menlo"),
-        fontdb::Family::Name("SF Mono"),
-        fontdb::Family::Name("Monaco"),
-        fontdb::Family::Name("Courier New"),
-    ];
+        tracing::info!(
+            "atlas rebuilt at scale {scale_factor}: cell={:.1}x{:.1}, baseline={:.1}",
+            cell_width,
+            cell_height,
+            baseline,
+        );
 
-    for family in &queries {
-        let query = fontdb::Query {
-            families: std::slice::from_ref(family),
-            weight: fontdb::Weight::NORMAL,
-            stretch: fontdb::Stretch::Normal,
-            style: fontdb::Style::Normal,
-        };
-        if let Some(id) = db.query(&query) {
-            if let Some((source, index)) = db.face_source(id) {
-                let data = match source {
-                    fontdb::Source::Binary(data) => data.as_ref().as_ref().to_vec(),
-                    fontdb::Source::File(path) => std::fs::read(&path)?,
-                    fontdb::Source::SharedFile(_, data) => data.as_ref().as_ref().to_vec(),
-                };
-                tracing::info!(
-                    "loaded monospace font: family={:?}, bytes={}, index={}",
-                    family,
-                    data.len(),
-                    index
-                );
-                return Ok((data, index));
+        for code in 0x20u32..0x7Fu32 {
+            if let Some(ch) = char::from_u32(code) {
+                self.prepare(queue, ch);
             }
         }
+        Ok(())
     }
-
-    anyhow::bail!("no monospace font available from the system font database")
 }

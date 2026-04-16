@@ -1,8 +1,10 @@
 pub mod atlas;
+pub mod panes;
 pub mod rects;
 
 use std::time::{Duration, Instant};
 
+use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Line;
 use alacritty_terminal::term::cell::Flags as CellFlags;
@@ -12,10 +14,11 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use std::sync::{Arc, Mutex};
+
 use self::atlas::GlyphAtlas;
+use self::panes::GpuContext;
 use self::rects::{rect_quad, RectVertex};
-use crate::font_config::FontConfig;
-use crate::terminal::event_proxy::EventProxy;
 
 /// Default terminal background color (dark theme).
 const BG_COLOR: wgpu::Color = wgpu::Color {
@@ -97,10 +100,9 @@ struct GlyphUniforms {
 }
 
 pub struct TerminalRenderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
+    gpu: GpuContext,
+    surface: Option<wgpu::Surface<'static>>,
+    surface_config: Option<wgpu::SurfaceConfiguration>,
 
     // Rect rendering (cell backgrounds, cursor, selection).
     rect_pipeline: wgpu::RenderPipeline,
@@ -109,15 +111,21 @@ pub struct TerminalRenderer {
     glyph_pipeline: wgpu::RenderPipeline,
     glyph_bind_group: wgpu::BindGroup,
     glyph_uniform_buffer: wgpu::Buffer,
-    atlas: GlyphAtlas,
+    atlas: Arc<Mutex<GlyphAtlas>>,
+    atlas_size: u32,
 
-    // Font metrics (pixels).
+    // Font metrics (physical pixels). Cached from the atlas — kept in sync by
+    // `resize()` when the scale factor changes.
     pub cell_width: f32,
     pub cell_height: f32,
+    baseline: f32,
 
-    // Dimensions.
+    // Dimensions (physical pixels).
     pub surface_width: u32,
     pub surface_height: u32,
+    // Current DPR. Tracked so resize() can detect a display move and rebuild
+    // the atlas at the new scale.
+    pub scale_factor: f32,
 
     // Full grid snapshot kept up to date across frames. Damage updates only
     // touch the rows that changed, so keeping this avoids re-asking the Term
@@ -138,7 +146,7 @@ pub struct RenderMetrics {
 }
 
 impl TerminalRenderer {
-    pub fn snapshot(term: &mut Term<EventProxy>) -> TerminalSnapshot {
+    pub fn snapshot<T: EventListener>(term: &mut Term<T>) -> TerminalSnapshot {
         let rows = term.screen_lines();
         let damage = term.damage();
         let changed_rows: Vec<usize> = match damage {
@@ -162,52 +170,59 @@ impl TerminalRenderer {
         }
     }
 
-    pub async fn new(
-        instance: &wgpu::Instance,
+    /// Build a per-pane renderer. `gpu` is shared across all panes; `atlas`
+    /// is shared so each pane's renderer hits the same rasterization cache.
+    /// The bind group captures the atlas's texture view/sampler at
+    /// construction and stays valid across atlas rebuilds because rebuild
+    /// keeps the same texture.
+    pub fn new_for_pane(
+        gpu: GpuContext,
         surface: wgpu::Surface<'static>,
         width: u32,
         height: u32,
-        font_config: FontConfig,
+        atlas: Arc<Mutex<GlyphAtlas>>,
         scale_factor: f32,
     ) -> anyhow::Result<Self> {
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                ..Default::default()
-            })
-            .await?;
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await?;
-
-        let surface_caps = surface.get_capabilities(&adapter);
-        let format = surface_caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(surface_caps.formats[0]);
+        let surface_caps = surface.get_capabilities(&gpu.adapter);
+        let alpha_mode = if surface_caps
+            .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::Opaque)
+        {
+            wgpu::CompositeAlphaMode::Opaque
+        } else {
+            surface_caps.alpha_modes[0]
+        };
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
+            format: gpu.format,
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: if surface_caps
-                .alpha_modes
-                .contains(&wgpu::CompositeAlphaMode::Opaque)
-            {
-                wgpu::CompositeAlphaMode::Opaque
-            } else {
-                surface_caps.alpha_modes[0]
-            },
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(&device, &surface_config);
+        surface.configure(&gpu.device, &surface_config);
+
+        let mut renderer = Self::new_offscreen(gpu, width, height, atlas, scale_factor)?;
+        renderer.surface = Some(surface);
+        renderer.surface_config = Some(surface_config);
+        Ok(renderer)
+    }
+
+    /// Build a renderer that targets an external `wgpu::TextureView` rather
+    /// than a window surface. Used by the renderer benchmark to measure the
+    /// wgpu path without needing a real window.
+    pub fn new_offscreen(
+        gpu: GpuContext,
+        width: u32,
+        height: u32,
+        atlas: Arc<Mutex<GlyphAtlas>>,
+        scale_factor: f32,
+    ) -> anyhow::Result<Self> {
+        let device = gpu.device.clone();
+        let format = gpu.format;
 
         // Rect pipeline for backgrounds, cursor, selection. Unchanged from
         // before the atlas refactor.
@@ -241,17 +256,25 @@ impl TerminalRenderer {
             cache: None,
         });
 
-        // Build the glyph atlas. This loads the system monospace font and
-        // pre-rasterizes ASCII, giving us stable cell metrics before anything
-        // else runs.
-        let atlas = GlyphAtlas::new(&device, &queue, font_config, scale_factor)?;
-        let cell_width = atlas.cell_width;
-        let cell_height = atlas.cell_height;
+        // Pull cell metrics + atlas texture handles out of the shared atlas.
+        // The bind group captures the texture view/sampler by clone so the
+        // mutex can be released before the per-pane pipeline setup that
+        // follows.
+        let (cell_width, cell_height, baseline, atlas_size, atlas_texture_view, atlas_sampler) = {
+            let atlas_guard = atlas.lock().expect("glyph atlas mutex poisoned");
+            (
+                atlas_guard.cell_width,
+                atlas_guard.cell_height,
+                atlas_guard.baseline,
+                atlas_guard.atlas_size(),
+                atlas_guard.texture_view.clone(),
+                atlas_guard.sampler.clone(),
+            )
+        };
 
-        // Uniforms for the glyph pipeline — just screen and atlas dimensions.
         let glyph_uniforms = GlyphUniforms {
             screen_size: [width.max(1) as f32, height.max(1) as f32],
-            atlas_size: [atlas.atlas_size() as f32; 2],
+            atlas_size: [atlas_size as f32; 2],
         };
         let glyph_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("glyph uniforms"),
@@ -302,11 +325,11 @@ impl TerminalRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&atlas.texture_view),
+                    resource: wgpu::BindingResource::TextureView(&atlas_texture_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&atlas.sampler),
+                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
                 },
             ],
         });
@@ -348,42 +371,63 @@ impl TerminalRenderer {
         });
 
         Ok(Self {
-            device,
-            queue,
-            surface,
-            surface_config,
+            gpu,
+            surface: None,
+            surface_config: None,
             rect_pipeline,
             glyph_pipeline,
             glyph_bind_group,
             glyph_uniform_buffer,
             atlas,
+            atlas_size,
             cell_width,
             cell_height,
+            baseline,
             surface_width: width,
             surface_height: height,
+            scale_factor,
             rows: Vec::new(),
             last_glyph_count: 0,
         })
     }
 
-    pub fn resize(&mut self, width: u32, height: u32) {
-        if width > 0 && height > 0 {
-            self.surface_width = width;
-            self.surface_height = height;
-            self.surface_config.width = width;
-            self.surface_config.height = height;
-            self.surface.configure(&self.device, &self.surface_config);
-
-            let uniforms = GlyphUniforms {
-                screen_size: [width as f32, height as f32],
-                atlas_size: [self.atlas.atlas_size() as f32; 2],
-            };
-            self.queue.write_buffer(
-                &self.glyph_uniform_buffer,
-                0,
-                bytemuck::bytes_of(&uniforms),
-            );
+    /// Resize the wgpu surface to a fresh (physical_width, physical_height,
+    /// scale_factor) tuple. If the scale factor changed, the shared glyph
+    /// atlas is rebuilt at the new DPR so glyphs stay crisp after a display
+    /// move. The rebuild is coordinated across all panes by the caller.
+    pub fn resize(&mut self, width: u32, height: u32, scale_factor: f32) -> anyhow::Result<()> {
+        if width == 0 || height == 0 {
+            return Ok(());
         }
+        self.surface_width = width;
+        self.surface_height = height;
+        if let (Some(surface), Some(config)) = (&self.surface, self.surface_config.as_mut()) {
+            config.width = width;
+            config.height = height;
+            surface.configure(&self.gpu.device, config);
+        }
+
+        if (scale_factor - self.scale_factor).abs() > f32::EPSILON {
+            let mut atlas = self.atlas.lock().expect("glyph atlas mutex poisoned");
+            atlas.rebuild(&self.gpu.queue, scale_factor)?;
+            self.cell_width = atlas.cell_width;
+            self.cell_height = atlas.cell_height;
+            self.baseline = atlas.baseline;
+            drop(atlas);
+            self.scale_factor = scale_factor;
+            self.rows.clear();
+        }
+
+        let uniforms = GlyphUniforms {
+            screen_size: [width as f32, height as f32],
+            atlas_size: [self.atlas_size as f32; 2],
+        };
+        self.gpu.queue.write_buffer(
+            &self.glyph_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+        Ok(())
     }
 
     /// Calculate grid dimensions from surface size.
@@ -397,10 +441,38 @@ impl TerminalRenderer {
     /// `cached_line_count` for backwards compatibility with the perf stats
     /// pipeline, even though the semantics are now "glyphs not lines."
     pub fn cached_line_count(&self) -> usize {
-        self.atlas.cached_glyph_count()
+        self.atlas
+            .lock()
+            .expect("glyph atlas mutex poisoned")
+            .cached_glyph_count()
     }
 
     pub fn render(&mut self, snapshot: &TerminalSnapshot) -> anyhow::Result<RenderMetrics> {
+        let surface = self
+            .surface
+            .as_ref()
+            .expect("render() requires a surface; use render_to_view() for offscreen");
+        let frame = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(tex)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => tex,
+            other => {
+                anyhow::bail!("failed to get surface texture: {:?}", other);
+            }
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let metrics = self.render_to_view(snapshot, &view)?;
+        frame.present();
+        Ok(metrics)
+    }
+
+    /// Core render pass. Records + submits the GPU work against `view` and
+    /// returns timing breakdowns. Shared between the surface-backed `render`
+    /// path and the offscreen benchmark path.
+    pub fn render_to_view(
+        &mut self,
+        snapshot: &TerminalSnapshot,
+        view: &wgpu::TextureView,
+    ) -> anyhow::Result<RenderMetrics> {
         let cache_start = Instant::now();
 
         // Apply snapshot damage into the persistent row buffer.
@@ -415,22 +487,25 @@ impl TerminalRenderer {
 
         let cell_w = self.cell_width;
         let cell_h = self.cell_height;
-        let baseline = self.atlas.baseline;
+        let baseline = self.baseline;
         let sw = self.surface_width as f32;
         let sh = self.surface_height as f32;
         let default_bg = [BG_COLOR.r as f32, BG_COLOR.g as f32, BG_COLOR.b as f32];
 
-        // Ensure every visible glyph has been rasterized into the atlas. We
-        // do this up front (separate from instance building) so the borrow
-        // checker allows a mutable borrow of the atlas here without keeping
-        // it alive during the immutable iteration below.
-        for cells in &self.rows {
-            for cell in cells {
-                let ch = if cell.c == '\0' { ' ' } else { cell.c };
-                if ch == ' ' {
-                    continue;
+        // Rasterize any new glyphs into the shared atlas before the draw
+        // pass. The lock is held for the whole cache warm-up so a concurrent
+        // pane's prepare() doesn't race, then released before we build the
+        // vertex buffers — keeping the hot path lock-free.
+        {
+            let mut atlas = self.atlas.lock().expect("glyph atlas mutex poisoned");
+            for cells in &self.rows {
+                for cell in cells {
+                    let ch = if cell.c == '\0' { ' ' } else { cell.c };
+                    if ch == ' ' {
+                        continue;
+                    }
+                    atlas.prepare(&self.gpu.queue, ch);
                 }
-                self.atlas.prepare(&self.queue, ch);
             }
         }
         let cache_update = cache_start.elapsed();
@@ -442,44 +517,47 @@ impl TerminalRenderer {
         let mut rect_vertices: Vec<RectVertex> = Vec::new();
         let mut glyph_instances: Vec<GlyphInstance> = Vec::new();
 
-        for (row_idx, cells) in self.rows.iter().enumerate() {
-            let row_y = row_idx as f32 * cell_h;
-            for cell in cells {
-                let cell_x = cell.col as f32 * cell_w;
+        {
+            let atlas = self.atlas.lock().expect("glyph atlas mutex poisoned");
+            for (row_idx, cells) in self.rows.iter().enumerate() {
+                let row_y = row_idx as f32 * cell_h;
+                for cell in cells {
+                    let cell_x = cell.col as f32 * cell_w;
 
-                // Background rect (skip default bg to save GPU work).
-                if cell.bg != default_bg {
-                    let ndc_x = (cell_x / sw) * 2.0 - 1.0;
-                    let ndc_y = 1.0 - ((row_y + cell_h) / sh) * 2.0;
-                    let ndc_w = (cell_w / sw) * 2.0;
-                    let ndc_h = (cell_h / sh) * 2.0;
-                    rect_vertices.extend_from_slice(&rect_quad(
-                        ndc_x,
-                        ndc_y,
-                        ndc_w,
-                        ndc_h,
-                        [cell.bg[0], cell.bg[1], cell.bg[2], 1.0],
-                    ));
-                }
+                    // Background rect (skip default bg to save GPU work).
+                    if cell.bg != default_bg {
+                        let ndc_x = (cell_x / sw) * 2.0 - 1.0;
+                        let ndc_y = 1.0 - ((row_y + cell_h) / sh) * 2.0;
+                        let ndc_w = (cell_w / sw) * 2.0;
+                        let ndc_h = (cell_h / sh) * 2.0;
+                        rect_vertices.extend_from_slice(&rect_quad(
+                            ndc_x,
+                            ndc_y,
+                            ndc_w,
+                            ndc_h,
+                            [cell.bg[0], cell.bg[1], cell.bg[2], 1.0],
+                        ));
+                    }
 
-                // Glyph instance.
-                let ch = if cell.c == '\0' { ' ' } else { cell.c };
-                if ch == ' ' {
-                    continue;
+                    // Glyph instance.
+                    let ch = if cell.c == '\0' { ' ' } else { cell.c };
+                    if ch == ' ' {
+                        continue;
+                    }
+                    // Atlas is already warm from the pass above — lookup-only
+                    // call here to avoid any chance of re-writing the texture.
+                    let Some(region) = atlas.get(ch) else {
+                        continue;
+                    };
+                    let glyph_x = cell_x + region.bearing_x as f32;
+                    let glyph_y = row_y + baseline - region.bearing_y as f32;
+                    glyph_instances.push(GlyphInstance {
+                        pos: [glyph_x, glyph_y],
+                        size: [region.width as f32, region.height as f32],
+                        atlas_pos: [region.atlas_x as f32, region.atlas_y as f32],
+                        color: [cell.fg[0], cell.fg[1], cell.fg[2], 1.0],
+                    });
                 }
-                // Atlas is already warm from the pass above — do a lookup-only
-                // call here to avoid any chance of re-writing the texture.
-                let Some(region) = self.atlas.get(ch) else {
-                    continue;
-                };
-                let glyph_x = cell_x + region.bearing_x as f32;
-                let glyph_y = row_y + baseline - region.bearing_y as f32;
-                glyph_instances.push(GlyphInstance {
-                    pos: [glyph_x, glyph_y],
-                    size: [region.width as f32, region.height as f32],
-                    atlas_pos: [region.atlas_x as f32, region.atlas_y as f32],
-                    color: [cell.fg[0], cell.fg[1], cell.fg[2], 1.0],
-                });
             }
         }
 
@@ -505,7 +583,8 @@ impl TerminalRenderer {
         // glyphon shape_until_scroll path.
         let prepare_start = Instant::now();
         let rect_buffer = (!rect_vertices.is_empty()).then(|| {
-            self.device
+            self.gpu
+                .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("rect vertices"),
                     contents: bytemuck::cast_slice(&rect_vertices),
@@ -513,7 +592,8 @@ impl TerminalRenderer {
                 })
         });
         let glyph_buffer = (!glyph_instances.is_empty()).then(|| {
-            self.device
+            self.gpu
+                .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("glyph instances"),
                     contents: bytemuck::cast_slice(&glyph_instances),
@@ -523,25 +603,18 @@ impl TerminalRenderer {
         let prepare = prepare_start.elapsed();
 
         let gpu_start = Instant::now();
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(tex)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => tex,
-            other => {
-                anyhow::bail!("failed to get surface texture: {:?}", other);
-            }
-        };
-        let view = frame.texture.create_view(&Default::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render encoder"),
-            });
+        let mut encoder =
+            self.gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("render encoder"),
+                });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("terminal render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(BG_COLOR),
@@ -568,8 +641,7 @@ impl TerminalRenderer {
             }
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
-        frame.present();
+        self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
         self.last_glyph_count = glyph_instances.len();
 
@@ -681,8 +753,8 @@ fn ansi_256_color(idx: u8) -> [f32; 3] {
     [v, v, v]
 }
 
-fn snapshot_line(
-    term: &Term<EventProxy>,
+fn snapshot_line<T: EventListener>(
+    term: &Term<T>,
     row: usize,
     display_offset: usize,
     colors: &alacritty_terminal::term::color::Colors,
