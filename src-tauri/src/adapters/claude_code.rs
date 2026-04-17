@@ -105,10 +105,7 @@ fn translate_line(line: &[u8], finished_emitted: &mut bool) -> AdapterYield {
             } else {
                 Some(0)
             };
-            out.push_message(AgentUiMessage::Finished {
-                summary,
-                exit_code,
-            });
+            out.push_message(AgentUiMessage::Finished { summary, exit_code });
         }
         _ => {}
     }
@@ -179,11 +176,7 @@ fn translate_user(
             } else {
                 ""
             };
-            let echo = format!(
-                "{prefix}✓ {} {}\r\n",
-                tool_use_id,
-                summarize_json(&result),
-            );
+            let echo = format!("{prefix}✓ {} {}\r\n", tool_use_id, summarize_json(&result),);
             out.push_echo(echo.as_bytes());
             out.push_message(AgentUiMessage::ToolResult {
                 id: tool_use_id,
@@ -197,11 +190,14 @@ fn translate_user(
 
 fn file_message_for(name: &str, input: &Value) -> Option<AgentUiMessage> {
     match name {
-        "Write" => input.get("file_path").and_then(Value::as_str).map(|path| {
-            AgentUiMessage::FileCreate {
-                path: path.to_string(),
-            }
-        }),
+        "Write" => {
+            input
+                .get("file_path")
+                .and_then(Value::as_str)
+                .map(|path| AgentUiMessage::FileCreate {
+                    path: path.to_string(),
+                })
+        }
         "Edit" | "MultiEdit" => {
             input
                 .get("file_path")
@@ -343,7 +339,8 @@ mod tests {
 
     #[test]
     fn init_emits_ready() {
-        let line = r#"{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-4-5"}"#;
+        let line =
+            r#"{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-4-5"}"#;
         let msgs = run_stream(&[line]);
         assert_eq!(msgs.len(), 1);
         match &msgs[0] {
@@ -443,10 +440,7 @@ mod tests {
         let msgs = run_stream(&[line]);
         assert_eq!(msgs.len(), 1);
         match &msgs[0] {
-            AgentUiMessage::Finished {
-                summary,
-                exit_code,
-            } => {
+            AgentUiMessage::Finished { summary, exit_code } => {
                 assert_eq!(summary, "done");
                 assert_eq!(*exit_code, Some(0));
             }

@@ -159,8 +159,7 @@ impl GlyphAtlas {
             ..Default::default()
         });
 
-        let allocator =
-            BucketedAtlasAllocator::new(size2(ATLAS_SIZE as i32, ATLAS_SIZE as i32));
+        let allocator = BucketedAtlasAllocator::new(size2(ATLAS_SIZE as i32, ATLAS_SIZE as i32));
 
         let mut atlas = Self {
             font_data,

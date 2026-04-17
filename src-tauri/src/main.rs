@@ -19,19 +19,71 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::{window::Color, Emitter, Manager, TitleBarStyle};
 use tracing_subscriber::EnvFilter;
 
 use render_sync::RenderCoordinator;
-use renderer::TerminalRenderer;
+use renderer::{RenderOutcome, TerminalRenderer};
 use runtime_modes::{resolved_benchmark_mode, resolved_renderer_mode, BenchmarkMode, RendererMode};
 use terminal::manager::TerminalManager;
 use terminal::render::spawn_frame_emitter;
 
 const PERF_EMIT_INTERVAL: Duration = Duration::from_millis(250);
+
+fn resize_terminal_to_renderer(
+    app_handle: &tauri::AppHandle,
+    session_id: terminal::session::SessionId,
+    renderer: &TerminalRenderer,
+) {
+    let (cols, rows) = renderer.grid_size();
+    let cell_w = renderer.cell_width as u16;
+    let cell_h = renderer.cell_height as u16;
+    let manager = app_handle.state::<TerminalManager>();
+    let event_tx = manager
+        .get(&session_id)
+        .map(|session| session.event_tx.clone());
+    let term_arc = manager.get(&session_id).map(|session| session.term.clone());
+    drop(manager);
+    if let (Some(event_tx), Some(term_arc)) = (event_tx, term_arc) {
+        use alacritty_terminal::event::WindowSize;
+        use alacritty_terminal::event_loop::Msg;
+
+        let ws = WindowSize {
+            num_cols: cols,
+            num_lines: rows,
+            cell_width: cell_w,
+            cell_height: cell_h,
+        };
+        let _ = event_tx.send(Msg::Resize(ws));
+        let dims = terminal::session::TermDimensions {
+            cols: cols as usize,
+            lines: rows as usize,
+        };
+        term_arc.lock().resize(dims);
+        tracing::info!("resized terminal to {}x{}", cols, rows);
+    }
+}
+
+fn apply_pending_window_resize(
+    pending_window_size: &Mutex<Option<(u32, u32)>>,
+    app_handle: &tauri::AppHandle,
+    session_id: terminal::session::SessionId,
+    renderer: &mut TerminalRenderer,
+) {
+    let Some((width, height)) = pending_window_size
+        .lock()
+        .expect("pending window size poisoned")
+        .take()
+    else {
+        return;
+    };
+
+    renderer.resize(width.max(1), height.max(1));
+    resize_terminal_to_renderer(app_handle, session_id, renderer);
+}
 
 fn main() {
     tracing_subscriber::fmt()
@@ -124,6 +176,10 @@ fn main() {
             let size = window.inner_size().unwrap();
             let scale_factor = window.scale_factor().unwrap_or(1.0) as f32;
             let font_config = font_config::FontConfig::DEFAULT;
+            let pending_window_size = Arc::new(Mutex::new(Some((
+                size.width.max(1),
+                size.height.max(1),
+            ))));
 
             let instance = wgpu::Instance::default();
 
@@ -168,6 +224,33 @@ fn main() {
                 }
             };
 
+            {
+                let pending_window_size = pending_window_size.clone();
+                let render_coordinator = render_coordinator.clone();
+                window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::Resized(size) => {
+                        *pending_window_size
+                            .lock()
+                            .expect("pending window size poisoned") =
+                            Some((size.width.max(1), size.height.max(1)));
+                        render_coordinator.mark_dirty(session_id);
+                    }
+                    tauri::WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                        *pending_window_size
+                            .lock()
+                            .expect("pending window size poisoned") = Some((
+                            new_inner_size.width.max(1),
+                            new_inner_size.height.max(1),
+                        ));
+                        render_coordinator.mark_dirty(session_id);
+                    }
+                    tauri::WindowEvent::Focused(true) => {
+                        render_coordinator.mark_dirty(session_id);
+                    }
+                    _ => {}
+                });
+            }
+
             std::thread::spawn(move || {
                 let trace_start = Instant::now();
                 let mut perf_trace = OpenOptions::new()
@@ -195,25 +278,7 @@ fn main() {
                     renderer.cell_height
                 );
 
-                // Resize terminal to match actual window size.
-                let (cols, rows) = renderer.grid_size();
-                let cell_w = renderer.cell_width as u16;
-                let cell_h = renderer.cell_height as u16;
-                {
-                    let manager = app_handle.state::<TerminalManager>();
-                    let event_tx = manager.get(&session_id).map(|s| s.event_tx.clone());
-                    let term_arc = manager.get(&session_id).map(|s| s.term.clone());
-                    drop(manager);
-                    if let (Some(event_tx), Some(term_arc)) = (event_tx, term_arc) {
-                        use alacritty_terminal::event::WindowSize;
-                        use alacritty_terminal::event_loop::Msg;
-                        let ws = WindowSize { num_cols: cols, num_lines: rows, cell_width: cell_w, cell_height: cell_h };
-                        let _ = event_tx.send(Msg::Resize(ws));
-                        let dims = terminal::session::TermDimensions { cols: cols as usize, lines: rows as usize };
-                        term_arc.lock().resize(dims);
-                        tracing::info!("resized terminal to {}x{}", cols, rows);
-                    }
-                }
+                apply_pending_window_resize(&pending_window_size, &app_handle, session_id, &mut renderer);
 
                 // Paint an initial frame immediately so the window is visible
                 // before the PTY emits its first wakeup event.
@@ -229,15 +294,19 @@ fn main() {
                         };
                         let snapshot_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
                         let render_start = Instant::now();
-                        if let Err(e) = renderer.render(&snapshot) {
-                            tracing::error!("initial render error: {}", e);
-                        } else {
-                            let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-                            let frame_ms = snapshot_ms + render_ms;
-                            avg_snapshot_ms = snapshot_ms;
-                            avg_render_ms = render_ms;
-                            avg_frame_ms = frame_ms;
-                            frames_since_emit = 1;
+                        match renderer.render(&snapshot) {
+                            Ok(RenderOutcome::Drawn(_)) => {
+                                let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+                                let frame_ms = snapshot_ms + render_ms;
+                                avg_snapshot_ms = snapshot_ms;
+                                avg_render_ms = render_ms;
+                                avg_frame_ms = frame_ms;
+                                frames_since_emit = 1;
+                            }
+                            Ok(RenderOutcome::Skipped) => {}
+                            Err(e) => {
+                                tracing::error!("initial render error: {}", e);
+                            }
                         }
                     }
                 }
@@ -245,6 +314,12 @@ fn main() {
                 // Render loop: wait for wakeup signals, then render.
                 loop {
                     let dirty = render_coordinator.wait_for_next(rendered_generation);
+                    apply_pending_window_resize(
+                        &pending_window_size,
+                        &app_handle,
+                        dirty.session_id,
+                        &mut renderer,
+                    );
                     let manager = app_handle.state::<TerminalManager>();
                     let term_arc = manager.get(&dirty.session_id).map(|s| s.term.clone());
                     drop(manager);
@@ -258,15 +333,19 @@ fn main() {
                         let changed_lines = snapshot.changed_line_count();
 
                         let render_start = Instant::now();
-                        let render_metrics = match renderer.render(&snapshot) {
-                            Ok(metrics) => metrics,
+                        let render_outcome = match renderer.render(&snapshot) {
+                            Ok(outcome) => outcome,
                             Err(e) => {
+                                rendered_generation = dirty.generation;
                                 tracing::error!("render error: {}", e);
                                 continue;
                             }
                         };
 
                         rendered_generation = dirty.generation;
+                        let RenderOutcome::Drawn(render_metrics) = render_outcome else {
+                            continue;
+                        };
                         let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
                         let frame_ms = snapshot_ms + render_ms;
                         let cache_ms = render_metrics.cache_update.as_secs_f64() * 1000.0;
@@ -377,6 +456,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::create_terminal,
             commands::terminal_resize,
+            commands::terminal_scroll,
             commands::kill_terminal,
             commands::key_input,
             commands::write_benchmark_report,

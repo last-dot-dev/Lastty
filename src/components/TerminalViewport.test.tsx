@@ -34,6 +34,10 @@ const harness = vi.hoisted(() => {
 
     cols = 80;
     rows = 24;
+    options = {
+      fontSize: 14,
+      lineHeight: 1.2,
+    };
     writes: Array<Uint8Array | string> = [];
     addons: unknown[] = [];
     selectionPosition:
@@ -58,6 +62,16 @@ const harness = vi.hoisted(() => {
 
     open(host: Element) {
       this.host = host;
+      const viewport = document.createElement("div");
+      viewport.className = "xterm-viewport";
+      Object.defineProperty(viewport, "clientHeight", {
+        configurable: true,
+        value: 240,
+      });
+      const scrollArea = document.createElement("div");
+      scrollArea.className = "xterm-scroll-area";
+      viewport.appendChild(scrollArea);
+      host.appendChild(viewport);
     }
 
     write(data: Uint8Array | string) {
@@ -90,6 +104,7 @@ const harness = vi.hoisted(() => {
 
   const listeners = new Map<string, Set<(event: { payload: unknown }) => void>>();
   const terminalResizeMock = vi.fn(async () => {});
+  const terminalScrollMock = vi.fn(async () => {});
   const terminalInputMock = vi.fn(async () => {});
   const getTerminalFrameMock = vi.fn(async () => makeFrame(false, ""));
   const listenMock = vi.fn(async (eventName: string, handler: (event: { payload: unknown }) => void) => {
@@ -115,6 +130,8 @@ const harness = vi.hoisted(() => {
     listeners.clear();
     terminalResizeMock.mockReset();
     terminalResizeMock.mockResolvedValue(undefined);
+    terminalScrollMock.mockReset();
+    terminalScrollMock.mockResolvedValue(undefined);
     terminalInputMock.mockReset();
     terminalInputMock.mockResolvedValue(undefined);
     getTerminalFrameMock.mockReset();
@@ -132,6 +149,7 @@ const harness = vi.hoisted(() => {
     listenMock,
     reset,
     terminalInputMock,
+    terminalScrollMock,
     terminalResizeMock,
   };
 });
@@ -146,6 +164,7 @@ vi.mock("../lib/ipc", async (importOriginal) => {
     ...actual,
     getTerminalFrame: harness.getTerminalFrameMock,
     terminalInput: harness.terminalInputMock,
+    terminalScroll: harness.terminalScrollMock,
     terminalResize: harness.terminalResizeMock,
   };
 });
@@ -299,6 +318,42 @@ describe("TerminalViewport", () => {
 
     expect(decodeWrites(terminal)).toEqual(["RESTORED", "\u001b[H\u001b[2JLIVE"]);
   });
+
+  it("sizes the xterm scroll area from backend history metadata", async () => {
+    harness.getTerminalFrameMock.mockResolvedValueOnce(
+      makeFrame(false, "\u001b[Hvisible", { total_lines: 120, display_offset: 0 }),
+    );
+
+    await renderViewport();
+
+    const host = container.querySelector('[data-testid="terminal-host"]');
+    const scrollArea = host?.querySelector(".xterm-scroll-area") as HTMLDivElement | null;
+    const viewport = host?.querySelector(".xterm-viewport") as HTMLDivElement | null;
+
+    expect(scrollArea?.style.height).toBe("1200px");
+    expect(viewport?.scrollTop).toBe(960);
+  });
+
+  it("routes native viewport scrolling back into backend display offset updates", async () => {
+    harness.getTerminalFrameMock.mockResolvedValueOnce(
+      makeFrame(false, "\u001b[Hvisible", { total_lines: 120, display_offset: 0 }),
+    );
+
+    await renderViewport();
+
+    const host = container.querySelector('[data-testid="terminal-host"]');
+    const viewport = host?.querySelector(".xterm-viewport") as HTMLDivElement | null;
+    expect(viewport).not.toBeNull();
+
+    await act(async () => {
+      if (!viewport) return;
+      viewport.scrollTop = 950;
+      viewport.dispatchEvent(new Event("scroll"));
+      await flush();
+    });
+
+    expect(harness.terminalScrollMock).toHaveBeenCalledWith("session-1", 1);
+  });
 });
 
 function decodeWrites(terminal: InstanceType<typeof harness.FakeTerminal>): string[] {
@@ -339,14 +394,21 @@ async function renderViewport(
   });
 }
 
-function makeFrame(alternateScreen: boolean, ansi: string) {
+function makeFrame(
+  alternateScreen: boolean,
+  ansi: string,
+  overrides: Partial<{
+    display_offset: number;
+    total_lines: number;
+  }> = {},
+) {
   return {
     ansi: Array.from(new TextEncoder().encode(ansi)),
     cursor_x: 0,
     cursor_y: 0,
     cursor_visible: !ansi.includes("?25l"),
-    display_offset: 0,
-    total_lines: 0,
+    display_offset: overrides.display_offset ?? 0,
+    total_lines: overrides.total_lines ?? 0,
     alternate_screen: alternateScreen,
   };
 }

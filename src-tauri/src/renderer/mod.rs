@@ -137,6 +137,11 @@ pub struct RenderMetrics {
     pub text_areas: usize,
 }
 
+pub enum RenderOutcome {
+    Drawn(RenderMetrics),
+    Skipped,
+}
+
 impl TerminalRenderer {
     pub fn snapshot(term: &mut Term<EventProxy>) -> TerminalSnapshot {
         let rows = term.screen_lines();
@@ -155,7 +160,12 @@ impl TerminalRenderer {
             changed_lines: changed_rows
                 .into_iter()
                 .filter(|row| *row < rows)
-                .map(|row| (row, snapshot_line(term, row, display_offset, content.colors)))
+                .map(|row| {
+                    (
+                        row,
+                        snapshot_line(term, row, display_offset, content.colors),
+                    )
+                })
                 .collect(),
             cursor_row: cursor.point.line.0 as usize,
             cursor_col: cursor.point.column.0,
@@ -378,11 +388,8 @@ impl TerminalRenderer {
                 screen_size: [width as f32, height as f32],
                 atlas_size: [self.atlas.atlas_size() as f32; 2],
             };
-            self.queue.write_buffer(
-                &self.glyph_uniform_buffer,
-                0,
-                bytemuck::bytes_of(&uniforms),
-            );
+            self.queue
+                .write_buffer(&self.glyph_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         }
     }
 
@@ -400,7 +407,7 @@ impl TerminalRenderer {
         self.atlas.cached_glyph_count()
     }
 
-    pub fn render(&mut self, snapshot: &TerminalSnapshot) -> anyhow::Result<RenderMetrics> {
+    pub fn render(&mut self, snapshot: &TerminalSnapshot) -> anyhow::Result<RenderOutcome> {
         let cache_start = Instant::now();
 
         // Apply snapshot damage into the persistent row buffer.
@@ -526,8 +533,15 @@ impl TerminalRenderer {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(tex)
             | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => tex,
-            other => {
-                anyhow::bail!("failed to get surface texture: {:?}", other);
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(RenderOutcome::Skipped);
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.surface_config);
+                return Ok(RenderOutcome::Skipped);
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                anyhow::bail!("failed to get surface texture: Validation");
             }
         };
         let view = frame.texture.create_view(&Default::default());
@@ -573,13 +587,13 @@ impl TerminalRenderer {
 
         self.last_glyph_count = glyph_instances.len();
 
-        Ok(RenderMetrics {
+        Ok(RenderOutcome::Drawn(RenderMetrics {
             cache_update,
             rect_build,
             prepare,
             gpu: gpu_start.elapsed(),
             text_areas: glyph_instances.len(),
-        })
+        }))
     }
 }
 

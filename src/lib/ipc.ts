@@ -87,6 +87,13 @@ export async function terminalInput(
   return invoke("terminal_input", { sessionId, bytes });
 }
 
+export async function terminalScroll(
+  sessionId: string,
+  lines: number,
+): Promise<void> {
+  return invoke("terminal_scroll", { sessionId, lines });
+}
+
 export interface TerminalFrame {
   ansi: number[];
   cursor_x: number;

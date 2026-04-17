@@ -84,8 +84,7 @@ pub unsafe fn create_metal_subview(ns_window_ptr: *mut c_void) -> MetalSubview {
 
     view.setWantsLayer(true);
     view.setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewWidthSizable
-            | NSAutoresizingMaskOptions::ViewHeightSizable,
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
 
     // Place above the webview so the GPU output is visible. Input still
@@ -108,8 +107,7 @@ pub unsafe fn create_wgpu_surface(
     instance: &wgpu::Instance,
     subview: &MetalSubview,
 ) -> Result<wgpu::Surface<'static>, wgpu::CreateSurfaceError> {
-    let raw_window_handle =
-        RawWindowHandle::AppKit(AppKitWindowHandle::new(subview.ns_view_ptr()));
+    let raw_window_handle = RawWindowHandle::AppKit(AppKitWindowHandle::new(subview.ns_view_ptr()));
     let raw_display_handle = RawDisplayHandle::AppKit(AppKitDisplayHandle::new());
 
     unsafe {

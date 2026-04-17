@@ -41,11 +41,7 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn on_stdout_line(&mut self, line: &[u8]) -> AdapterYield {
-        translate_line(
-            line,
-            &mut self.finished_emitted,
-            &mut self.last_message,
-        )
+        translate_line(line, &mut self.finished_emitted, &mut self.last_message)
     }
 
     fn on_exit(&mut self, status: std::process::ExitStatus) -> Vec<AgentUiMessage> {
@@ -380,10 +376,7 @@ mod tests {
         let line = r#"{"type":"turn_failed","error":"boom"}"#;
         let msgs = run_stream(&[line]);
         match msgs.first() {
-            Some(AgentUiMessage::Finished {
-                summary,
-                exit_code,
-            }) => {
+            Some(AgentUiMessage::Finished { summary, exit_code }) => {
                 assert_eq!(summary, "boom");
                 assert_eq!(*exit_code, Some(1));
             }

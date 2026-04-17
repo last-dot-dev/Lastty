@@ -8,6 +8,7 @@ import {
   getFontConfig,
   getTerminalFrame,
   terminalInput,
+  terminalScroll,
   terminalResize,
   type TerminalFrame,
   type TerminalFrameEvent,
@@ -37,13 +38,18 @@ interface Entry {
   serialize: SerializeAddon;
   webgl: WebglAddon | null;
   frameState: XtermFrameState | null;
+  latestFrame: TerminalFrame | null;
   resizeObserver: ResizeObserver;
   unlistenFrame: (() => void) | null;
   removeCopyListener: (() => void) | null;
+  removeViewportScrollListener: (() => void) | null;
   snapshotTimer: number | null;
   status: string;
   statusListeners: Set<StatusListener>;
   currentSlot: HTMLElement | null;
+  viewport: HTMLDivElement | null;
+  scrollArea: HTMLDivElement | null;
+  suppressViewportScroll: boolean;
   blockedRef: { current: boolean };
   focusedRef: { current: boolean };
   snapshotCallbackRef: { current: ((s: PersistedTerminalSnapshot) => void) | undefined };
@@ -76,6 +82,85 @@ function setStatus(entry: Entry, status: string) {
   for (const listener of entry.statusListeners) {
     listener(status);
   }
+}
+
+function syncTerminalViewport(entry: Entry): Promise<void> {
+  try {
+    entry.fit.fit();
+  } catch {
+    return Promise.resolve();
+  }
+  syncViewportScrollbar(entry);
+  return terminalResize(entry.sessionId, entry.terminal.cols, entry.terminal.rows).catch(
+    (error) => {
+      console.error("terminal resize failed", error);
+    },
+  );
+}
+
+function resolveCellHeightPx(entry: Entry): number {
+  if (entry.viewport && entry.terminal.rows > 0 && entry.viewport.clientHeight > 0) {
+    return entry.viewport.clientHeight / entry.terminal.rows;
+  }
+  return Number(entry.terminal.options.lineHeight ?? 1) * Number(entry.terminal.options.fontSize ?? 14);
+}
+
+function syncViewportScrollbar(entry: Entry) {
+  if (!entry.viewport || !entry.scrollArea || !entry.latestFrame) return;
+
+  const cellHeightPx = resolveCellHeightPx(entry);
+  const visibleRows = Math.max(entry.terminal.rows, 1);
+  const totalLines = entry.latestFrame.alternate_screen
+    ? visibleRows
+    : Math.max(entry.latestFrame.total_lines, visibleRows);
+  const topRow = Math.max(totalLines - visibleRows - entry.latestFrame.display_offset, 0);
+  const nextScrollTop = topRow * cellHeightPx;
+
+  entry.scrollArea.style.height = `${Math.max(totalLines * cellHeightPx, entry.viewport.clientHeight)}px`;
+  if (Math.abs(entry.viewport.scrollTop - nextScrollTop) < 0.5) return;
+  entry.suppressViewportScroll = true;
+  entry.viewport.scrollTop = nextScrollTop;
+  queueMicrotask(() => {
+    if (!entry.disposed && entry.suppressViewportScroll) {
+      entry.suppressViewportScroll = false;
+    }
+  });
+}
+
+function bindViewportScroll(entry: Entry) {
+  const viewport = entry.host.querySelector<HTMLDivElement>(".xterm-viewport");
+  const scrollArea = entry.host.querySelector<HTMLDivElement>(".xterm-scroll-area");
+  entry.viewport = viewport;
+  entry.scrollArea = scrollArea;
+  if (!viewport || !scrollArea) return;
+
+  const handleScroll = () => {
+    if (entry.suppressViewportScroll) {
+      entry.suppressViewportScroll = false;
+      return;
+    }
+    const frame = entry.latestFrame;
+    if (!frame || frame.alternate_screen) return;
+    const cellHeightPx = resolveCellHeightPx(entry);
+    if (!(cellHeightPx > 0)) return;
+
+    const totalLines = Math.max(frame.total_lines, entry.terminal.rows);
+    const currentTopRow = Math.max(totalLines - entry.terminal.rows - frame.display_offset, 0);
+    const targetTopRow = Math.max(
+      0,
+      Math.min(Math.round(viewport.scrollTop / cellHeightPx), totalLines - entry.terminal.rows),
+    );
+    const deltaLines = currentTopRow - targetTopRow;
+    if (deltaLines === 0) return;
+
+    terminalScroll(entry.sessionId, deltaLines).catch((error) => {
+      console.error("terminal scroll failed", error);
+    });
+  };
+
+  viewport.addEventListener("scroll", handleScroll, { passive: true });
+  entry.removeViewportScrollListener = () =>
+    viewport.removeEventListener("scroll", handleScroll);
 }
 
 async function initEntry(entry: Entry, initialProps: SessionHostProps) {
@@ -130,7 +215,13 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
   }
 
   terminal.open(host);
-  entry.fit.fit();
+  bindViewportScroll(entry);
+  entry.resizeObserver = new ResizeObserver(() => {
+    if (entry.disposed) return;
+    void syncTerminalViewport(entry);
+  });
+  entry.resizeObserver.observe(host);
+  await syncTerminalViewport(entry);
 
   const handleCopy = (event: ClipboardEvent) => {
     if (!terminal.hasSelection()) return;
@@ -140,12 +231,12 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
   entry.removeCopyListener = () => host.removeEventListener("copy", handleCopy);
 
   const writeFrame = (frame: TerminalFrame) => {
+    entry.latestFrame = frame;
     const prepared = prepareXtermFrameWrite(frame, entry.frameState);
     entry.frameState = prepared.state;
     terminal.write(prepared.bytes);
+    syncViewportScrollbar(entry);
   };
-
-  await terminalResize(sessionId, terminal.cols, terminal.rows);
 
   if (persistedSnapshot?.serializedBuffer) {
     setStatus(entry, `session ${sessionId} (restored)`);
@@ -170,15 +261,6 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
       console.error("terminal input failed", error);
     });
   });
-
-  entry.resizeObserver = new ResizeObserver(() => {
-    if (entry.disposed) return;
-    entry.fit.fit();
-    terminalResize(sessionId, terminal.cols, terminal.rows).catch((error) => {
-      console.error("terminal resize failed", error);
-    });
-  });
-  entry.resizeObserver.observe(host);
 
   const unlistenFrame = await listen<TerminalFrameEvent>("term:frame", (event) => {
     if (entry.disposed || event.payload.session_id !== sessionId) return;
@@ -215,13 +297,18 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     serialize: null as unknown as SerializeAddon,
     webgl: null,
     frameState: null,
+    latestFrame: null,
     resizeObserver: null as unknown as ResizeObserver,
     unlistenFrame: null,
     removeCopyListener: null,
+    removeViewportScrollListener: null,
     snapshotTimer: null,
     status: "initializing",
     statusListeners: new Set(),
     currentSlot: null,
+    viewport: null,
+    scrollArea: null,
+    suppressViewportScroll: false,
     blockedRef: { current: props.blocked },
     focusedRef: { current: props.focused },
     snapshotCallbackRef: { current: props.onSnapshotChange },
@@ -331,6 +418,7 @@ export function releaseTerminalHost(sessionId: string): void {
   entry.resizeObserver?.disconnect();
   entry.unlistenFrame?.();
   entry.removeCopyListener?.();
+  entry.removeViewportScrollListener?.();
   if (entry.snapshotTimer !== null) {
     window.clearTimeout(entry.snapshotTimer);
   }

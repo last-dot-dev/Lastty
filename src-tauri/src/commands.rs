@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use alacritty_terminal::grid::Scroll;
 use serde::Deserialize;
 use tauri::{AppHandle, State};
 
@@ -92,6 +93,32 @@ async fn terminal_resize_for_runtime<R: tauri::Runtime>(
         cols,
         rows,
     });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn terminal_scroll(
+    session_id: String,
+    lines: i32,
+    state: State<'_, TerminalManager>,
+) -> Result<(), String> {
+    terminal_scroll_for_runtime(session_id, lines, state).await
+}
+
+async fn terminal_scroll_for_runtime<R: tauri::Runtime>(
+    session_id: String,
+    lines: i32,
+    state: State<'_, TerminalManager<R>>,
+) -> Result<(), String> {
+    if lines == 0 {
+        return Ok(());
+    }
+
+    let id = SessionId::parse(&session_id)?;
+    let session = state.get(&id).ok_or("session not found")?;
+    session.term.lock().scroll_display(Scroll::Delta(lines));
+    drop(session);
+    state.mark_dirty(id);
     Ok(())
 }
 
@@ -435,7 +462,17 @@ mod tests {
 
         let manager = app.state::<TerminalManager<MockRuntime>>();
         let original = manager
-            .create_session(None, &workspace_root, &pane_env(), 80, 24, None, None, None, None)
+            .create_session(
+                None,
+                &workspace_root,
+                &pane_env(),
+                80,
+                24,
+                None,
+                None,
+                None,
+                None,
+            )
             .expect("should create initial session");
         drop(manager);
 
@@ -456,7 +493,9 @@ mod tests {
             .expect("restore command should succeed");
 
         assert_eq!(restored.len(), 2);
-        assert!(restored.iter().all(|session| session.session_id != original.to_string()));
+        assert!(restored
+            .iter()
+            .all(|session| session.session_id != original.to_string()));
         assert_eq!(restored[0].cwd, restore_a.display().to_string());
         assert_eq!(restored[1].cwd, restore_b.display().to_string());
 
