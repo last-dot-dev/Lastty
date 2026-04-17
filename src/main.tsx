@@ -1,8 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { useEffect, useState } from "react";
-import App from "./App";
 import XtermBench from "./XtermBench";
-import XtermTerminal from "./XtermTerminal";
+import TerminalWorkspace from "./TerminalWorkspace";
 import { getBenchmarkMode, getRendererMode } from "./lib/ipc";
 import "./styles/tokens.css";
 import "./styles/agent.css";
@@ -22,8 +21,7 @@ function Root() {
 
   if (benchMode === undefined || rendererMode === undefined) return null;
   if (benchMode === "xterm") return <XtermBench />;
-  if (rendererMode === "xterm") return <XtermTerminal />;
-  return <App />;
+  return <TerminalWorkspace rendererMode={rendererMode ?? "xterm"} />;
 }
 
 createRoot(document.getElementById("root")!).render(<Root />);

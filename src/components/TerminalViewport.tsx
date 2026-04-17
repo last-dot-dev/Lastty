@@ -17,6 +17,8 @@ interface TerminalViewportProps {
   onSnapshotChange?: (snapshot: PersistedTerminalSnapshot) => void;
   restoredSnapshot?: PersistedTerminalSnapshot | null;
   sessionId: string;
+  rendererMode?: string | null;
+  onRectChange?: (sessionId: string, rect: DOMRect | null) => void;
 }
 
 export default function TerminalViewport({
@@ -26,12 +28,42 @@ export default function TerminalViewport({
   onSnapshotChange,
   restoredSnapshot = null,
   sessionId,
+  rendererMode,
+  onRectChange,
 }: TerminalViewportProps) {
   const slotRef = useRef<HTMLDivElement | null>(null);
+  const onRectChangeRef = useRef(onRectChange);
   const [status, setStatus] = useState("initializing");
   const effectiveTheme = useEffectiveTheme();
+  const wgpuMode = rendererMode === "wgpu";
 
   useEffect(() => {
+    onRectChangeRef.current = onRectChange;
+  }, [onRectChange]);
+
+  useEffect(() => {
+    if (!wgpuMode) return;
+    const slot = slotRef.current;
+    if (!slot) return;
+
+    const push = () => {
+      onRectChangeRef.current?.(sessionId, slot.getBoundingClientRect());
+    };
+    push();
+
+    const observer = new ResizeObserver(push);
+    observer.observe(slot);
+    window.addEventListener("resize", push);
+    setStatus(`session ${sessionId}`);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", push);
+      onRectChangeRef.current?.(sessionId, null);
+    };
+  }, [sessionId, wgpuMode]);
+
+  useEffect(() => {
+    if (wgpuMode) return;
     const slot = slotRef.current;
     if (!slot) return;
     attachTerminalHost(sessionId, slot, {
@@ -47,9 +79,10 @@ export default function TerminalViewport({
       detachTerminalHost(sessionId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, wgpuMode]);
 
   useEffect(() => {
+    if (wgpuMode) return;
     updateTerminalHostProps(sessionId, {
       blocked,
       focused,
@@ -57,7 +90,15 @@ export default function TerminalViewport({
       restoredSnapshot,
       theme: effectiveTheme,
     });
-  }, [blocked, focused, onSnapshotChange, restoredSnapshot, effectiveTheme, sessionId]);
+  }, [
+    blocked,
+    focused,
+    onSnapshotChange,
+    restoredSnapshot,
+    effectiveTheme,
+    sessionId,
+    wgpuMode,
+  ]);
 
   return (
     <div

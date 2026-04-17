@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import KeyboardHelpOverlay from "./components/KeyboardHelpOverlay";
@@ -81,15 +89,23 @@ import {
   listSessions,
   respondToApproval,
   restoreTerminalSessions,
+  sendKeyEvent,
+  updatePaneLayout,
   type AgentDefinition,
   type AgentUiEvent,
   type LaunchAgentResult,
+  type PaneLayoutEntry,
   type SessionExitEvent,
   type SessionInfo,
   type SessionTitleEvent,
 } from "./lib/ipc";
 
-export default function TerminalWorkspace() {
+interface TerminalWorkspaceProps {
+  rendererMode: string;
+}
+
+export default function TerminalWorkspace({ rendererMode }: TerminalWorkspaceProps) {
+  const wgpuMode = rendererMode === "wgpu";
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [sessionInfoById, setSessionInfoById] = useState<Record<string, SessionInfo>>({});
@@ -136,6 +152,103 @@ export default function TerminalWorkspace() {
       window.removeEventListener("keydown", onKey);
     };
   }, [draggingPaneId]);
+
+  const paneRectsRef = useRef<Map<string, DOMRect>>(new Map());
+  const pushTimerRef = useRef<number | null>(null);
+
+  const flushPaneLayout = useCallback(() => {
+    const entries: PaneLayoutEntry[] = [];
+    paneRectsRef.current.forEach((rect, sessionId) => {
+      entries.push({
+        session_id: sessionId,
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      });
+    });
+    updatePaneLayout(entries).catch((error) => {
+      console.error("updatePaneLayout failed", error);
+    });
+  }, []);
+
+  const schedulePaneLayoutPush = useCallback(() => {
+    if (pushTimerRef.current !== null) return;
+    pushTimerRef.current = window.setTimeout(() => {
+      pushTimerRef.current = null;
+      flushPaneLayout();
+    }, 16);
+  }, [flushPaneLayout]);
+
+  const handlePaneRect = useCallback(
+    (sessionId: string, rect: DOMRect | null) => {
+      if (rect) {
+        paneRectsRef.current.set(sessionId, rect);
+      } else {
+        paneRectsRef.current.delete(sessionId);
+      }
+      schedulePaneLayoutPush();
+    },
+    [schedulePaneLayoutPush],
+  );
+
+  const focusedSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!workspace || !focusedPaneId) {
+      focusedSessionIdRef.current = null;
+      return;
+    }
+    focusedSessionIdRef.current = workspace.panes[focusedPaneId]?.sessionId ?? null;
+  }, [workspace, focusedPaneId]);
+
+  useEffect(() => {
+    if (!wgpuMode) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.shiftKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const sessionId = focusedSessionIdRef.current;
+      if (!sessionId) return;
+      event.preventDefault();
+      sendKeyEvent(
+        event.key,
+        event.code,
+        event.ctrlKey,
+        event.altKey,
+        event.shiftKey,
+        event.metaKey,
+        sessionId,
+      ).catch((error) => {
+        console.error("sendKeyEvent failed", error);
+      });
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [wgpuMode]);
+
+  useEffect(() => {
+    if (!wgpuMode) return;
+    let unlistenFn: (() => void) | null = null;
+    void listen<{ scale_factor: number }>("tauri://scale-change", () => {
+      schedulePaneLayoutPush();
+    }).then((fn) => {
+      unlistenFn = fn;
+    });
+    return () => {
+      unlistenFn?.();
+      if (pushTimerRef.current !== null) {
+        window.clearTimeout(pushTimerRef.current);
+        pushTimerRef.current = null;
+      }
+    };
+  }, [wgpuMode, schedulePaneLayoutPush]);
 
   const theme = useThemeOverride();
 
@@ -787,6 +900,8 @@ export default function TerminalWorkspace() {
                       sessionInfoById,
                       agentUiBySession,
                       restoredSnapshotsBySessionId,
+                      rendererMode,
+                      onPaneRect: handlePaneRect,
                       onCloseChrome: (paneId) => handleClose(paneId),
                       onToggleMaximize: handleToggleMaximizePane,
                       onResize: (path, handleIndex, delta, baseWeights) =>
@@ -870,6 +985,8 @@ interface RenderLayoutCtx {
   sessionInfoById: Record<string, SessionInfo>;
   agentUiBySession: Record<string, AgentSessionState>;
   restoredSnapshotsBySessionId: Record<string, PersistedTerminalSnapshot>;
+  rendererMode: string;
+  onPaneRect: (sessionId: string, rect: DOMRect | null) => void;
   onCloseChrome: (paneId: string) => Promise<void>;
   onToggleMaximize: (paneId: string) => void;
   onResize: (
@@ -900,6 +1017,8 @@ function renderLayout(
     sessionInfoById,
     agentUiBySession,
     restoredSnapshotsBySessionId,
+    rendererMode,
+    onPaneRect,
     onCloseChrome,
     onToggleMaximize,
     onResize,
@@ -980,6 +1099,8 @@ function renderLayout(
             focused={focused}
             onActivate={() => onFocus(pane.id)}
             onSnapshotChange={(snapshot) => onSnapshot(pane.sessionId, snapshot)}
+            onRectChange={onPaneRect}
+            rendererMode={rendererMode}
             restoredSnapshot={restoredSnapshotsBySessionId[pane.sessionId] ?? null}
             sessionId={pane.sessionId}
           />
