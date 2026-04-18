@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::event_loop::{EventLoop, Msg};
@@ -69,6 +69,7 @@ pub struct SessionInfo {
     pub worktree_path: Option<String>,
     pub control_connected: bool,
     pub started_at_ms: u128,
+    pub started_at_unix_ms: u128,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +108,7 @@ pub struct TerminalSession<R: Runtime = tauri::Wry> {
     )>,
     pub status: SessionStatus,
     pub started_at: Instant,
+    pub started_at_unix_ms: u128,
     pub title: Arc<Mutex<String>>,
     pub agent_id: Option<String>,
     pub cwd: String,
@@ -184,6 +186,7 @@ pub fn create_session<R: Runtime>(
         command.map(|c| tty::Shell::new(c.program.clone(), c.args.clone()))
     };
     let mut env = env.clone();
+    env.insert("PWD".to_string(), cwd.display().to_string());
     env.insert("LASTTY_SESSION_ID".to_string(), id.to_string());
     if let Some(agent_id) = agent_id.as_ref() {
         env.insert("LASTTY_AGENT_ID".to_string(), agent_id.clone());
@@ -273,6 +276,10 @@ pub fn create_session<R: Runtime>(
         _event_loop_handle: handle,
         status: SessionStatus::Running,
         started_at: Instant::now(),
+        started_at_unix_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default(),
         title,
         agent_id,
         cwd: cwd.display().to_string(),
@@ -352,6 +359,7 @@ impl<R: Runtime> TerminalSession<R> {
             worktree_path: self.worktree_path.clone(),
             control_connected: self.control_connected.load(Ordering::Relaxed),
             started_at_ms: self.started_at.elapsed().as_millis(),
+            started_at_unix_ms: self.started_at_unix_ms,
         }
     }
 }

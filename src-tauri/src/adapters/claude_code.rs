@@ -76,10 +76,16 @@ fn translate_line(line: &[u8], finished_emitted: &mut bool) -> AdapterYield {
 
     let mut out = AdapterYield::empty();
     match event {
-        ClaudeEvent::System { subtype, model, .. } if subtype == "init" => {
+        ClaudeEvent::System {
+            subtype,
+            model,
+            session_id,
+            ..
+        } if subtype == "init" => {
             out.push_message(AgentUiMessage::Ready {
                 agent: "claude".to_string(),
                 version: model,
+                session_id,
             });
         }
         ClaudeEvent::Assistant {
@@ -256,6 +262,8 @@ enum ClaudeEvent {
         subtype: String,
         #[serde(default)]
         model: Option<String>,
+        #[serde(default)]
+        session_id: Option<String>,
         #[serde(flatten)]
         _rest: Value,
     },
@@ -344,9 +352,10 @@ mod tests {
         let msgs = run_stream(&[line]);
         assert_eq!(msgs.len(), 1);
         match &msgs[0] {
-            AgentUiMessage::Ready { agent, version } => {
+            AgentUiMessage::Ready { agent, version, session_id } => {
                 assert_eq!(agent, "claude");
                 assert_eq!(version.as_deref(), Some("claude-opus-4-5"));
+                assert_eq!(session_id.as_deref(), Some("s1"));
             }
             other => panic!("expected Ready, got {other:?}"),
         }

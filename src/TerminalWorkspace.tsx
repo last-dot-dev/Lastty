@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -18,6 +19,7 @@ import {
   toolCallCount,
   visibleNotifications,
   type AgentSessionState,
+  type AgentUiMessage,
   type ToolCallRecord,
 } from "./app/agentUi";
 import {
@@ -29,6 +31,8 @@ import {
   type AgentStatus,
 } from "./app/agentDerived";
 import AgentShell from "./components/agent/AgentShell";
+import HistoryPanel from "./components/agent/HistoryPanel";
+import TranscriptView from "./components/agent/TranscriptView";
 import WindowHeader from "./components/agent/WindowHeader";
 import ProgressBar from "./components/agent/ProgressBar";
 import ReplyInput from "./components/agent/ReplyInput";
@@ -92,9 +96,19 @@ import {
   type GitInfo,
   type LaunchAgentResult,
   type SessionExitEvent,
+  type HistoryEntry,
   type SessionInfo,
   type SessionTitleEvent,
+  resumeHistoryEntry,
 } from "./lib/ipc";
+
+function needsAttention(message: AgentUiMessage): boolean {
+  return (
+    message.type === "Approval" ||
+    message.type === "Notification" ||
+    message.type === "Finished"
+  );
+}
 
 export default function TerminalWorkspace() {
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
@@ -103,6 +117,10 @@ export default function TerminalWorkspace() {
   const [agentUiBySession, setAgentUiBySession] = useState<
     Record<string, AgentSessionState>
   >({});
+  const [unreadBySession, setUnreadBySession] = useState<Record<string, boolean>>(
+    {},
+  );
+  const focusedSessionIdRef = useRef<string | null>(null);
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const platform = useMemo(() => detectPlatform(), []);
@@ -120,6 +138,10 @@ export default function TerminalWorkspace() {
     Record<string, PersistedTerminalSnapshot>
   >({});
   const [gitInfoByCwd, setGitInfoByCwd] = useState<Record<string, GitInfo | null>>({});
+  const [historyPanelPaneId, setHistoryPanelPaneId] = useState<string | null>(null);
+  const [viewingHistoryByPaneId, setViewingHistoryByPaneId] = useState<
+    Record<string, HistoryEntry>
+  >({});
   const sessionCreationOrder = useMemo(
     () => Object.keys(sessionInfoById),
     [sessionInfoById],
@@ -127,6 +149,20 @@ export default function TerminalWorkspace() {
 
   const currentDesktop: DesktopState | null = workspace ? activeDesktop(workspace) : null;
   const focusedPaneId = currentDesktop?.focusedPaneId ?? null;
+  const focusedSessionId = useMemo(() => {
+    if (!workspace || !focusedPaneId) return null;
+    return workspace.panes[focusedPaneId]?.sessionId ?? null;
+  }, [workspace, focusedPaneId]);
+  useEffect(() => {
+    focusedSessionIdRef.current = focusedSessionId;
+    if (!focusedSessionId) return;
+    setUnreadBySession((current) => {
+      if (!current[focusedSessionId]) return current;
+      const next = { ...current };
+      delete next[focusedSessionId];
+      return next;
+    });
+  }, [focusedSessionId]);
   const [draggingPaneId, setDraggingPaneId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -289,23 +325,32 @@ export default function TerminalWorkspace() {
           ? renamePane(current, event.payload.session_id, event.payload.title || "shell")
           : current,
       );
-      setSessionInfoById((current) => ({
-        ...current,
-        [event.payload.session_id]: {
-          ...(current[event.payload.session_id] ?? {
-            session_id: event.payload.session_id,
-            title: "shell",
-            cwd: "",
-            prompt: null,
-            agent_id: null,
-            prompt_summary: null,
-            worktree_path: null,
-            control_connected: false,
-            started_at_ms: 0,
-          }),
-          title: event.payload.title || "shell",
-        },
-      }));
+      setSessionInfoById((current) => {
+        if (!current[event.payload.session_id]) {
+          void hydrateSessionInfo(
+            event.payload.session_id,
+            event.payload.title || "shell",
+          );
+        }
+        return {
+          ...current,
+          [event.payload.session_id]: {
+            ...(current[event.payload.session_id] ?? {
+              session_id: event.payload.session_id,
+              title: "shell",
+              cwd: "",
+              prompt: null,
+              agent_id: null,
+              prompt_summary: null,
+              worktree_path: null,
+              control_connected: false,
+              started_at_ms: 0,
+              started_at_unix_ms: 0,
+            }),
+            title: event.payload.title || "shell",
+          },
+        };
+      });
     }).then((fn) => unsubs.push(fn));
 
     void listen<SessionExitEvent>("session:exit", (event) => {
@@ -323,13 +368,19 @@ export default function TerminalWorkspace() {
     void listen<AgentUiEvent>("agent:ui", (event) => {
       const message = parseAgentMessage(event.payload.message);
       if (!message) return;
+      const sid = event.payload.session_id;
       setAgentUiBySession((current) => ({
         ...current,
-        [event.payload.session_id]: reduceAgentMessage(
-          current[event.payload.session_id] ?? emptyAgentSessionState(),
+        [sid]: reduceAgentMessage(
+          current[sid] ?? emptyAgentSessionState(),
           message,
         ),
       }));
+      if (needsAttention(message) && focusedSessionIdRef.current !== sid) {
+        setUnreadBySession((current) =>
+          current[sid] ? current : { ...current, [sid]: true },
+        );
+      }
     }).then((fn) => unsubs.push(fn));
 
     return () => {
@@ -416,17 +467,10 @@ export default function TerminalWorkspace() {
 
   async function handleSplit(paneId: string, direction: SplitDirection) {
     const sessionId = await createTerminal();
-    upsertSession({
-      session_id: sessionId,
-      title: `shell ${Object.keys(sessionInfoById).length + 1}`,
-      cwd: "",
-      prompt: null,
-      agent_id: null,
-      prompt_summary: null,
-      worktree_path: null,
-      control_connected: false,
-      started_at_ms: 0,
-    });
+    await hydrateSessionInfo(
+      sessionId,
+      `shell ${Object.keys(sessionInfoById).length + 1}`,
+    );
     setWorkspace((current) => {
       if (!current) return current;
       return splitPane(
@@ -474,6 +518,94 @@ export default function TerminalWorkspace() {
     });
     releaseTerminalHost(sessionId);
     setWorkspace((current) => (current ? closePane(current, paneId) : current));
+    setViewingHistoryByPaneId((current) => {
+      if (!(paneId in current)) return current;
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
+    setHistoryPanelPaneId((current) => (current === paneId ? null : current));
+  }
+
+  function handleToggleHistoryPanel(paneId: string) {
+    setHistoryPanelPaneId((current) => (current === paneId ? null : paneId));
+  }
+
+  function handleCloseHistoryPanel() {
+    setHistoryPanelPaneId(null);
+  }
+
+  async function hydrateSessionInfo(sessionId: string, fallbackTitle: string) {
+    try {
+      const sessions = await listSessions();
+      const info = sessions.find((s) => s.session_id === sessionId);
+      if (info) {
+        upsertSession(info);
+        return info;
+      }
+    } catch (error) {
+      console.error("failed to hydrate session info", error);
+    }
+    const placeholder: SessionInfo = {
+      session_id: sessionId,
+      title: fallbackTitle,
+      cwd: "",
+      prompt: null,
+      agent_id: null,
+      prompt_summary: null,
+      worktree_path: null,
+      control_connected: false,
+      started_at_ms: 0,
+      started_at_unix_ms: 0,
+    };
+    upsertSession(placeholder);
+    return placeholder;
+  }
+
+  async function handleResumeHistoryEntry(paneId: string, entry: HistoryEntry) {
+    setHistoryPanelPaneId(null);
+    setViewingHistoryByPaneId((current) => {
+      if (!(paneId in current)) return current;
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
+    try {
+      const result = await resumeHistoryEntry(entry.session_id);
+      const sessions = await listSessions();
+      const info = sessions.find((s) => s.session_id === result.session_id);
+      if (info) upsertSession(info);
+      setWorkspace((current) => {
+        if (!current) return current;
+        const pane = current.panes[paneId];
+        if (!pane) return current;
+        return {
+          ...current,
+          panes: {
+            ...current.panes,
+            [paneId]: { ...pane, sessionId: result.session_id },
+          },
+        };
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("failed to resume history entry", message);
+      window.alert(`Couldn't resume that conversation:\n\n${message}`);
+    }
+  }
+
+  function handleViewHistoryTranscript(paneId: string, entry: HistoryEntry) {
+    setHistoryPanelPaneId(null);
+    setViewingHistoryByPaneId((current) => ({ ...current, [paneId]: entry }));
+  }
+
+  function handleCloseHistoryView(paneId: string) {
+    setViewingHistoryByPaneId((current) => {
+      if (!(paneId in current)) return current;
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
   }
 
   function upsertSession(session: SessionInfo) {
@@ -490,17 +622,7 @@ export default function TerminalWorkspace() {
   async function handleNewDesktop() {
     const sessionId = await createTerminal();
     const title = `shell ${Object.keys(sessionInfoById).length + 1}`;
-    upsertSession({
-      session_id: sessionId,
-      title,
-      cwd: "",
-      prompt: null,
-      agent_id: null,
-      prompt_summary: null,
-      worktree_path: null,
-      control_connected: false,
-      started_at_ms: 0,
-    });
+    await hydrateSessionInfo(sessionId, title);
     setWorkspace((current) =>
       current
         ? createDesktop(current, createPaneRecord(sessionId, title))
@@ -516,17 +638,7 @@ export default function TerminalWorkspace() {
     const sessionId = await createTerminal();
     const title = `shell ${Object.keys(sessionInfoById).length + 1}`;
     const pane = createPaneRecord(sessionId, title);
-    upsertSession({
-      session_id: sessionId,
-      title,
-      cwd: "",
-      prompt: null,
-      agent_id: null,
-      prompt_summary: null,
-      worktree_path: null,
-      control_connected: false,
-      started_at_ms: 0,
-    });
+    await hydrateSessionInfo(sessionId, title);
     setWorkspace((current) => {
       if (!current) return current;
       return {
@@ -669,6 +781,7 @@ export default function TerminalWorkspace() {
       worktree_path: result.worktree_path ?? null,
       control_connected: false,
       started_at_ms: 0,
+      started_at_unix_ms: 0,
     });
     setWorkspace((current) => {
       if (!current) return current;
@@ -703,6 +816,7 @@ export default function TerminalWorkspace() {
           status,
           focused: pane?.id === focusedPaneId,
           merged: false,
+          unread: Boolean(unreadBySession[sessionId]),
         };
       })
     : [];
@@ -863,6 +977,13 @@ export default function TerminalWorkspace() {
                       onDragEndPane: () => setDraggingPaneId(null),
                       onDropPaneOnEdge: handleDropPaneOnEdge,
                       onDropPaneOnBody: handleDropPaneOnBody,
+                      historyPanelPaneId,
+                      viewingHistoryByPaneId,
+                      onToggleHistoryPanel: handleToggleHistoryPanel,
+                      onCloseHistoryPanel: handleCloseHistoryPanel,
+                      onResumeHistoryEntry: handleResumeHistoryEntry,
+                      onViewHistoryTranscript: handleViewHistoryTranscript,
+                      onCloseHistoryView: handleCloseHistoryView,
                     })
                   ) : (
                     <EmptyDesktop onNewShell={() => void handleNewShellInActiveDesktop()} />
@@ -923,6 +1044,13 @@ interface RenderLayoutCtx {
   onDragEndPane: () => void;
   onDropPaneOnEdge: (sourcePaneId: string, targetPaneId: string, side: SplitSide) => void;
   onDropPaneOnBody: (sourcePaneId: string, targetPaneId: string) => void;
+  historyPanelPaneId: string | null;
+  viewingHistoryByPaneId: Record<string, HistoryEntry>;
+  onToggleHistoryPanel: (paneId: string) => void;
+  onCloseHistoryPanel: () => void;
+  onResumeHistoryEntry: (paneId: string, entry: HistoryEntry) => void;
+  onViewHistoryTranscript: (paneId: string, entry: HistoryEntry) => void;
+  onCloseHistoryView: (paneId: string) => void;
 }
 
 function renderLayout(
@@ -949,6 +1077,13 @@ function renderLayout(
     onDragEndPane,
     onDropPaneOnEdge,
     onDropPaneOnBody,
+    historyPanelPaneId,
+    viewingHistoryByPaneId,
+    onToggleHistoryPanel,
+    onCloseHistoryPanel,
+    onResumeHistoryEntry,
+    onViewHistoryTranscript,
+    onCloseHistoryView,
   } = ctx;
 
   const maximizedPaneId = desktop.maximizedPaneId;
@@ -999,7 +1134,17 @@ function renderLayout(
             onDragStartPane(pane.id);
           }}
           onDragEnd={onDragEndPane}
+          onHistoryClick={() => onToggleHistoryPanel(pane.id)}
+          historyActive={historyPanelPaneId === pane.id}
         />
+        {historyPanelPaneId === pane.id && (
+          <HistoryPanel
+            activeSessionId={pane.sessionId}
+            onResume={(entry) => onResumeHistoryEntry(pane.id, entry)}
+            onViewTranscript={(entry) => onViewHistoryTranscript(pane.id, entry)}
+            onClose={onCloseHistoryPanel}
+          />
+        )}
         <ProgressBar pct={progressPct} status={status} />
         <div
           style={{
@@ -1012,14 +1157,21 @@ function renderLayout(
             position: "relative",
           }}
         >
-          <TerminalViewport
-            blocked={blocked}
-            focused={focused}
-            onActivate={() => onFocus(pane.id)}
-            onSnapshotChange={(snapshot) => onSnapshot(pane.sessionId, snapshot)}
-            restoredSnapshot={restoredSnapshotsBySessionId[pane.sessionId] ?? null}
-            sessionId={pane.sessionId}
-          />
+          {viewingHistoryByPaneId[pane.id] ? (
+            <TranscriptView
+              entry={viewingHistoryByPaneId[pane.id]!}
+              onClose={() => onCloseHistoryView(pane.id)}
+            />
+          ) : (
+            <TerminalViewport
+              blocked={blocked}
+              focused={focused}
+              onActivate={() => onFocus(pane.id)}
+              onSnapshotChange={(snapshot) => onSnapshot(pane.sessionId, snapshot)}
+              restoredSnapshot={restoredSnapshotsBySessionId[pane.sessionId] ?? null}
+              sessionId={pane.sessionId}
+            />
+          )}
           {showInspector && <AgentInspector agent={agent} />}
           {draggingPaneId && draggingPaneId !== pane.id && (
             <PaneDropOverlay

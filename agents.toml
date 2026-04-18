@@ -4,6 +4,8 @@ name = "Codex CLI"
 command = "codex"
 default_args = []
 prompt_transport = "argv"
+resume_command = "codex"
+resume_args = ["resume", "{{agent_session_id}}"]
 
 [[agent]]
 id = "claude"
@@ -11,3 +13,5 @@ name = "Claude Code"
 command = "claude"
 default_args = []
 prompt_transport = "argv"
+resume_command = "claude"
+resume_args = ["--resume", "{{agent_session_id}}"]

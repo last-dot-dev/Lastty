@@ -25,6 +25,10 @@ pub struct AgentDefinition {
     #[serde(default)]
     pub env: HashMap<String, String>,
     pub icon: Option<String>,
+    #[serde(default)]
+    pub resume_command: Option<String>,
+    #[serde(default)]
+    pub resume_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +277,19 @@ pub fn launch_agent<R: Runtime>(
     })
 }
 
+pub fn resume_command_spec(
+    agent: &AgentDefinition,
+    agent_session_id: &str,
+) -> Option<CommandSpec> {
+    let program = agent.resume_command.clone()?;
+    let args = agent
+        .resume_args
+        .iter()
+        .map(|arg| arg.replace("{{agent_session_id}}", agent_session_id))
+        .collect();
+    Some(CommandSpec { program, args })
+}
+
 fn build_command_spec(
     agent: &AgentDefinition,
     prompt: Option<&str>,
@@ -362,6 +379,8 @@ fn default_agents() -> Vec<AgentDefinition> {
             shell: false,
             env: HashMap::new(),
             icon: Some("◎".to_string()),
+            resume_command: Some("codex".to_string()),
+            resume_args: vec!["resume".to_string(), "{{agent_session_id}}".to_string()],
         },
         AgentDefinition {
             id: "claude".to_string(),
@@ -372,6 +391,8 @@ fn default_agents() -> Vec<AgentDefinition> {
             shell: false,
             env: HashMap::new(),
             icon: Some("◌".to_string()),
+            resume_command: Some("claude".to_string()),
+            resume_args: vec!["--resume".to_string(), "{{agent_session_id}}".to_string()],
         },
     ]
 }
@@ -397,6 +418,8 @@ mod tests {
             shell: false,
             env: HashMap::new(),
             icon: None,
+            resume_command: None,
+            resume_args: Vec::new(),
         };
 
         let spec = build_command_spec(&agent, Some("fix it")).unwrap();

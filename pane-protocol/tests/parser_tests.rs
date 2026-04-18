@@ -15,6 +15,7 @@ fn parse_ready_message() {
     let msg = AgentUiMessage::Ready {
         agent: "test-agent".into(),
         version: Some("1.0".into()),
+        session_id: None,
     };
     let encoded = encode(&msg);
     let chunks = parse_all(&encoded);
@@ -262,6 +263,7 @@ fn osc_split_across_two_reads() {
     let msg = AgentUiMessage::Ready {
         agent: "split-agent".into(),
         version: None,
+        session_id: None,
     };
     let encoded = encode(&msg);
     let mid = encoded.len() / 2;
@@ -437,6 +439,7 @@ fn st_terminator_works() {
     let msg = AgentUiMessage::Ready {
         agent: "st-test".into(),
         version: None,
+        session_id: None,
     };
     let json = serde_json::to_string(&msg).unwrap();
     // Use ESC \ instead of BEL as terminator.
@@ -456,6 +459,7 @@ fn roundtrip_encode_parse() {
         AgentUiMessage::Ready {
             agent: "roundtrip".into(),
             version: Some("2.0".into()),
+            session_id: None,
         },
         AgentUiMessage::Status {
             phase: "working".into(),
@@ -531,6 +535,7 @@ fn multiple_messages_in_single_read() {
     let msg1 = AgentUiMessage::Ready {
         agent: "a".into(),
         version: None,
+        session_id: None,
     };
     let msg2 = AgentUiMessage::Status {
         phase: "b".into(),

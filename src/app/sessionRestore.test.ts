@@ -183,5 +183,6 @@ function makeSessionInfo(session_id: string, cwd: string, title: string): Sessio
     worktree_path: null,
     control_connected: false,
     started_at_ms: 0,
+    started_at_unix_ms: 0,
   };
 }

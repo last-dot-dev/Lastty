@@ -78,7 +78,8 @@ fn translate_line(
         CodexEvent::ThreadStarted { thread_id, .. } => {
             out.push_message(AgentUiMessage::Ready {
                 agent: "codex".to_string(),
-                version: thread_id,
+                version: thread_id.clone(),
+                session_id: thread_id,
             });
         }
         CodexEvent::ItemStarted { item } | CodexEvent::ItemUpdated { item } => {

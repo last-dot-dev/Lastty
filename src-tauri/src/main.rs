@@ -42,8 +42,14 @@ fn main() {
 
             let render_coordinator = Arc::new(RenderCoordinator::new());
             let app_handle = app.handle().clone();
-            let event_bus =
-                bus::EventBus::new(app.handle().clone(), PathBuf::from(".lastty-recordings"));
+            let recordings_dir = lastty::bus::resolve_recordings_dir();
+            if let Err(error) = lastty::bus::migrate_legacy_recordings(
+                &PathBuf::from(".lastty-recordings"),
+                &recordings_dir,
+            ) {
+                tracing::warn!("recordings migration failed: {error}");
+            }
+            let event_bus = bus::EventBus::new(app.handle().clone(), recordings_dir);
             app.manage(event_bus);
 
             let manager = TerminalManager::new(app.handle().clone(), render_coordinator.clone());
@@ -111,6 +117,11 @@ fn main() {
             commands::respond_to_approval,
             commands::list_recordings,
             commands::read_recording,
+            commands::list_history,
+            commands::get_history_entry,
+            commands::delete_history_entry,
+            commands::set_history_entry_pinned,
+            commands::resume_history_entry,
             commands::get_git_info,
             commands::terminal_input,
             commands::get_terminal_frame,

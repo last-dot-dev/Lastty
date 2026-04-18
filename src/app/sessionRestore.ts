@@ -71,6 +71,7 @@ export function buildPersistedWorkspaceState(
       if (!pane) return null;
       const session = sessionInfoById[pane.sessionId];
       if (!session) return null;
+      if (!session.cwd) return null;
       panes.push({
         cwd: session.cwd,
         paneId,

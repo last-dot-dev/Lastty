@@ -1,7 +1,7 @@
 import type { AgentStatus } from "../../app/agentDerived";
 
 const LABEL: Record<AgentStatus, string> = {
-  plan: "plan",
+  plan: "running",
   needs_help: "needs help",
   done: "done",
 };

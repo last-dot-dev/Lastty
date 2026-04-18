@@ -131,6 +131,28 @@ export interface SessionInfo {
   worktree_path: string | null;
   control_connected: boolean;
   started_at_ms: number;
+  started_at_unix_ms: number;
+}
+
+export interface HistoryEntry {
+  session_id: string;
+  title: string;
+  agent_id: string | null;
+  cwd: string;
+  worktree_path: string | null;
+  prompt_summary: string | null;
+  started_at_ms: number;
+  last_event_ms: number;
+  exit_code: number | null;
+  pinned: boolean;
+  agent_session_id: string | null;
+}
+
+export interface ResumeHistoryEntryResult {
+  session_id: string;
+  cwd: string;
+  agent_id: string | null;
+  resumed: boolean;
 }
 
 export interface GitInfo {
@@ -283,6 +305,33 @@ export async function listRecordings(): Promise<RecordingInfo[]> {
 
 export async function readRecording(sessionId: string): Promise<string> {
   return invoke("read_recording", { sessionId });
+}
+
+export async function listHistory(): Promise<HistoryEntry[]> {
+  return invoke("list_history");
+}
+
+export async function getHistoryEntry(
+  sessionId: string,
+): Promise<HistoryEntry | null> {
+  return invoke("get_history_entry", { sessionId });
+}
+
+export async function deleteHistoryEntry(sessionId: string): Promise<void> {
+  return invoke("delete_history_entry", { sessionId });
+}
+
+export async function setHistoryEntryPinned(
+  sessionId: string,
+  pinned: boolean,
+): Promise<void> {
+  return invoke("set_history_entry_pinned", { sessionId, pinned });
+}
+
+export async function resumeHistoryEntry(
+  sessionId: string,
+): Promise<ResumeHistoryEntryResult> {
+  return invoke("resume_history_entry", { sessionId });
 }
 
 export async function getTerminalFrame(

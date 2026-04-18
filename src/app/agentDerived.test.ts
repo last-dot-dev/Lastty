@@ -23,6 +23,7 @@ function sessionInfo(overrides: Partial<SessionInfo> = {}): SessionInfo {
     worktree_path: null,
     control_connected: false,
     started_at_ms: 0,
+    started_at_unix_ms: 0,
     ...overrides,
   };
 }

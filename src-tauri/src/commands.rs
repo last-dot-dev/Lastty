@@ -6,8 +6,11 @@ use alacritty_terminal::grid::Scroll;
 use serde::Deserialize;
 use tauri::{AppHandle, State};
 
-use crate::agents::{self, AgentDefinition, LaunchAgentRequest, LaunchAgentResult, RuleDefinition};
-use crate::bus::{BusEvent, EventBus, RecordingInfo};
+use crate::agents::{
+    self, load_agent_registry, resume_command_spec, AgentDefinition, LaunchAgentRequest,
+    LaunchAgentResult, RuleDefinition,
+};
+use crate::bus::{BusEvent, EventBus, HistoryEntry, RecordingInfo};
 use crate::font_config::FontConfig;
 use crate::runtime_modes;
 use crate::terminal::manager::TerminalManager;
@@ -333,6 +336,113 @@ pub async fn read_recording(
     event_bus: State<'_, EventBus>,
 ) -> Result<String, String> {
     event_bus.read_recording(&session_id)
+}
+
+#[tauri::command]
+pub async fn list_history(event_bus: State<'_, EventBus>) -> Result<Vec<HistoryEntry>, String> {
+    Ok(event_bus.list_history())
+}
+
+#[tauri::command]
+pub async fn get_history_entry(
+    session_id: String,
+    event_bus: State<'_, EventBus>,
+) -> Result<Option<HistoryEntry>, String> {
+    Ok(event_bus.get_history_entry(&session_id))
+}
+
+#[tauri::command]
+pub async fn delete_history_entry(
+    session_id: String,
+    event_bus: State<'_, EventBus>,
+) -> Result<(), String> {
+    event_bus.delete_history_entry(&session_id)
+}
+
+#[tauri::command]
+pub async fn set_history_entry_pinned(
+    session_id: String,
+    pinned: bool,
+    event_bus: State<'_, EventBus>,
+) -> Result<(), String> {
+    event_bus.set_history_entry_pinned(&session_id, pinned)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResumeHistoryEntryResult {
+    pub session_id: String,
+    pub cwd: String,
+    pub agent_id: Option<String>,
+    pub resumed: bool,
+}
+
+#[tauri::command]
+pub async fn resume_history_entry(
+    session_id: String,
+    state: State<'_, TerminalManager>,
+    event_bus: State<'_, EventBus>,
+) -> Result<ResumeHistoryEntryResult, String> {
+    resume_history_entry_for_runtime(session_id, state, event_bus).await
+}
+
+async fn resume_history_entry_for_runtime<R: tauri::Runtime>(
+    session_id: String,
+    state: State<'_, TerminalManager<R>>,
+    event_bus: State<'_, EventBus<R>>,
+) -> Result<ResumeHistoryEntryResult, String> {
+    let entry = event_bus
+        .get_history_entry(&session_id)
+        .ok_or_else(|| "history entry not found".to_string())?;
+
+    let cwd_path = if entry.cwd.is_empty() || !Path::new(&entry.cwd).is_dir() {
+        std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("/"))
+    } else {
+        std::path::PathBuf::from(&entry.cwd)
+    };
+    let cwd_path = cwd_path.as_path();
+
+    let workspace_root = std::env::current_dir().map_err(|e| e.to_string())?;
+    let agents = load_agent_registry(&workspace_root).map_err(|e| e.to_string())?;
+
+    let (command, resumed) = match (entry.agent_id.as_deref(), entry.agent_session_id.as_deref()) {
+        (Some(agent_id), Some(agent_session_id)) => {
+            let agent = agents.into_iter().find(|candidate| candidate.id == agent_id);
+            match agent.as_ref().and_then(|a| resume_command_spec(a, agent_session_id)) {
+                Some(spec) => (Some(spec), true),
+                None => (None, false),
+            }
+        }
+        _ => (None, false),
+    };
+
+    let env = build_pane_env();
+    let new_session_id = state
+        .create_session(
+            command,
+            cwd_path,
+            &env,
+            80,
+            24,
+            entry.agent_id.clone(),
+            entry.prompt_summary.clone(),
+            None,
+            None,
+        )
+        .map_err(|error| error.to_string())?;
+
+    event_bus.publish(BusEvent::SessionCreated {
+        session_id: new_session_id.to_string(),
+        agent_id: entry.agent_id.clone(),
+    });
+
+    Ok(ResumeHistoryEntryResult {
+        session_id: new_session_id.to_string(),
+        cwd: cwd_path.display().to_string(),
+        agent_id: entry.agent_id,
+        resumed,
+    })
 }
 
 #[tauri::command]

@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::broadcast;
 
 use crate::agents::{self, LaunchAgentRequest, RuleDefinition};
 use crate::terminal::manager::TerminalManager;
-use crate::terminal::session::SessionId;
+use crate::terminal::session::{SessionId, SessionInfo};
+
+const SIDECAR_TOUCH_THROTTLE_MS: u128 = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -79,6 +81,7 @@ pub struct EventBus<R: Runtime = tauri::Wry> {
     recordings_dir: PathBuf,
     sender: broadcast::Sender<BusEvent>,
     write_guard: Arc<Mutex<()>>,
+    sidecar_last_touch_ms: Arc<Mutex<HashMap<String, u128>>>,
     rule_executor_started: Arc<AtomicBool>,
 }
 
@@ -87,6 +90,23 @@ pub struct RecordingInfo {
     pub session_id: String,
     pub path: String,
     pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub session_id: String,
+    pub title: String,
+    pub agent_id: Option<String>,
+    pub cwd: String,
+    pub worktree_path: Option<String>,
+    pub prompt_summary: Option<String>,
+    pub started_at_ms: u128,
+    pub last_event_ms: u128,
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub agent_session_id: Option<String>,
 }
 
 impl<R: Runtime> EventBus<R> {
@@ -98,6 +118,7 @@ impl<R: Runtime> EventBus<R> {
             recordings_dir,
             sender,
             write_guard: Arc::new(Mutex::new(())),
+            sidecar_last_touch_ms: Arc::new(Mutex::new(HashMap::new())),
             rule_executor_started: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -164,6 +185,142 @@ impl<R: Runtime> EventBus<R> {
         fs::read_to_string(path).map_err(|error| error.to_string())
     }
 
+    pub fn list_history(&self) -> Vec<HistoryEntry> {
+        let Ok(entries) = fs::read_dir(&self.recordings_dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<HistoryEntry> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                let session_id = name.strip_suffix(".meta.json")?;
+                self.read_sidecar(session_id)
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            b.pinned
+                .cmp(&a.pinned)
+                .then_with(|| b.last_event_ms.cmp(&a.last_event_ms))
+        });
+        out
+    }
+
+    pub fn get_history_entry(&self, session_id: &str) -> Option<HistoryEntry> {
+        self.read_sidecar(session_id)
+    }
+
+    pub fn delete_history_entry(&self, session_id: &str) -> Result<(), String> {
+        let _guard = self.write_guard.lock().unwrap();
+        let sidecar = self.sidecar_path(session_id);
+        let jsonl = self.recordings_dir.join(format!("{session_id}.jsonl"));
+        if sidecar.exists() {
+            fs::remove_file(&sidecar).map_err(|e| e.to_string())?;
+        }
+        if jsonl.exists() {
+            fs::remove_file(&jsonl).map_err(|e| e.to_string())?;
+        }
+        self.sidecar_last_touch_ms
+            .lock()
+            .unwrap()
+            .remove(session_id);
+        Ok(())
+    }
+
+    pub fn set_history_entry_pinned(
+        &self,
+        session_id: &str,
+        pinned: bool,
+    ) -> Result<(), String> {
+        let Some(mut entry) = self.read_sidecar(session_id) else {
+            return Err("history entry not found".to_string());
+        };
+        entry.pinned = pinned;
+        self.write_sidecar(&entry);
+        Ok(())
+    }
+
+    pub fn finalize_sidecar(&self, session_id: &str, exit_code: Option<i32>) {
+        let now = unix_now_ms();
+        let Some(mut entry) = self.read_sidecar(session_id).or_else(|| {
+            self.snapshot_live_session(session_id)
+                .map(|info| history_entry_from_live(&info, now, now))
+        }) else {
+            return;
+        };
+        entry.last_event_ms = now;
+        entry.exit_code = exit_code.or(entry.exit_code);
+        self.write_sidecar(&entry);
+    }
+
+    fn sidecar_path(&self, session_id: &str) -> PathBuf {
+        self.recordings_dir.join(format!("{session_id}.meta.json"))
+    }
+
+    fn read_sidecar(&self, session_id: &str) -> Option<HistoryEntry> {
+        let data = fs::read_to_string(self.sidecar_path(session_id)).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
+    fn write_sidecar(&self, entry: &HistoryEntry) {
+        let _guard = self.write_guard.lock().unwrap();
+        let path = self.sidecar_path(&entry.session_id);
+        let Ok(data) = serde_json::to_vec_pretty(entry) else {
+            return;
+        };
+        let tmp = path.with_extension("json.tmp");
+        if fs::write(&tmp, data).is_err() {
+            return;
+        }
+        let _ = fs::rename(tmp, path);
+    }
+
+    fn touch_sidecar(&self, session_id: &str) {
+        let now = unix_now_ms();
+        {
+            let mut state = self.sidecar_last_touch_ms.lock().unwrap();
+            let last = state.get(session_id).copied().unwrap_or(0);
+            if last != 0 && now.saturating_sub(last) < SIDECAR_TOUCH_THROTTLE_MS {
+                return;
+            }
+            state.insert(session_id.to_string(), now);
+        }
+
+        let live = self.snapshot_live_session(session_id);
+        let existing = self.read_sidecar(session_id);
+        let entry = match (existing, live) {
+            (Some(mut entry), Some(info)) => {
+                entry.title = info.title;
+                entry.agent_id = info.agent_id.or(entry.agent_id);
+                entry.cwd = info.cwd;
+                entry.worktree_path = info.worktree_path.or(entry.worktree_path);
+                entry.prompt_summary = info.prompt_summary.or(entry.prompt_summary);
+                entry.last_event_ms = now;
+                entry
+            }
+            (Some(mut entry), None) => {
+                entry.last_event_ms = now;
+                entry
+            }
+            (None, Some(info)) => {
+                let started = if info.started_at_unix_ms > 0 {
+                    info.started_at_unix_ms
+                } else {
+                    now
+                };
+                history_entry_from_live(&info, started, now)
+            }
+            (None, None) => return,
+        };
+        self.write_sidecar(&entry);
+    }
+
+    fn snapshot_live_session(&self, session_id: &str) -> Option<SessionInfo> {
+        let manager = self.app.try_state::<TerminalManager<R>>()?;
+        let id = SessionId::parse(session_id).ok()?;
+        let session = manager.get(&id)?;
+        Some(session.info())
+    }
+
     pub fn record_agent_ui_message(&self, session_id: &str, message: &serde_json::Value) {
         self.record_line(
             session_id,
@@ -171,6 +328,25 @@ impl<R: Runtime> EventBus<R> {
                 "agent_ui_message": message,
             }),
         );
+        if let Some(agent_session_id) = agent_session_id_from_ready(message) {
+            self.set_agent_session_id(session_id, &agent_session_id);
+        }
+    }
+
+    fn set_agent_session_id(&self, session_id: &str, agent_session_id: &str) {
+        let now = unix_now_ms();
+        let Some(mut entry) = self.read_sidecar(session_id).or_else(|| {
+            self.snapshot_live_session(session_id)
+                .map(|info| history_entry_from_live(&info, now, now))
+        }) else {
+            return;
+        };
+        if entry.agent_session_id.as_deref() == Some(agent_session_id) {
+            return;
+        }
+        entry.agent_session_id = Some(agent_session_id.to_string());
+        entry.last_event_ms = now;
+        self.write_sidecar(&entry);
     }
 
     fn record(&self, event: &BusEvent) {
@@ -184,26 +360,93 @@ impl<R: Runtime> EventBus<R> {
                 "event": event,
             }),
         );
+
+        if let BusEvent::SessionExited { exit_code, .. } = event {
+            self.finalize_sidecar(session_id, *exit_code);
+        }
     }
 
     fn record_line(&self, session_id: &str, payload: serde_json::Value) {
-        let _guard = self.write_guard.lock().unwrap();
-        let path = self.recordings_dir.join(format!("{session_id}.jsonl"));
-        let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
-            return;
-        };
+        {
+            let _guard = self.write_guard.lock().unwrap();
+            let path = self.recordings_dir.join(format!("{session_id}.jsonl"));
+            let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+                return;
+            };
 
-        let mut line = serde_json::json!({
-            "ts_ms": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_millis())
-                .unwrap_or_default(),
-        });
-        if let (Some(map), Some(payload_map)) = (line.as_object_mut(), payload.as_object()) {
-            map.extend(payload_map.clone());
+            let mut line = serde_json::json!({
+                "ts_ms": unix_now_ms(),
+            });
+            if let (Some(map), Some(payload_map)) = (line.as_object_mut(), payload.as_object()) {
+                map.extend(payload_map.clone());
+            }
+            let _ = writeln!(file, "{line}");
         }
-        let _ = writeln!(file, "{line}");
+
+        self.touch_sidecar(session_id);
     }
+}
+
+fn agent_session_id_from_ready(message: &serde_json::Value) -> Option<String> {
+    let msg_type = message.get("type").and_then(|v| v.as_str())?;
+    if msg_type != "Ready" {
+        return None;
+    }
+    message
+        .get("data")
+        .and_then(|data| data.get("session_id"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+}
+
+fn history_entry_from_live(
+    info: &SessionInfo,
+    started_at_ms: u128,
+    last_event_ms: u128,
+) -> HistoryEntry {
+    HistoryEntry {
+        session_id: info.session_id.clone(),
+        title: info.title.clone(),
+        agent_id: info.agent_id.clone(),
+        cwd: info.cwd.clone(),
+        worktree_path: info.worktree_path.clone(),
+        prompt_summary: info.prompt_summary.clone(),
+        started_at_ms,
+        last_event_ms,
+        exit_code: None,
+        pinned: false,
+        agent_session_id: None,
+    }
+}
+
+pub fn resolve_recordings_dir() -> PathBuf {
+    let base = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join(".lastty").join("recordings")
+}
+
+pub fn migrate_legacy_recordings(legacy: &Path, dest: &Path) -> Result<u32, std::io::Error> {
+    if !legacy.is_dir() {
+        return Ok(0);
+    }
+    fs::create_dir_all(dest)?;
+    let mut moved = 0u32;
+    for entry in fs::read_dir(legacy)?.flatten() {
+        let Some(name) = entry.file_name().into_string().ok() else {
+            continue;
+        };
+        let target = dest.join(&name);
+        if target.exists() {
+            continue;
+        }
+        if fs::rename(entry.path(), &target).is_ok() {
+            moved += 1;
+        }
+    }
+    let _ = fs::remove_dir(legacy);
+    Ok(moved)
 }
 
 impl BusEvent {
@@ -589,7 +832,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        normalized_event_name, render_template, wildcard_matches, BusEvent, EventBus, RuleEngine,
+        migrate_legacy_recordings, normalized_event_name, render_template, wildcard_matches,
+        BusEvent, EventBus, RuleEngine,
     };
     use crate::agents::{RuleAction, RuleDefinition, RuleFilter, RuleTrigger};
     use crate::render_sync::RenderCoordinator;
@@ -989,5 +1233,137 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn sidecar_is_written_for_live_session_and_finalized_on_exit() {
+        let workspace_root = temp_dir("lastty-sidecar");
+        let app = tauri::test::mock_app();
+        let recordings_dir = workspace_root.join("recordings");
+        let render_coordinator = Arc::new(RenderCoordinator::new());
+        assert!(app.manage(EventBus::new(app.handle().clone(), recordings_dir.clone())));
+        assert!(app.manage(TerminalManager::new(
+            app.handle().clone(),
+            render_coordinator
+        )));
+
+        let manager = app.state::<TerminalManager<MockRuntime>>();
+        let session_id = manager
+            .create_session(
+                Some(CommandSpec {
+                    program: "/bin/sh".to_string(),
+                    args: vec!["-lc".to_string(), "sleep 30".to_string()],
+                }),
+                &workspace_root,
+                &pane_env(),
+                80,
+                24,
+                Some("codex".to_string()),
+                Some("fix things".to_string()),
+                None,
+                None,
+            )
+            .unwrap();
+        drop(manager);
+
+        let event_bus = app.state::<EventBus<MockRuntime>>();
+        event_bus.publish(BusEvent::SessionCreated {
+            session_id: session_id.to_string(),
+            agent_id: Some("codex".to_string()),
+        });
+
+        let entries = event_bus.list_history();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.session_id, session_id.to_string());
+        assert_eq!(entry.agent_id.as_deref(), Some("codex"));
+        assert_eq!(entry.prompt_summary.as_deref(), Some("fix things"));
+        assert_eq!(entry.cwd, workspace_root.display().to_string());
+        assert!(entry.exit_code.is_none());
+        assert!(!entry.pinned);
+
+        event_bus.publish(BusEvent::SessionExited {
+            session_id: session_id.to_string(),
+            exit_code: Some(7),
+        });
+
+        let entry = event_bus
+            .get_history_entry(&session_id.to_string())
+            .expect("sidecar");
+        assert_eq!(entry.exit_code, Some(7));
+
+        cleanup_sessions(&app);
+    }
+
+    #[test]
+    fn sidecar_pin_and_delete_round_trip() {
+        let workspace_root = temp_dir("lastty-sidecar-pin");
+        let app = tauri::test::mock_app();
+        let recordings_dir = workspace_root.join("recordings");
+        let render_coordinator = Arc::new(RenderCoordinator::new());
+        assert!(app.manage(EventBus::new(app.handle().clone(), recordings_dir.clone())));
+        assert!(app.manage(TerminalManager::new(
+            app.handle().clone(),
+            render_coordinator
+        )));
+
+        let manager = app.state::<TerminalManager<MockRuntime>>();
+        let session_id = manager
+            .create_session(
+                Some(CommandSpec {
+                    program: "/bin/sh".to_string(),
+                    args: vec!["-lc".to_string(), "sleep 30".to_string()],
+                }),
+                &workspace_root,
+                &pane_env(),
+                80,
+                24,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        drop(manager);
+
+        let event_bus = app.state::<EventBus<MockRuntime>>();
+        event_bus.publish(BusEvent::SessionCreated {
+            session_id: session_id.to_string(),
+            agent_id: None,
+        });
+
+        event_bus
+            .set_history_entry_pinned(&session_id.to_string(), true)
+            .unwrap();
+        assert!(
+            event_bus
+                .get_history_entry(&session_id.to_string())
+                .unwrap()
+                .pinned
+        );
+
+        event_bus
+            .delete_history_entry(&session_id.to_string())
+            .unwrap();
+        assert!(event_bus.list_history().is_empty());
+        assert!(event_bus.read_recording(&session_id.to_string()).is_err());
+
+        cleanup_sessions(&app);
+    }
+
+    #[test]
+    fn migrates_legacy_recordings_into_new_home() {
+        let root = temp_dir("lastty-migration");
+        let legacy = root.join("legacy");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("abc.jsonl"), "line\n").unwrap();
+        fs::write(legacy.join("abc.meta.json"), "{}").unwrap();
+
+        let dest = root.join("new");
+        let moved = migrate_legacy_recordings(&legacy, &dest).unwrap();
+        assert_eq!(moved, 2);
+        assert!(dest.join("abc.jsonl").exists());
+        assert!(dest.join("abc.meta.json").exists());
+        assert!(!legacy.exists() || fs::read_dir(&legacy).unwrap().next().is_none());
     }
 }
