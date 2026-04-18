@@ -795,8 +795,7 @@ export default function TerminalWorkspace() {
               flex: 1,
               minWidth: 0,
               minHeight: 0,
-              display: "flex",
-              flexDirection: "column",
+              position: "relative",
             }}
           >
             {workspace.desktops.map((desktop) => {
@@ -805,12 +804,14 @@ export default function TerminalWorkspace() {
                 <div
                   key={desktop.id}
                   className="agent-desktop-layer"
+                  aria-hidden={!active}
                   style={{
-                    display: active ? "flex" : "none",
-                    flex: 1,
-                    minHeight: 0,
-                    minWidth: 0,
+                    position: "absolute",
+                    inset: 0,
+                    display: "flex",
                     flexDirection: "column",
+                    visibility: active ? "visible" : "hidden",
+                    pointerEvents: active ? "auto" : "none",
                   }}
                 >
                   {desktop.layout ? (
