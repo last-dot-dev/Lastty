@@ -13,7 +13,7 @@ use std::sync::Arc;
 use etagere::{size2, BucketedAtlasAllocator};
 use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
-use swash::zeno::Format;
+use swash::zeno::{Angle, Format, Transform};
 use swash::{FontRef, GlyphId};
 
 use crate::font_config::{self, CellMetrics, FontConfig};
@@ -27,10 +27,63 @@ const ATLAS_SIZE: u32 = 2048;
 const GLYPH_PADDING: i32 = 1;
 
 /// Look-up key for cached glyphs. Styles (bold/italic) go here eventually; for
-/// the first pass we only key on the codepoint.
+/// terminal rendering we rasterize distinct bold/italic variants on demand.
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
+pub struct StyleBits(u8);
+
+impl StyleBits {
+    const BOLD: u8 = 1 << 0;
+    const ITALIC: u8 = 1 << 1;
+    const UNDERLINE: u8 = 1 << 2;
+
+    pub const fn new(bits: u8) -> Self {
+        Self(bits)
+    }
+
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    pub const fn bold(self) -> bool {
+        self.0 & Self::BOLD != 0
+    }
+
+    pub const fn italic(self) -> bool {
+        self.0 & Self::ITALIC != 0
+    }
+
+    pub const fn underline(self) -> bool {
+        self.0 & Self::UNDERLINE != 0
+    }
+
+    pub const fn with_bold(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.0 |= Self::BOLD;
+        }
+        self
+    }
+
+    pub const fn with_italic(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.0 |= Self::ITALIC;
+        }
+        self
+    }
+
+    pub const fn with_underline(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.0 |= Self::UNDERLINE;
+        }
+        self
+    }
+}
+
+/// Look-up key for cached glyphs.
 #[derive(Copy, Clone, Hash, Eq, PartialEq)]
 pub struct GlyphKey {
     pub ch: char,
+    pub style: StyleBits,
 }
 
 /// Position + metrics of a rasterized glyph inside the atlas.
@@ -155,7 +208,13 @@ impl GlyphAtlas {
         // path transparently.
         for code in 0x20u32..0x7Fu32 {
             if let Some(ch) = char::from_u32(code) {
-                atlas.prepare(queue, ch);
+                atlas.prepare(
+                    queue,
+                    GlyphKey {
+                        ch,
+                        style: StyleBits::default(),
+                    },
+                );
             }
         }
 
@@ -165,24 +224,23 @@ impl GlyphAtlas {
     /// Returns the glyph region for `ch`, rasterizing and uploading on first
     /// encounter. Returns `None` for codepoints the font doesn't cover or
     /// whose bitmap is zero-sized (e.g. whitespace).
-    pub fn prepare(&mut self, queue: &wgpu::Queue, ch: char) -> Option<GlyphRegion> {
-        let key = GlyphKey { ch };
+    pub fn prepare(&mut self, queue: &wgpu::Queue, key: GlyphKey) -> Option<GlyphRegion> {
         if let Some(region) = self.cache.get(&key) {
             return *region;
         }
 
-        let region = self.rasterize_and_pack(queue, ch);
+        let region = self.rasterize_and_pack(queue, key);
         self.cache.insert(key, region);
         region
     }
 
-    fn rasterize_and_pack(&mut self, queue: &wgpu::Queue, ch: char) -> Option<GlyphRegion> {
+    fn rasterize_and_pack(&mut self, queue: &wgpu::Queue, key: GlyphKey) -> Option<GlyphRegion> {
         // Re-borrow the font each call — FontRef is a lightweight view over
         // self.font_data. Scaling and rasterization allocate internally but
         // only for cache misses, which is exactly what we want.
         let font = FontRef::from_index(&self.font_data, self.font_index as usize)?;
-        let glyph_id: GlyphId = font.charmap().map(ch as u32);
-        if glyph_id == 0 && ch != '\u{0}' {
+        let glyph_id: GlyphId = font.charmap().map(key.ch as u32);
+        if glyph_id == 0 && key.ch != '\u{0}' {
             return None;
         }
 
@@ -197,13 +255,22 @@ impl GlyphAtlas {
         // we currently only sample the .r channel in the shader, so color
         // bitmaps would render as grayscale. That's acceptable until we wire
         // up a separate RGBA atlas tier.
-        let image = Render::new(&[
+        let mut render = Render::new(&[
             Source::ColorOutline(0),
             Source::ColorBitmap(StrikeWith::BestFit),
             Source::Outline,
-        ])
-        .format(Format::Alpha)
-        .render(&mut scaler, glyph_id)?;
+        ]);
+        render.format(Format::Alpha);
+        if key.style.bold() {
+            render.embolden((self.font_size / 24.0).max(0.5));
+        }
+        if key.style.italic() {
+            render.transform(Some(Transform::skew(
+                Angle::from_degrees(14.0),
+                Angle::from_degrees(0.0),
+            )));
+        }
+        let image = render.render(&mut scaler, glyph_id)?;
 
         if image.placement.width == 0 || image.placement.height == 0 {
             return None;
@@ -300,8 +367,8 @@ impl GlyphAtlas {
     /// Lookup-only variant — returns whatever is currently in the cache
     /// without attempting to rasterize. Safe to call while holding an
     /// immutable borrow of the atlas's other fields.
-    pub fn get(&self, ch: char) -> Option<GlyphRegion> {
-        self.cache.get(&GlyphKey { ch }).copied().flatten()
+    pub fn get(&self, key: GlyphKey) -> Option<GlyphRegion> {
+        self.cache.get(&key).copied().flatten()
     }
 
     pub fn cached_glyph_count(&self) -> usize {
@@ -341,7 +408,13 @@ impl GlyphAtlas {
 
         for code in 0x20u32..0x7Fu32 {
             if let Some(ch) = char::from_u32(code) {
-                self.prepare(queue, ch);
+                self.prepare(
+                    queue,
+                    GlyphKey {
+                        ch,
+                        style: StyleBits::default(),
+                    },
+                );
             }
         }
         Ok(())

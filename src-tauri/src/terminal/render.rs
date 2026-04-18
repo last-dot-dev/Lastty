@@ -1,6 +1,9 @@
 use std::fmt::Write as _;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
@@ -13,6 +16,8 @@ use crate::render_sync::RenderCoordinator;
 
 use super::manager::TerminalManager;
 use super::session::SessionId;
+
+const PERF_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct TerminalFrame {
@@ -31,20 +36,27 @@ pub struct TerminalFrameEvent {
     pub frame: TerminalFrame,
 }
 
-pub fn emit_frame_for_session<R: Runtime>(
+struct FrameEmitMetrics {
+    frame_ms: f64,
+    ansi_bytes: usize,
+}
+
+fn emit_frame_for_session<R: Runtime>(
     app_handle: &AppHandle<R>,
     session_id: SessionId,
-) -> bool {
+) -> Option<FrameEmitMetrics> {
     let manager = app_handle.state::<TerminalManager<R>>();
     let term_arc = manager.get(&session_id).map(|session| session.term.clone());
     drop(manager);
 
     let Some(term_arc) = term_arc else {
-        return false;
+        return None;
     };
 
+    let frame_start = Instant::now();
     let term = term_arc.lock();
     let frame = render_viewport(&term);
+    let ansi_bytes = frame.ansi.len();
     app_handle
         .emit(
             "term:frame",
@@ -53,7 +65,11 @@ pub fn emit_frame_for_session<R: Runtime>(
                 frame,
             },
         )
-        .is_ok()
+        .ok()?;
+    Some(FrameEmitMetrics {
+        frame_ms: frame_start.elapsed().as_secs_f64() * 1000.0,
+        ansi_bytes,
+    })
 }
 
 pub fn spawn_frame_emitter<R: Runtime + 'static>(
@@ -62,13 +78,67 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
     initial_session_id: SessionId,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let _ = emit_frame_for_session(&app_handle, initial_session_id);
+        let trace_start = Instant::now();
+        let mut perf_trace = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/lastty-perf.jsonl")
+            .ok();
+        let mut avg_frame_ms = 0.0f64;
+        let mut avg_ansi_bytes = 0.0f64;
+        let mut frames_since_emit = 0u64;
+        let mut last_perf_emit = Instant::now();
+        let mut last_total_wakeups = 0u64;
+
+        if let Some(metrics) = emit_frame_for_session(&app_handle, initial_session_id) {
+            avg_frame_ms = metrics.frame_ms;
+            avg_ansi_bytes = metrics.ansi_bytes as f64;
+            frames_since_emit = 1;
+        }
         let mut rendered_generation = render_coordinator.current_generation();
 
         loop {
             let dirty = render_coordinator.wait_for_next(rendered_generation);
-            if emit_frame_for_session(&app_handle, dirty.session_id) {
+            if let Some(metrics) = emit_frame_for_session(&app_handle, dirty.session_id) {
                 rendered_generation = dirty.generation;
+                avg_frame_ms = avg_frame_ms * 0.8 + metrics.frame_ms * 0.2;
+                avg_ansi_bytes = avg_ansi_bytes * 0.8 + metrics.ansi_bytes as f64 * 0.2;
+                frames_since_emit += 1;
+                let emit_elapsed = last_perf_emit.elapsed();
+                if emit_elapsed >= PERF_EMIT_INTERVAL {
+                    let total_wakeups = render_coordinator.total_wakeups();
+                    let wakeups_since_emit = total_wakeups.saturating_sub(last_total_wakeups);
+                    let latest_generation = render_coordinator.current_generation();
+                    let pending_updates = latest_generation.saturating_sub(rendered_generation);
+                    let fps = frames_since_emit as f64 / emit_elapsed.as_secs_f64();
+                    let payload = serde_json::json!({
+                        "frame_ms": avg_frame_ms,
+                        "fps": fps,
+                        "ansi_bytes": avg_ansi_bytes,
+                        "wakeups": wakeups_since_emit,
+                        "generation": latest_generation,
+                        "pending_updates": pending_updates,
+                    });
+                    app_handle.emit("perf:stats", payload.clone()).ok();
+                    if let Some(file) = perf_trace.as_mut() {
+                        let _ = writeln!(
+                            file,
+                            "{}",
+                            serde_json::json!({
+                                "ts_ms": trace_start.elapsed().as_millis(),
+                                "frame_ms": avg_frame_ms,
+                                "fps": fps,
+                                "ansi_bytes": avg_ansi_bytes,
+                                "wakeups": wakeups_since_emit,
+                                "generation": latest_generation,
+                                "pending_updates": pending_updates,
+                            })
+                        );
+                    }
+                    last_perf_emit = Instant::now();
+                    last_total_wakeups = total_wakeups;
+                    frames_since_emit = 0;
+                }
             }
         }
     })

@@ -2,6 +2,8 @@ pub mod atlas;
 pub mod panes;
 pub mod rects;
 
+use std::ops::Range;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::EventListener;
@@ -14,11 +16,9 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-use std::sync::{Arc, Mutex};
-
-use self::atlas::GlyphAtlas;
+use self::atlas::{GlyphAtlas, GlyphKey, StyleBits};
 use self::panes::GpuContext;
-use self::rects::{rect_quad, RectVertex};
+use self::rects::{RectInstance, QUAD_INDICES};
 
 /// Default terminal background color (dark theme).
 const BG_COLOR: wgpu::Color = wgpu::Color {
@@ -28,9 +28,13 @@ const BG_COLOR: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
+const BG_COLOR_BYTES: [u8; 4] = [15, 15, 20, 255];
+const CURSOR_COLOR: [u8; 4] = [204, 204, 204, 128];
+
 #[derive(Clone, PartialEq)]
 pub struct TerminalSnapshot {
     rows: usize,
+    cols: usize,
     changed_lines: Vec<(usize, Vec<CellInfo>)>,
     cursor_row: usize,
     cursor_col: usize,
@@ -42,23 +46,22 @@ impl TerminalSnapshot {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Copy, Clone, Default, PartialEq, Eq)]
 struct CellInfo {
-    col: usize,
     c: char,
-    fg: [f32; 3],
-    bg: [f32; 3],
-    bold: bool,
+    fg: [u8; 4],
+    bg: [u8; 4],
+    style: StyleBits,
 }
 
-/// One quad's worth of data pushed to the GPU per visible glyph.
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, Pod, Zeroable)]
 struct GlyphInstance {
-    pos: [f32; 2],
-    size: [f32; 2],
-    atlas_pos: [f32; 2],
-    color: [f32; 4],
+    cell: [u16; 2],
+    atlas_pos: [u16; 2],
+    glyph_size: [u16; 2],
+    bearing: [i16; 2],
+    color: [u8; 4],
 }
 
 impl GlyphInstance {
@@ -70,26 +73,62 @@ impl GlyphInstance {
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: wgpu::VertexFormat::Uint16x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 4,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Uint16x2,
                 },
                 wgpu::VertexAttribute {
                     offset: 8,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Uint16x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Sint16x2,
                 },
                 wgpu::VertexAttribute {
                     offset: 16,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-                wgpu::VertexAttribute {
-                    offset: 24,
-                    shader_location: 3,
-                    format: wgpu::VertexFormat::Float32x4,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Unorm8x4,
                 },
             ],
         }
     }
+
+    fn hidden(cell: [u16; 2]) -> Self {
+        Self {
+            cell,
+            atlas_pos: [0, 0],
+            glyph_size: [0, 0],
+            bearing: [0, 0],
+            color: [0, 0, 0, 0],
+        }
+    }
+
+    fn visible(cell: [u16; 2], region: atlas::GlyphRegion, color: [u8; 4]) -> Self {
+        Self {
+            cell,
+            atlas_pos: [region.atlas_x, region.atlas_y],
+            glyph_size: [region.width, region.height],
+            bearing: [region.bearing_x, region.bearing_y],
+            color,
+        }
+    }
+
+    fn is_visible(&self) -> bool {
+        self.color[3] != 0
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct RectUniforms {
+    screen_size: [f32; 2],
+    cell_size: [f32; 2],
 }
 
 #[repr(C)]
@@ -97,6 +136,9 @@ impl GlyphInstance {
 struct GlyphUniforms {
     screen_size: [f32; 2],
     atlas_size: [f32; 2],
+    cell_size: [f32; 2],
+    baseline: f32,
+    _padding: f32,
 }
 
 pub struct TerminalRenderer {
@@ -104,36 +146,39 @@ pub struct TerminalRenderer {
     surface: Option<wgpu::Surface<'static>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
 
-    // Rect rendering (cell backgrounds, cursor, selection).
     rect_pipeline: wgpu::RenderPipeline,
+    rect_bind_group: wgpu::BindGroup,
+    rect_uniform_buffer: wgpu::Buffer,
 
-    // Glyph rendering (text).
     glyph_pipeline: wgpu::RenderPipeline,
     glyph_bind_group: wgpu::BindGroup,
     glyph_uniform_buffer: wgpu::Buffer,
+    quad_index_buffer: wgpu::Buffer,
     atlas: Arc<Mutex<GlyphAtlas>>,
     atlas_size: u32,
 
-    // Font metrics (physical pixels). Cached from the atlas — kept in sync by
-    // `resize()` when the scale factor changes.
     pub cell_width: f32,
     pub cell_height: f32,
     baseline: f32,
 
-    // Dimensions (physical pixels).
     pub surface_width: u32,
     pub surface_height: u32,
-    // Current DPR. Tracked so resize() can detect a display move and rebuild
-    // the atlas at the new scale.
     pub scale_factor: f32,
 
-    // Full grid snapshot kept up to date across frames. Damage updates only
-    // touch the rows that changed, so keeping this avoids re-asking the Term
-    // for undamaged rows — and gives us a stable source of truth to iterate
-    // for both the rect and glyph passes.
-    rows: Vec<Vec<CellInfo>>,
+    rows: usize,
+    cols: usize,
+    cells: Vec<CellInfo>,
+    glyph_instances: Vec<GlyphInstance>,
+    rect_instances: Vec<RectInstance>,
+    glyph_buffer: wgpu::Buffer,
+    glyph_buffer_capacity: usize,
+    rect_buffer: wgpu::Buffer,
+    rect_buffer_capacity: usize,
+    cursor_buffer: wgpu::Buffer,
+    cursor_row: usize,
+    cursor_col: usize,
+    active_glyph_count: usize,
 
-    // Track the last glyph count for metrics reporting.
     last_glyph_count: usize,
 }
 
@@ -148,6 +193,7 @@ pub struct RenderMetrics {
 impl TerminalRenderer {
     pub fn snapshot<T: EventListener>(term: &mut Term<T>) -> TerminalSnapshot {
         let rows = term.screen_lines();
+        let cols = term.columns();
         let damage = term.damage();
         let changed_rows: Vec<usize> = match damage {
             TermDamage::Full => (0..rows).collect(),
@@ -160,21 +206,22 @@ impl TerminalRenderer {
         let cursor = content.cursor;
         TerminalSnapshot {
             rows,
+            cols,
             changed_lines: changed_rows
                 .into_iter()
                 .filter(|row| *row < rows)
-                .map(|row| (row, snapshot_line(term, row, display_offset, content.colors)))
+                .map(|row| {
+                    (
+                        row,
+                        snapshot_line(term, row, cols, display_offset, content.colors),
+                    )
+                })
                 .collect(),
             cursor_row: cursor.point.line.0 as usize,
             cursor_col: cursor.point.column.0,
         }
     }
 
-    /// Build a per-pane renderer. `gpu` is shared across all panes; `atlas`
-    /// is shared so each pane's renderer hits the same rasterization cache.
-    /// The bind group captures the atlas's texture view/sampler at
-    /// construction and stays valid across atlas rebuilds because rebuild
-    /// keeps the same texture.
     pub fn new_for_pane(
         gpu: GpuContext,
         surface: wgpu::Surface<'static>,
@@ -211,9 +258,6 @@ impl TerminalRenderer {
         Ok(renderer)
     }
 
-    /// Build a renderer that targets an external `wgpu::TextureView` rather
-    /// than a window surface. Used by the renderer benchmark to measure the
-    /// wgpu path without needing a real window.
     pub fn new_offscreen(
         gpu: GpuContext,
         width: u32,
@@ -223,20 +267,64 @@ impl TerminalRenderer {
     ) -> anyhow::Result<Self> {
         let device = gpu.device.clone();
         let format = gpu.format;
+        let (cell_width, cell_height, baseline, atlas_size, atlas_texture_view, atlas_sampler) = {
+            let atlas_guard = atlas.lock().expect("glyph atlas mutex poisoned");
+            (
+                atlas_guard.cell_width,
+                atlas_guard.cell_height,
+                atlas_guard.baseline,
+                atlas_guard.atlas_size(),
+                atlas_guard.texture_view.clone(),
+                atlas_guard.sampler.clone(),
+            )
+        };
 
-        // Rect pipeline for backgrounds, cursor, selection. Unchanged from
-        // before the atlas refactor.
+        let rect_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("rect uniforms"),
+            contents: bytemuck::bytes_of(&RectUniforms {
+                screen_size: [width.max(1) as f32, height.max(1) as f32],
+                cell_size: [cell_width, cell_height],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let rect_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("rect bind group layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let rect_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("rect bind group"),
+            layout: &rect_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: rect_uniform_buffer.as_entire_binding(),
+            }],
+        });
         let rect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rect shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
+        let rect_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("rect pipeline layout"),
+            bind_group_layouts: &[Some(&rect_bind_group_layout)],
+            immediate_size: 0,
+        });
         let rect_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("rect pipeline"),
-            layout: None,
+            layout: Some(&rect_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &rect_shader,
                 entry_point: Some("vs_rect"),
-                buffers: &[RectVertex::desc()],
+                buffers: &[RectInstance::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -256,32 +344,17 @@ impl TerminalRenderer {
             cache: None,
         });
 
-        // Pull cell metrics + atlas texture handles out of the shared atlas.
-        // The bind group captures the texture view/sampler by clone so the
-        // mutex can be released before the per-pane pipeline setup that
-        // follows.
-        let (cell_width, cell_height, baseline, atlas_size, atlas_texture_view, atlas_sampler) = {
-            let atlas_guard = atlas.lock().expect("glyph atlas mutex poisoned");
-            (
-                atlas_guard.cell_width,
-                atlas_guard.cell_height,
-                atlas_guard.baseline,
-                atlas_guard.atlas_size(),
-                atlas_guard.texture_view.clone(),
-                atlas_guard.sampler.clone(),
-            )
-        };
-
-        let glyph_uniforms = GlyphUniforms {
-            screen_size: [width.max(1) as f32, height.max(1) as f32],
-            atlas_size: [atlas_size as f32; 2],
-        };
         let glyph_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("glyph uniforms"),
-            contents: bytemuck::bytes_of(&glyph_uniforms),
+            contents: bytemuck::bytes_of(&GlyphUniforms {
+                screen_size: [width.max(1) as f32, height.max(1) as f32],
+                atlas_size: [atlas_size as f32; 2],
+                cell_size: [cell_width, cell_height],
+                baseline,
+                _padding: 0.0,
+            }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-
         let glyph_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("glyph bind group layout"),
@@ -314,7 +387,6 @@ impl TerminalRenderer {
                     },
                 ],
             });
-
         let glyph_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("glyph bind group"),
             layout: &glyph_bind_group_layout,
@@ -333,7 +405,6 @@ impl TerminalRenderer {
                 },
             ],
         });
-
         let glyph_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("glyph shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("glyph_shader.wgsl").into()),
@@ -370,14 +441,26 @@ impl TerminalRenderer {
             cache: None,
         });
 
+        let quad_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("renderer quad indices"),
+            contents: bytemuck::cast_slice(&QUAD_INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let glyph_buffer = create_instance_buffer::<GlyphInstance>(&device, "glyph instances", 1);
+        let rect_buffer = create_instance_buffer::<RectInstance>(&device, "rect instances", 1);
+        let cursor_buffer = create_instance_buffer::<RectInstance>(&device, "cursor instance", 1);
+
         Ok(Self {
             gpu,
             surface: None,
             surface_config: None,
             rect_pipeline,
+            rect_bind_group,
+            rect_uniform_buffer,
             glyph_pipeline,
             glyph_bind_group,
             glyph_uniform_buffer,
+            quad_index_buffer,
             atlas,
             atlas_size,
             cell_width,
@@ -386,15 +469,23 @@ impl TerminalRenderer {
             surface_width: width,
             surface_height: height,
             scale_factor,
-            rows: Vec::new(),
+            rows: 0,
+            cols: 0,
+            cells: Vec::new(),
+            glyph_instances: Vec::new(),
+            rect_instances: Vec::new(),
+            glyph_buffer,
+            glyph_buffer_capacity: 1,
+            rect_buffer,
+            rect_buffer_capacity: 1,
+            cursor_buffer,
+            cursor_row: 0,
+            cursor_col: 0,
+            active_glyph_count: 0,
             last_glyph_count: 0,
         })
     }
 
-    /// Resize the wgpu surface to a fresh (physical_width, physical_height,
-    /// scale_factor) tuple. If the scale factor changed, the shared glyph
-    /// atlas is rebuilt at the new DPR so glyphs stay crisp after a display
-    /// move. The rebuild is coordinated across all panes by the caller.
     pub fn resize(&mut self, width: u32, height: u32, scale_factor: f32) -> anyhow::Result<()> {
         if width == 0 || height == 0 {
             return Ok(());
@@ -415,31 +506,24 @@ impl TerminalRenderer {
             self.baseline = atlas.baseline;
             drop(atlas);
             self.scale_factor = scale_factor;
-            self.rows.clear();
+            self.rows = 0;
+            self.cols = 0;
+            self.cells.clear();
+            self.glyph_instances.clear();
+            self.rect_instances.clear();
+            self.active_glyph_count = 0;
         }
 
-        let uniforms = GlyphUniforms {
-            screen_size: [width as f32, height as f32],
-            atlas_size: [self.atlas_size as f32; 2],
-        };
-        self.gpu.queue.write_buffer(
-            &self.glyph_uniform_buffer,
-            0,
-            bytemuck::bytes_of(&uniforms),
-        );
+        self.write_uniforms();
         Ok(())
     }
 
-    /// Calculate grid dimensions from surface size.
     pub fn grid_size(&self) -> (u16, u16) {
         let cols = (self.surface_width as f32 / self.cell_width).floor() as u16;
         let rows = (self.surface_height as f32 / self.cell_height).floor() as u16;
         (cols.max(1), rows.max(1))
     }
 
-    /// Reports the number of cached glyphs in the atlas. Kept as
-    /// `cached_line_count` for backwards compatibility with the perf stats
-    /// pipeline, even though the semantics are now "glyphs not lines."
     pub fn cached_line_count(&self) -> usize {
         self.atlas
             .lock()
@@ -453,11 +537,9 @@ impl TerminalRenderer {
             .as_ref()
             .expect("render() requires a surface; use render_to_view() for offscreen");
         let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(tex)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => tex,
-            other => {
-                anyhow::bail!("failed to get surface texture: {:?}", other);
-            }
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            other => anyhow::bail!("failed to get surface texture: {other:?}"),
         };
         let view = frame.texture.create_view(&Default::default());
         let metrics = self.render_to_view(snapshot, &view)?;
@@ -465,9 +547,6 @@ impl TerminalRenderer {
         Ok(metrics)
     }
 
-    /// Core render pass. Records + submits the GPU work against `view` and
-    /// returns timing breakdowns. Shared between the surface-backed `render`
-    /// path and the offscreen benchmark path.
     pub fn render_to_view(
         &mut self,
         snapshot: &TerminalSnapshot,
@@ -475,140 +554,71 @@ impl TerminalRenderer {
     ) -> anyhow::Result<RenderMetrics> {
         let cache_start = Instant::now();
 
-        // Apply snapshot damage into the persistent row buffer.
-        if self.rows.len() != snapshot.rows {
-            self.rows.resize_with(snapshot.rows, Vec::new);
-        }
-        for (row_idx, cells) in &snapshot.changed_lines {
-            if *row_idx < self.rows.len() {
-                self.rows[*row_idx] = cells.clone();
+        let mut dirty_rows = self.ensure_grid(snapshot.rows, snapshot.cols);
+        dirty_rows.extend(snapshot.changed_lines.iter().map(|(row, _)| *row));
+        dirty_rows.sort_unstable();
+        dirty_rows.dedup();
+
+        {
+            let mut atlas = self.atlas.lock().expect("glyph atlas mutex poisoned");
+            for (row_idx, cells) in &snapshot.changed_lines {
+                let row_start = self.row_start(*row_idx);
+                if row_start >= self.cells.len() {
+                    continue;
+                }
+                for (col, cell) in cells.iter().copied().enumerate().take(self.cols) {
+                    let index = row_start + col;
+                    self.cells[index] = cell;
+                    let ch = display_char(cell.c);
+                    if ch != ' ' {
+                        atlas.prepare(
+                            &self.gpu.queue,
+                            GlyphKey {
+                                ch,
+                                style: cell.style,
+                            },
+                        );
+                    }
+                }
             }
         }
 
-        let cell_w = self.cell_width;
-        let cell_h = self.cell_height;
-        let baseline = self.baseline;
-        let sw = self.surface_width as f32;
-        let sh = self.surface_height as f32;
-        let default_bg = [BG_COLOR.r as f32, BG_COLOR.g as f32, BG_COLOR.b as f32];
-
-        // Rasterize any new glyphs into the shared atlas before the draw
-        // pass. The lock is held for the whole cache warm-up so a concurrent
-        // pane's prepare() doesn't race, then released before we build the
-        // vertex buffers — keeping the hot path lock-free.
         {
-            let mut atlas = self.atlas.lock().expect("glyph atlas mutex poisoned");
-            for cells in &self.rows {
-                for cell in cells {
-                    let ch = if cell.c == '\0' { ' ' } else { cell.c };
-                    if ch == ' ' {
-                        continue;
-                    }
-                    atlas.prepare(&self.gpu.queue, ch);
-                }
+            let atlas_handle = Arc::clone(&self.atlas);
+            let atlas = atlas_handle.lock().expect("glyph atlas mutex poisoned");
+            for row in &dirty_rows {
+                self.rebuild_row(*row, &atlas);
             }
         }
         let cache_update = cache_start.elapsed();
 
         let rect_start = Instant::now();
-
-        // Build background rects and glyph instances in a single pass so we
-        // iterate the grid once.
-        let mut rect_vertices: Vec<RectVertex> = Vec::new();
-        let mut glyph_instances: Vec<GlyphInstance> = Vec::new();
-
-        {
-            let atlas = self.atlas.lock().expect("glyph atlas mutex poisoned");
-            for (row_idx, cells) in self.rows.iter().enumerate() {
-                let row_y = row_idx as f32 * cell_h;
-                for cell in cells {
-                    let cell_x = cell.col as f32 * cell_w;
-
-                    // Background rect (skip default bg to save GPU work).
-                    if cell.bg != default_bg {
-                        let ndc_x = (cell_x / sw) * 2.0 - 1.0;
-                        let ndc_y = 1.0 - ((row_y + cell_h) / sh) * 2.0;
-                        let ndc_w = (cell_w / sw) * 2.0;
-                        let ndc_h = (cell_h / sh) * 2.0;
-                        rect_vertices.extend_from_slice(&rect_quad(
-                            ndc_x,
-                            ndc_y,
-                            ndc_w,
-                            ndc_h,
-                            [cell.bg[0], cell.bg[1], cell.bg[2], 1.0],
-                        ));
-                    }
-
-                    // Glyph instance.
-                    let ch = if cell.c == '\0' { ' ' } else { cell.c };
-                    if ch == ' ' {
-                        continue;
-                    }
-                    // Atlas is already warm from the pass above — lookup-only
-                    // call here to avoid any chance of re-writing the texture.
-                    let Some(region) = atlas.get(ch) else {
-                        continue;
-                    };
-                    let glyph_x = cell_x + region.bearing_x as f32;
-                    let glyph_y = row_y + baseline - region.bearing_y as f32;
-                    glyph_instances.push(GlyphInstance {
-                        pos: [glyph_x, glyph_y],
-                        size: [region.width as f32, region.height as f32],
-                        atlas_pos: [region.atlas_x as f32, region.atlas_y as f32],
-                        color: [cell.fg[0], cell.fg[1], cell.fg[2], 1.0],
-                    });
-                }
-            }
-        }
-
-        // Cursor rect (semi-transparent overlay).
-        let cursor_px = snapshot.cursor_col as f32 * cell_w;
-        let cursor_py = snapshot.cursor_row as f32 * cell_h;
-        let cursor_ndc_x = (cursor_px / sw) * 2.0 - 1.0;
-        let cursor_ndc_y = 1.0 - ((cursor_py + cell_h) / sh) * 2.0;
-        let cursor_ndc_w = (cell_w / sw) * 2.0;
-        let cursor_ndc_h = (cell_h / sh) * 2.0;
-        rect_vertices.extend_from_slice(&rect_quad(
-            cursor_ndc_x,
-            cursor_ndc_y,
-            cursor_ndc_w,
-            cursor_ndc_h,
-            [0.8, 0.8, 0.8, 0.5],
-        ));
-
+        let dirty_ranges = coalesce_rows(&dirty_rows, self.cols);
         let rect_build = rect_start.elapsed();
 
-        // Upload instance/vertex buffers. wgpu's buffer pool handles reuse,
-        // so allocating per-frame here is cheap compared to the old
-        // glyphon shape_until_scroll path.
         let prepare_start = Instant::now();
-        let rect_buffer = (!rect_vertices.is_empty()).then(|| {
-            self.gpu
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("rect vertices"),
-                    contents: bytemuck::cast_slice(&rect_vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
-        });
-        let glyph_buffer = (!glyph_instances.is_empty()).then(|| {
-            self.gpu
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("glyph instances"),
-                    contents: bytemuck::cast_slice(&glyph_instances),
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
-        });
+        for range in &dirty_ranges {
+            self.write_instance_range(range.clone());
+        }
+
+        self.cursor_row = snapshot.cursor_row.min(self.rows.saturating_sub(1));
+        self.cursor_col = snapshot.cursor_col.min(self.cols.saturating_sub(1));
+        let cursor = RectInstance::solid(
+            [self.cursor_col as u16, self.cursor_row as u16],
+            CURSOR_COLOR,
+        );
+        self.gpu
+            .queue
+            .write_buffer(&self.cursor_buffer, 0, bytemuck::bytes_of(&cursor));
         let prepare = prepare_start.elapsed();
 
         let gpu_start = Instant::now();
-        let mut encoder =
-            self.gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("render encoder"),
-                });
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render encoder"),
+            });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -625,94 +635,254 @@ impl TerminalRenderer {
                 ..Default::default()
             });
 
-            // Backgrounds first so glyphs render over them.
-            if let Some(rect_buffer) = &rect_buffer {
+            pass.set_index_buffer(self.quad_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
+            if self.rows != 0 && self.cols != 0 {
+                let instance_count = (self.rows * self.cols) as u32;
                 pass.set_pipeline(&self.rect_pipeline);
-                pass.set_vertex_buffer(0, rect_buffer.slice(..));
-                pass.draw(0..rect_vertices.len() as u32, 0..1);
+                pass.set_bind_group(0, &self.rect_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.rect_buffer.slice(..));
+                pass.draw_indexed(0..QUAD_INDICES.len() as u32, 0, 0..instance_count);
             }
 
-            // Single instanced draw call for all glyphs.
-            if let Some(glyph_buffer) = &glyph_buffer {
+            pass.set_pipeline(&self.rect_pipeline);
+            pass.set_bind_group(0, &self.rect_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.cursor_buffer.slice(..));
+            pass.draw_indexed(0..QUAD_INDICES.len() as u32, 0, 0..1);
+
+            if self.rows != 0 && self.cols != 0 {
+                let instance_count = (self.rows * self.cols) as u32;
                 pass.set_pipeline(&self.glyph_pipeline);
                 pass.set_bind_group(0, &self.glyph_bind_group, &[]);
-                pass.set_vertex_buffer(0, glyph_buffer.slice(..));
-                pass.draw(0..6, 0..glyph_instances.len() as u32);
+                pass.set_vertex_buffer(0, self.glyph_buffer.slice(..));
+                pass.draw_indexed(0..QUAD_INDICES.len() as u32, 0, 0..instance_count);
             }
         }
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
-        self.last_glyph_count = glyph_instances.len();
+        self.last_glyph_count = self.active_glyph_count;
 
         Ok(RenderMetrics {
             cache_update,
             rect_build,
             prepare,
             gpu: gpu_start.elapsed(),
-            text_areas: glyph_instances.len(),
+            text_areas: self.active_glyph_count,
         })
     }
+
+    fn ensure_grid(&mut self, rows: usize, cols: usize) -> Vec<usize> {
+        if self.rows == rows && self.cols == cols {
+            return Vec::new();
+        }
+
+        self.rows = rows;
+        self.cols = cols;
+        let cell_count = rows.saturating_mul(cols).max(1);
+        self.cells = vec![CellInfo::default(); cell_count];
+        self.glyph_instances = (0..cell_count)
+            .map(|index| GlyphInstance::hidden(cell_coord(index, cols.max(1))))
+            .collect();
+        self.rect_instances = (0..cell_count)
+            .map(|index| RectInstance::hidden(cell_coord(index, cols.max(1))))
+            .collect();
+        self.active_glyph_count = 0;
+        self.ensure_instance_capacity(cell_count);
+        self.write_uniforms();
+        (0..rows).collect()
+    }
+
+    fn ensure_instance_capacity(&mut self, cell_count: usize) {
+        let capacity = cell_count.max(1);
+        if capacity > self.glyph_buffer_capacity {
+            self.glyph_buffer = create_instance_buffer::<GlyphInstance>(
+                &self.gpu.device,
+                "glyph instances",
+                capacity,
+            );
+            self.glyph_buffer_capacity = capacity;
+        }
+        if capacity > self.rect_buffer_capacity {
+            self.rect_buffer = create_instance_buffer::<RectInstance>(
+                &self.gpu.device,
+                "rect instances",
+                capacity,
+            );
+            self.rect_buffer_capacity = capacity;
+        }
+    }
+
+    fn rebuild_row(&mut self, row: usize, atlas: &GlyphAtlas) {
+        if row >= self.rows {
+            return;
+        }
+        let start = self.row_start(row);
+        let end = start + self.cols;
+        let old_visible = self.glyph_instances[start..end]
+            .iter()
+            .filter(|instance| instance.is_visible())
+            .count();
+        let mut new_visible = 0usize;
+
+        for col in 0..self.cols {
+            let index = start + col;
+            let cell = self.cells[index];
+            let coord = [col as u16, row as u16];
+
+            self.rect_instances[index] = if cell.bg == BG_COLOR_BYTES {
+                RectInstance::hidden(coord)
+            } else {
+                RectInstance::solid(coord, cell.bg)
+            };
+
+            let ch = display_char(cell.c);
+            self.glyph_instances[index] = if ch == ' ' {
+                GlyphInstance::hidden(coord)
+            } else if let Some(region) = atlas.get(GlyphKey {
+                ch,
+                style: cell.style,
+            }) {
+                new_visible += 1;
+                GlyphInstance::visible(coord, region, cell.fg)
+            } else {
+                GlyphInstance::hidden(coord)
+            };
+        }
+
+        self.active_glyph_count = self.active_glyph_count + new_visible - old_visible;
+    }
+
+    fn row_start(&self, row: usize) -> usize {
+        row * self.cols
+    }
+
+    fn write_instance_range(&self, range: Range<usize>) {
+        if range.is_empty() {
+            return;
+        }
+        self.gpu.queue.write_buffer(
+            &self.glyph_buffer,
+            (range.start * std::mem::size_of::<GlyphInstance>()) as u64,
+            bytemuck::cast_slice(&self.glyph_instances[range.clone()]),
+        );
+        self.gpu.queue.write_buffer(
+            &self.rect_buffer,
+            (range.start * std::mem::size_of::<RectInstance>()) as u64,
+            bytemuck::cast_slice(&self.rect_instances[range]),
+        );
+    }
+
+    fn write_uniforms(&self) {
+        self.gpu.queue.write_buffer(
+            &self.rect_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&RectUniforms {
+                screen_size: [self.surface_width as f32, self.surface_height as f32],
+                cell_size: [self.cell_width, self.cell_height],
+            }),
+        );
+        self.gpu.queue.write_buffer(
+            &self.glyph_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&GlyphUniforms {
+                screen_size: [self.surface_width as f32, self.surface_height as f32],
+                atlas_size: [self.atlas_size as f32; 2],
+                cell_size: [self.cell_width, self.cell_height],
+                baseline: self.baseline,
+                _padding: 0.0,
+            }),
+        );
+    }
 }
 
-/// Resolve a terminal color to RGB floats.
-fn resolve_color(color: Color, colors: &alacritty_terminal::term::color::Colors) -> [f32; 3] {
+fn create_instance_buffer<T: Pod>(
+    device: &wgpu::Device,
+    label: &'static str,
+    capacity: usize,
+) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (capacity * std::mem::size_of::<T>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+fn coalesce_rows(rows: &[usize], cols: usize) -> Vec<Range<usize>> {
+    if rows.is_empty() || cols == 0 {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut start_row = rows[0];
+    let mut prev_row = rows[0];
+    for row in rows.iter().copied().skip(1) {
+        if row == prev_row + 1 {
+            prev_row = row;
+            continue;
+        }
+        ranges.push(start_row * cols..(prev_row + 1) * cols);
+        start_row = row;
+        prev_row = row;
+    }
+    ranges.push(start_row * cols..(prev_row + 1) * cols);
+    ranges
+}
+
+fn cell_coord(index: usize, cols: usize) -> [u16; 2] {
+    [(index % cols) as u16, (index / cols) as u16]
+}
+
+fn display_char(c: char) -> char {
+    if c == '\0' {
+        ' '
+    } else {
+        c
+    }
+}
+
+fn resolve_color(color: Color, colors: &alacritty_terminal::term::color::Colors) -> [u8; 4] {
     match color {
-        Color::Named(name) => {
-            if let Some(rgb) = colors[name] {
-                [
-                    rgb.r as f32 / 255.0,
-                    rgb.g as f32 / 255.0,
-                    rgb.b as f32 / 255.0,
-                ]
-            } else {
-                named_color_fallback(name)
-            }
-        }
-        Color::Indexed(idx) => {
-            if let Some(rgb) = colors[idx as usize] {
-                [
-                    rgb.r as f32 / 255.0,
-                    rgb.g as f32 / 255.0,
-                    rgb.b as f32 / 255.0,
-                ]
-            } else {
-                ansi_256_color(idx)
-            }
-        }
-        Color::Spec(rgb) => [
-            rgb.r as f32 / 255.0,
-            rgb.g as f32 / 255.0,
-            rgb.b as f32 / 255.0,
-        ],
+        Color::Named(name) => colors[name]
+            .map(rgb_to_rgba)
+            .unwrap_or_else(|| named_color_fallback(name)),
+        Color::Indexed(idx) => colors[idx as usize]
+            .map(rgb_to_rgba)
+            .unwrap_or_else(|| ansi_256_color(idx)),
+        Color::Spec(rgb) => [rgb.r, rgb.g, rgb.b, 255],
     }
 }
 
-fn named_color_fallback(name: NamedColor) -> [f32; 3] {
+fn rgb_to_rgba(rgb: alacritty_terminal::vte::ansi::Rgb) -> [u8; 4] {
+    [rgb.r, rgb.g, rgb.b, 255]
+}
+
+fn named_color_fallback(name: NamedColor) -> [u8; 4] {
     match name {
-        NamedColor::Black => [0.0, 0.0, 0.0],
-        NamedColor::Red => [0.8, 0.0, 0.0],
-        NamedColor::Green => [0.0, 0.8, 0.0],
-        NamedColor::Yellow => [0.8, 0.8, 0.0],
-        NamedColor::Blue => [0.0, 0.0, 0.8],
-        NamedColor::Magenta => [0.8, 0.0, 0.8],
-        NamedColor::Cyan => [0.0, 0.8, 0.8],
-        NamedColor::White => [0.75, 0.75, 0.75],
-        NamedColor::BrightBlack => [0.5, 0.5, 0.5],
-        NamedColor::BrightRed => [1.0, 0.0, 0.0],
-        NamedColor::BrightGreen => [0.0, 1.0, 0.0],
-        NamedColor::BrightYellow => [1.0, 1.0, 0.0],
-        NamedColor::BrightBlue => [0.0, 0.0, 1.0],
-        NamedColor::BrightMagenta => [1.0, 0.0, 1.0],
-        NamedColor::BrightCyan => [0.0, 1.0, 1.0],
-        NamedColor::BrightWhite => [1.0, 1.0, 1.0],
-        NamedColor::Foreground => [0.85, 0.85, 0.85],
-        NamedColor::Background => [BG_COLOR.r as f32, BG_COLOR.g as f32, BG_COLOR.b as f32],
-        _ => [0.85, 0.85, 0.85],
+        NamedColor::Black => [0, 0, 0, 255],
+        NamedColor::Red => [204, 0, 0, 255],
+        NamedColor::Green => [0, 204, 0, 255],
+        NamedColor::Yellow => [204, 204, 0, 255],
+        NamedColor::Blue => [0, 0, 204, 255],
+        NamedColor::Magenta => [204, 0, 204, 255],
+        NamedColor::Cyan => [0, 204, 204, 255],
+        NamedColor::White => [191, 191, 191, 255],
+        NamedColor::BrightBlack => [128, 128, 128, 255],
+        NamedColor::BrightRed => [255, 0, 0, 255],
+        NamedColor::BrightGreen => [0, 255, 0, 255],
+        NamedColor::BrightYellow => [255, 255, 0, 255],
+        NamedColor::BrightBlue => [0, 0, 255, 255],
+        NamedColor::BrightMagenta => [255, 0, 255, 255],
+        NamedColor::BrightCyan => [0, 255, 255, 255],
+        NamedColor::BrightWhite => [255, 255, 255, 255],
+        NamedColor::Foreground => [217, 217, 217, 255],
+        NamedColor::Background => BG_COLOR_BYTES,
+        _ => [217, 217, 217, 255],
     }
 }
 
-fn ansi_256_color(idx: u8) -> [f32; 3] {
+fn ansi_256_color(idx: u8) -> [u8; 4] {
     if idx < 16 {
         let name = match idx {
             0 => NamedColor::Black,
@@ -740,35 +910,38 @@ fn ansi_256_color(idx: u8) -> [f32; 3] {
         let r = (idx / 36) % 6;
         let g = (idx / 6) % 6;
         let b = idx % 6;
-        let to_f = |v: u8| {
-            if v == 0 {
-                0.0
-            } else {
-                (55.0 + 40.0 * v as f32) / 255.0
-            }
-        };
-        return [to_f(r), to_f(g), to_f(b)];
+        let to_u8 = |v: u8| if v == 0 { 0 } else { 55 + 40 * v };
+        return [to_u8(r), to_u8(g), to_u8(b), 255];
     }
-    let v = (8 + 10 * (idx - 232)) as f32 / 255.0;
-    [v, v, v]
+    let v = 8 + 10 * (idx - 232);
+    [v, v, v, 255]
 }
 
 fn snapshot_line<T: EventListener>(
     term: &Term<T>,
     row: usize,
+    cols: usize,
     display_offset: usize,
     colors: &alacritty_terminal::term::color::Colors,
 ) -> Vec<CellInfo> {
     let line = Line(row as i32 - display_offset as i32);
     (&term.grid()[line])
         .into_iter()
-        .enumerate()
-        .map(|(col, cell)| CellInfo {
-            col,
+        .take(cols)
+        .map(|cell| CellInfo {
             c: cell.c,
             fg: resolve_color(cell.fg, colors),
             bg: resolve_color(cell.bg, colors),
-            bold: cell.flags.contains(CellFlags::BOLD),
+            style: StyleBits::default()
+                .with_bold(cell.flags.contains(CellFlags::BOLD))
+                .with_italic(cell.flags.contains(CellFlags::ITALIC))
+                .with_underline(cell.flags.intersects(
+                    CellFlags::UNDERLINE
+                        | CellFlags::DOUBLE_UNDERLINE
+                        | CellFlags::UNDERCURL
+                        | CellFlags::DOTTED_UNDERLINE
+                        | CellFlags::DASHED_UNDERLINE,
+                )),
         })
         .collect()
 }

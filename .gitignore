@@ -35,6 +35,7 @@ Thumbs.db
 # Project docs - ignored from git but un-ignored in .ignore for Claude Code
 references/**
 docs/plan/**
+docs/plans/**
 src-tauri/gen/
 
 # AgentOps session artifacts

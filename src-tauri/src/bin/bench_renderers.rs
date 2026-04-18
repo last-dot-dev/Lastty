@@ -10,6 +10,7 @@
 
 use std::env;
 use std::fs;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -22,7 +23,7 @@ use lastty::font_config::FontConfig;
 use lastty::renderer::atlas::GlyphAtlas;
 use lastty::renderer::panes::GpuContext;
 use lastty::renderer::TerminalRenderer;
-use lastty::terminal::render::render_viewport;
+use lastty::terminal::render::{render_viewport, TerminalFrameEvent};
 
 const SCALE_FACTOR: f32 = 2.0;
 
@@ -71,17 +72,11 @@ fn main() -> Result<()> {
     let mut results = Vec::new();
     for workload in &workloads {
         results.push(bench_xterm(workload, &config));
-        results.push(bench_wgpu(
-            workload, &config, &gpu, &atlas, width, height,
-        )?);
+        results.push(bench_wgpu(workload, &config, &gpu, &atlas, width, height)?);
     }
 
-    println!(
-        "renderer  case                     mean_ms  p50_ms  p95_ms  max_ms  iterations"
-    );
-    println!(
-        "--------  -----------------------  -------  ------  ------  ------  ----------"
-    );
+    println!("renderer  case                     mean_ms  p50_ms  p95_ms  max_ms  iterations");
+    println!("--------  -----------------------  -------  ------  ------  ------  ----------");
     for r in &results {
         println!(
             "{:<8}  {:<23}  {:>7.3}  {:>6.3}  {:>6.3}  {:>6.3}  {:>10}",
@@ -177,14 +172,14 @@ fn bench_xterm(workload: &Workload, config: &Config) -> BenchResult {
 
     for i in 0..config.warmup_iterations {
         parser.advance(&mut term, &(workload.tick)(config.cols, config.rows, i));
-        std::hint::black_box(render_viewport(&term));
+        std::hint::black_box(serialize_frame(render_viewport(&term)));
     }
 
     let mut samples = Vec::with_capacity(config.iterations);
     for i in 0..config.iterations {
         parser.advance(&mut term, &(workload.tick)(config.cols, config.rows, i));
         let start = Instant::now();
-        std::hint::black_box(render_viewport(&term));
+        std::hint::black_box(serialize_frame(render_viewport(&term)));
         samples.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
@@ -234,6 +229,7 @@ fn bench_wgpu(
         renderer
             .render_to_view(&snapshot, &view)
             .context("warmup render")?;
+        wait_for_queue(&gpu.device, &gpu.queue)?;
     }
 
     let mut samples = Vec::with_capacity(config.iterations);
@@ -244,6 +240,7 @@ fn bench_wgpu(
         renderer
             .render_to_view(&snapshot, &view)
             .context("bench render")?;
+        wait_for_queue(&gpu.device, &gpu.queue)?;
         samples.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
@@ -266,14 +263,35 @@ fn make_term(cols: usize, rows: usize) -> Term<VoidListener> {
             self.cols
         }
     }
-    Term::new(
-        TermConfig::default(),
-        &Size { cols, rows },
-        VoidListener,
-    )
+    Term::new(TermConfig::default(), &Size { cols, rows }, VoidListener)
 }
 
-fn stats(renderer: &'static str, case: &'static str, config: &Config, samples: &[f64]) -> BenchResult {
+fn serialize_frame(frame: lastty::terminal::render::TerminalFrame) -> String {
+    serde_json::to_string(&TerminalFrameEvent {
+        session_id: "bench".to_string(),
+        frame,
+    })
+    .expect("terminal frame serialization should succeed")
+}
+
+fn wait_for_queue(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<()> {
+    let (tx, rx) = mpsc::sync_channel(1);
+    queue.on_submitted_work_done(move || {
+        let _ = tx.send(());
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .context("wait for submitted GPU work")?;
+    rx.recv().context("receive queue completion signal")?;
+    Ok(())
+}
+
+fn stats(
+    renderer: &'static str,
+    case: &'static str,
+    config: &Config,
+    samples: &[f64],
+) -> BenchResult {
     let total: f64 = samples.iter().sum();
     BenchResult {
         renderer,
@@ -380,9 +398,7 @@ fn workloads() -> Vec<Workload> {
                 for row in 0..rows {
                     let color = 31 + ((row + iter) % 6);
                     out.extend_from_slice(format!("\x1b[{color}m").as_bytes());
-                    let line = format!(
-                        "λ render ✓ café 日本語 résumé naïve row {row} iter {iter}"
-                    );
+                    let line = format!("λ render ✓ café 日本語 résumé naïve row {row} iter {iter}");
                     out.extend_from_slice(line.as_bytes());
                     if row + 1 < rows {
                         out.extend_from_slice(b"\r\n");

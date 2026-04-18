@@ -23,6 +23,7 @@ use lastty::terminal::render::spawn_frame_emitter;
 use lastty::{bus, commands, font_config, platform};
 
 const PERF_EMIT_INTERVAL: Duration = Duration::from_millis(250);
+const RENDER_COALESCE_WINDOW: Duration = Duration::from_millis(8);
 
 fn main() {
     tracing_subscriber::fmt()
@@ -214,7 +215,18 @@ fn main() {
                 let mut last_total_wakeups = 0u64;
 
                 loop {
-                    let dirty = render_coordinator.wait_for_next(rendered_generation);
+                    let mut dirty = render_coordinator.wait_for_next(rendered_generation);
+                    let coalesce_start = Instant::now();
+                    while let Some(remaining) =
+                        RENDER_COALESCE_WINDOW.checked_sub(coalesce_start.elapsed())
+                    {
+                        let Some(newer_dirty) = render_coordinator
+                            .wait_for_next_timeout(dirty.generation, remaining)
+                        else {
+                            break;
+                        };
+                        dirty = newer_dirty;
+                    }
                     rendered_generation = dirty.generation;
 
                     let manager = app_handle.state::<TerminalManager>();
