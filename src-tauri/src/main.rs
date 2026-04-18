@@ -335,6 +335,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::create_terminal,
             commands::terminal_resize,
+            commands::terminal_scroll,
             commands::kill_terminal,
             commands::key_input,
             commands::write_benchmark_report,

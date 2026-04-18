@@ -62,16 +62,6 @@ const harness = vi.hoisted(() => {
 
     open(host: Element) {
       this.host = host;
-      const viewport = document.createElement("div");
-      viewport.className = "xterm-viewport";
-      Object.defineProperty(viewport, "clientHeight", {
-        configurable: true,
-        value: 240,
-      });
-      const scrollArea = document.createElement("div");
-      scrollArea.className = "xterm-scroll-area";
-      viewport.appendChild(scrollArea);
-      host.appendChild(viewport);
     }
 
     write(data: Uint8Array | string) {
@@ -189,6 +179,7 @@ import TerminalViewport from "./TerminalViewport";
 import { resetTerminalHostRegistryForTests } from "./TerminalHostRegistry";
 
 const decoder = new TextDecoder();
+const resizeObserverCallbacks: ResizeObserverCallback[] = [];
 let container: HTMLDivElement;
 let root: Root;
 
@@ -202,11 +193,13 @@ describe("TerminalViewport", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
+    resizeObserverCallbacks.length = 0;
     globalThis.ResizeObserver = class ResizeObserverShim {
       callback: ResizeObserverCallback;
 
       constructor(callback: ResizeObserverCallback) {
         this.callback = callback;
+        resizeObserverCallbacks.push(callback);
       }
 
       observe() {}
@@ -319,7 +312,7 @@ describe("TerminalViewport", () => {
     expect(decodeWrites(terminal)).toEqual(["RESTORED", "\u001b[H\u001b[2JLIVE"]);
   });
 
-  it("sizes the xterm scroll area from backend history metadata", async () => {
+  it("scrolls the backend display upward when the user wheels up over the host", async () => {
     harness.getTerminalFrameMock.mockResolvedValueOnce(
       makeFrame(false, "\u001b[Hvisible", { total_lines: 120, display_offset: 0 }),
     );
@@ -327,32 +320,124 @@ describe("TerminalViewport", () => {
     await renderViewport();
 
     const host = container.querySelector('[data-testid="terminal-host"]');
-    const scrollArea = host?.querySelector(".xterm-scroll-area") as HTMLDivElement | null;
-    const viewport = host?.querySelector(".xterm-viewport") as HTMLDivElement | null;
-
-    expect(scrollArea?.style.height).toBe("1200px");
-    expect(viewport?.scrollTop).toBe(960);
-  });
-
-  it("routes native viewport scrolling back into backend display offset updates", async () => {
-    harness.getTerminalFrameMock.mockResolvedValueOnce(
-      makeFrame(false, "\u001b[Hvisible", { total_lines: 120, display_offset: 0 }),
-    );
-
-    await renderViewport();
-
-    const host = container.querySelector('[data-testid="terminal-host"]');
-    const viewport = host?.querySelector(".xterm-viewport") as HTMLDivElement | null;
-    expect(viewport).not.toBeNull();
+    expect(host).not.toBeNull();
 
     await act(async () => {
-      if (!viewport) return;
-      viewport.scrollTop = 950;
-      viewport.dispatchEvent(new Event("scroll"));
+      // cell height = fontSize (14) * lineHeight (1.2) = 16.8; -50 / 16.8 = -2.97 → -2 lines; flip sign → +2
+      host?.dispatchEvent(new WheelEvent("wheel", { deltaY: -50, bubbles: true, cancelable: true }));
+      await flush();
+    });
+
+    expect(harness.terminalScrollMock).toHaveBeenCalledWith("session-1", 2);
+  });
+
+  it("scrolls the backend display downward when the user wheels down over the host", async () => {
+    harness.getTerminalFrameMock.mockResolvedValueOnce(
+      makeFrame(false, "\u001b[Hvisible", { total_lines: 120, display_offset: 5 }),
+    );
+
+    await renderViewport();
+
+    const host = container.querySelector('[data-testid="terminal-host"]');
+
+    await act(async () => {
+      host?.dispatchEvent(new WheelEvent("wheel", { deltaY: 50, bubbles: true, cancelable: true }));
+      await flush();
+    });
+
+    expect(harness.terminalScrollMock).toHaveBeenCalledWith("session-1", -2);
+  });
+
+  it("does not forward wheel events while the alternate screen is active", async () => {
+    harness.getTerminalFrameMock.mockResolvedValueOnce(makeFrame(true, "\u001b[?1049hALT"));
+
+    await renderViewport();
+
+    const host = container.querySelector('[data-testid="terminal-host"]');
+
+    await act(async () => {
+      host?.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true, cancelable: true }));
+      await flush();
+    });
+
+    expect(harness.terminalScrollMock).not.toHaveBeenCalled();
+  });
+
+  it("accumulates fractional wheel deltas across events before emitting a scroll line", async () => {
+    harness.getTerminalFrameMock.mockResolvedValueOnce(
+      makeFrame(false, "\u001b[Hvisible", { total_lines: 120, display_offset: 0 }),
+    );
+
+    await renderViewport();
+
+    const host = container.querySelector('[data-testid="terminal-host"]');
+
+    await act(async () => {
+      // wheel up; cell height ≈ 16.8; -10 + -4 = -14 < cell height → no call yet
+      host?.dispatchEvent(new WheelEvent("wheel", { deltaY: -10, bubbles: true, cancelable: true }));
+      host?.dispatchEvent(new WheelEvent("wheel", { deltaY: -4, bubbles: true, cancelable: true }));
+      await flush();
+    });
+
+    expect(harness.terminalScrollMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      // -14 + -5 = -19 crosses -16.8 → emits 1 line up (positive lines to Rust)
+      host?.dispatchEvent(new WheelEvent("wheel", { deltaY: -5, bubbles: true, cancelable: true }));
       await flush();
     });
 
     expect(harness.terminalScrollMock).toHaveBeenCalledWith("session-1", 1);
+  });
+
+  it("clears the xterm scrollback on the first frame after a host resize", async () => {
+    await renderViewport();
+
+    const terminal = lastTerminal();
+    const writesBefore = decodeWrites(terminal).length;
+
+    await act(async () => {
+      for (const cb of resizeObserverCallbacks) {
+        cb([], {} as ResizeObserver);
+      }
+      harness.emit("term:frame", {
+        session_id: "session-1",
+        frame: makeFrame(false, "AFTER_RESIZE"),
+      } satisfies TerminalFrameEvent);
+      await flush();
+    });
+
+    const writesAfter = decodeWrites(terminal);
+    expect(writesAfter.length).toBe(writesBefore + 1);
+    expect(writesAfter.at(-1)).toBe("\u001b[3JAFTER_RESIZE");
+
+    // Subsequent frames without a resize should not include the clear.
+    await act(async () => {
+      harness.emit("term:frame", {
+        session_id: "session-1",
+        frame: makeFrame(false, "NEXT_FRAME"),
+      } satisfies TerminalFrameEvent);
+      await flush();
+    });
+
+    expect(decodeWrites(terminal).at(-1)).toBe("NEXT_FRAME");
+  });
+
+  it("does not forward wheel events when there is no rust-side scrollback", async () => {
+    harness.getTerminalFrameMock.mockResolvedValueOnce(
+      makeFrame(false, "\u001b[Hvisible", { total_lines: 24, display_offset: 0 }),
+    );
+
+    await renderViewport();
+
+    const host = container.querySelector('[data-testid="terminal-host"]');
+
+    await act(async () => {
+      host?.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true, cancelable: true }));
+      await flush();
+    });
+
+    expect(harness.terminalScrollMock).not.toHaveBeenCalled();
   });
 });
 
