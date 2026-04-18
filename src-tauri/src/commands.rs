@@ -347,8 +347,10 @@ pub async fn get_terminal_frame(
 ) -> Result<TerminalFrame, String> {
     let id = SessionId::parse(&session_id)?;
     let session = state.get(&id).ok_or("session not found")?;
+    // Always full repaint here: the caller is the frontend's initial paint
+    // for a (re-)mounted pane and has no prior state to diff against.
     let term = session.term.lock();
-    Ok(crate::terminal::render::render_viewport(&term))
+    Ok(crate::terminal::render::render_viewport_full(&term))
 }
 
 #[cfg(test)]

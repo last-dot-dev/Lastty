@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{Term, TermMode};
+use alacritty_terminal::term::{LineDamageBounds, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -18,6 +19,7 @@ use super::manager::TerminalManager;
 use super::session::SessionId;
 
 const PERF_EMIT_INTERVAL: Duration = Duration::from_millis(250);
+const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(4);
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct TerminalFrame {
@@ -54,8 +56,8 @@ fn emit_frame_for_session<R: Runtime>(
     };
 
     let frame_start = Instant::now();
-    let term = term_arc.lock();
-    let frame = render_viewport(&term);
+    let mut term = term_arc.lock();
+    let frame = render_viewport(&mut term);
     let ansi_bytes = frame.ansi.len();
     app_handle
         .emit(
@@ -90,17 +92,32 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
         let mut last_perf_emit = Instant::now();
         let mut last_total_wakeups = 0u64;
 
+        let mut last_emit: Option<Instant> = None;
         if let Some(metrics) = emit_frame_for_session(&app_handle, initial_session_id) {
             avg_frame_ms = metrics.frame_ms;
             avg_ansi_bytes = metrics.ansi_bytes as f64;
             frames_since_emit = 1;
+            last_emit = Some(Instant::now());
         }
         let mut rendered_generation = render_coordinator.current_generation();
 
         loop {
             let dirty = render_coordinator.wait_for_next(rendered_generation);
+
+            // Cap emit rate during bursts. Idle keystrokes pay no cost because
+            // last_emit will be stale; back-to-back marks get coalesced into one
+            // full-viewport render of the latest state.
+            if let Some(last) = last_emit {
+                let elapsed = last.elapsed();
+                if elapsed < MIN_FRAME_INTERVAL {
+                    thread::sleep(MIN_FRAME_INTERVAL - elapsed);
+                }
+            }
+
+            let gen_at_render = render_coordinator.current_generation();
             if let Some(metrics) = emit_frame_for_session(&app_handle, dirty.session_id) {
-                rendered_generation = dirty.generation;
+                rendered_generation = gen_at_render;
+                last_emit = Some(Instant::now());
                 avg_frame_ms = avg_frame_ms * 0.8 + metrics.frame_ms * 0.2;
                 avg_ansi_bytes = avg_ansi_bytes * 0.8 + metrics.ansi_bytes as f64 * 0.2;
                 frames_since_emit += 1;
@@ -144,16 +161,93 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
     })
 }
 
-pub fn render_viewport<T: EventListener>(term: &Term<T>) -> TerminalFrame {
+/// Streaming render: returns a partial frame (just the damaged lines) when
+/// alacritty's damage tracking allows it, falling back to a full repaint when
+/// damage is global or scrollback is in view. Consumes the term's damage state.
+pub fn render_viewport<T: EventListener>(term: &mut Term<T>) -> TerminalFrame {
+    let damage_kind = match term.damage() {
+        TermDamage::Full => DamageKind::Full,
+        TermDamage::Partial(iter) => DamageKind::Partial(iter.collect()),
+    };
+    term.reset_damage();
+
+    let display_offset = term.grid().display_offset();
+    // Scrollback uses the full path: alacritty's per-line damage only covers
+    // the live viewport, so off-screen content must be repainted entirely.
+    let use_full = display_offset != 0 || matches!(damage_kind, DamageKind::Full);
+
+    let body = if use_full {
+        render_full(term)
+    } else {
+        match damage_kind {
+            DamageKind::Partial(lines) if !lines.is_empty() => {
+                render_partial(term, &lines, term.columns())
+            }
+            _ => String::with_capacity(32),
+        }
+    };
+
+    finalize_frame(term, body)
+}
+
+/// Always renders the full visible grid. Used for initial frontend paint
+/// (`commands.rs::get_terminal_frame`) where the receiver has no prior state
+/// and a partial diff would leave most of the screen blank.
+pub fn render_viewport_full<T: EventListener>(term: &Term<T>) -> TerminalFrame {
+    finalize_frame(term, render_full(term))
+}
+
+fn finalize_frame<T: EventListener>(term: &Term<T>, mut out: String) -> TerminalFrame {
     let content = term.renderable_content();
-    let num_cols = term.columns();
-    let num_lines = term.screen_lines();
     let cursor = content.cursor;
     let cursor_visible = content.mode.contains(TermMode::SHOW_CURSOR);
     let display_offset = content.display_offset;
     let alternate_screen = content.mode.contains(TermMode::ALT_SCREEN);
     let total_lines = term.grid().total_lines();
 
+    out.push_str("\x1b[0m");
+
+    if cursor_visible && display_offset == 0 {
+        out.push_str("\x1b[?25h");
+        let cursor_viewport_line = cursor.point.line.0;
+        if cursor_viewport_line >= 0 {
+            let cy = cursor_viewport_line as usize + 1;
+            let cx = cursor.point.column.0 + 1;
+            let _ = write!(out, "\x1b[{};{}H", cy, cx);
+        }
+    } else {
+        out.push_str("\x1b[?25l");
+    }
+
+    TerminalFrame {
+        ansi: out.into_bytes(),
+        cursor_x: cursor.point.column.0,
+        cursor_y: {
+            let line = cursor.point.line.0 + display_offset as i32;
+            if line >= 0 {
+                line as usize
+            } else {
+                0
+            }
+        },
+        cursor_visible,
+        display_offset,
+        total_lines,
+        alternate_screen,
+    }
+}
+
+enum DamageKind {
+    Full,
+    Partial(Vec<LineDamageBounds>),
+}
+
+/// Full repaint path: emits clear-screen + every visible cell. Stable signature
+/// taking `&Term` so benches can drive it without `&mut` access.
+pub fn render_full<T: EventListener>(term: &Term<T>) -> String {
+    let content = term.renderable_content();
+    let num_cols = term.columns();
+    let num_lines = term.screen_lines();
     let mut out = String::with_capacity(num_cols * num_lines * 10);
     out.push_str("\x1b[H\x1b[2J");
 
@@ -187,49 +281,77 @@ pub fn render_viewport<T: EventListener>(term: &Term<T>) -> TerminalFrame {
             prev_flags = cell.flags;
         }
 
-        let c = cell.c;
-        if c == '\0' || c == ' ' || c.is_ascii_control() {
-            out.push(' ');
-        } else {
-            out.push(c);
-        }
+        push_cell_char(&mut out, cell);
+    }
 
-        if let Some(zerowidth) = cell.zerowidth() {
-            for &zw in zerowidth {
-                out.push(zw);
+    out
+}
+
+pub fn render_partial<T: EventListener>(
+    term: &Term<T>,
+    damaged: &[LineDamageBounds],
+    num_cols: usize,
+) -> String {
+    // Estimate output size from the actual damage extent (cells × ~6 bytes
+    // for SGR + char) — better than a fixed grid-sized allocation for the
+    // small, typical-case partial frames where this path matters.
+    let damaged_cells: usize = damaged
+        .iter()
+        .map(|d| d.right.saturating_sub(d.left) + 1)
+        .sum();
+    let mut out = String::with_capacity(damaged_cells * 6 + damaged.len() * 16);
+
+    let grid = term.grid();
+
+    for bounds in damaged {
+        let line = bounds.line;
+        let left = bounds.left.min(num_cols.saturating_sub(1));
+        let right = bounds.right.min(num_cols.saturating_sub(1));
+
+        // Reset SGR at line start so attrs leaking in from prior frames are
+        // cleared, then re-emit per-cell SGR as needed.
+        let _ = write!(out, "\x1b[{};{}H\x1b[0m", line + 1, left + 1);
+
+        let mut prev_fg = Color::Named(NamedColor::Foreground);
+        let mut prev_bg = Color::Named(NamedColor::Background);
+        let mut prev_flags = Flags::empty();
+
+        let row = &grid[Line(line as i32)];
+        for col in left..=right {
+            let cell = &row[Column(col)];
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
             }
+
+            let needs_sgr = cell.fg != prev_fg || cell.bg != prev_bg || cell.flags != prev_flags;
+            if needs_sgr {
+                emit_sgr(&mut out, cell.fg, cell.bg, cell.flags);
+                prev_fg = cell.fg;
+                prev_bg = cell.bg;
+                prev_flags = cell.flags;
+            }
+
+            push_cell_char(&mut out, cell);
         }
     }
 
-    out.push_str("\x1b[0m");
+    out
+}
 
-    if cursor_visible && display_offset == 0 {
-        out.push_str("\x1b[?25h");
-        let cursor_viewport_line = cursor.point.line.0;
-        if cursor_viewport_line >= 0 {
-            let cy = cursor_viewport_line as usize + 1;
-            let cx = cursor.point.column.0 + 1;
-            let _ = write!(out, "\x1b[{};{}H", cy, cx);
-        }
+fn push_cell_char(out: &mut String, cell: &alacritty_terminal::term::cell::Cell) {
+    let c = cell.c;
+    if c == '\0' || c == ' ' || c.is_ascii_control() {
+        out.push(' ');
     } else {
-        out.push_str("\x1b[?25l");
+        out.push(c);
     }
 
-    TerminalFrame {
-        ansi: out.into_bytes(),
-        cursor_x: cursor.point.column.0,
-        cursor_y: {
-            let line = cursor.point.line.0 + display_offset as i32;
-            if line >= 0 {
-                line as usize
-            } else {
-                0
-            }
-        },
-        cursor_visible,
-        display_offset,
-        total_lines,
-        alternate_screen,
+    if let Some(zerowidth) = cell.zerowidth() {
+        for &zw in zerowidth {
+            out.push(zw);
+        }
     }
 }
 
@@ -358,12 +480,44 @@ mod tests {
         parser.advance(term, bytes);
     }
 
-    fn render_text(term: &Term<VoidListener>) -> String {
-        String::from_utf8(render_viewport(term).ansi).expect("frame ansi should be valid utf-8")
-    }
-
+    /// Walks the grid directly so callers can use it without consuming the
+    /// term's damage state (which `render_viewport` does on every call).
+    /// Honors `display_offset` so scrollback tests see history rows.
     fn viewport_text(term: &Term<VoidListener>) -> String {
-        strip_csi(&render_text(term))
+        use alacritty_terminal::index::{Column, Line};
+        use alacritty_terminal::term::cell::Flags;
+        let cols = term.columns();
+        let lines = term.screen_lines();
+        let display_offset = term.grid().display_offset() as i32;
+        let grid = term.grid();
+        let mut out = String::new();
+        for row_idx in 0..lines {
+            if row_idx > 0 {
+                out.push_str("\r\n");
+            }
+            let line = Line(row_idx as i32 - display_offset);
+            let row = &grid[line];
+            for col in 0..cols {
+                let cell = &row[Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                    || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                let c = cell.c;
+                if c == '\0' || c.is_ascii_control() {
+                    out.push(' ');
+                } else {
+                    out.push(c);
+                }
+                if let Some(zerowidth) = cell.zerowidth() {
+                    for &zw in zerowidth {
+                        out.push(zw);
+                    }
+                }
+            }
+        }
+        out
     }
 
     fn visible_text(term: &Term<VoidListener>) -> String {
@@ -374,35 +528,12 @@ mod tests {
             .join("\n")
     }
 
-    fn strip_csi(input: &str) -> String {
-        let mut out = String::with_capacity(input.len());
-        let mut chars = input.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch == '\u{1b}' {
-                if matches!(chars.peek(), Some('[')) {
-                    chars.next();
-                    for next in chars.by_ref() {
-                        if ('@'..='~').contains(&next) {
-                            break;
-                        }
-                    }
-                }
-                continue;
-            }
-
-            out.push(ch);
-        }
-
-        out
-    }
-
     #[test]
     fn render_viewport_hides_cursor_when_show_cursor_mode_is_disabled() {
         let mut term = term(8, 4);
         apply_escape_sequence(&mut term, b"\x1b[?25l");
 
-        let frame = render_viewport(&term);
+        let frame = render_viewport(&mut term);
         let ansi = String::from_utf8(frame.ansi).expect("frame ansi should be valid utf-8");
 
         assert!(!frame.cursor_visible);
@@ -414,7 +545,7 @@ mod tests {
         let mut term = term(8, 4);
         apply_escape_sequence(&mut term, b"\x1b[?1049h");
 
-        let frame = render_viewport(&term);
+        let frame = render_viewport(&mut term);
 
         assert!(frame.alternate_screen);
     }
@@ -426,7 +557,7 @@ mod tests {
 
         term.scroll_display(Scroll::Top);
 
-        let frame = render_viewport(&term);
+        let frame = render_viewport(&mut term);
         let visible = visible_text(&term);
         let ansi = String::from_utf8(frame.ansi).expect("frame ansi should be valid utf-8");
 
@@ -451,7 +582,7 @@ mod tests {
             screen_lines: 4,
         });
 
-        let frame = render_viewport(&term);
+        let frame = render_viewport(&mut term);
         let visible = visible_text(&term);
 
         assert_eq!(frame.display_offset, 0);
@@ -465,7 +596,7 @@ mod tests {
         let mut term = term(4, 2);
         apply_escape_sequence(&mut term, "😀x".as_bytes());
 
-        let frame = render_viewport(&term);
+        let frame = render_viewport(&mut term);
         let viewport = viewport_text(&term);
 
         assert_eq!(viewport, "😀x \r\n    ");
@@ -479,7 +610,7 @@ mod tests {
         let mut term = term(2, 2);
         apply_escape_sequence(&mut term, "A😀".as_bytes());
 
-        let frame = render_viewport(&term);
+        let frame = render_viewport(&mut term);
         let viewport = viewport_text(&term);
 
         assert_eq!(viewport, "A\r\n😀");
@@ -493,7 +624,7 @@ mod tests {
         let mut term = term(4, 2);
         apply_escape_sequence(&mut term, "e\u{301}x".as_bytes());
 
-        let frame = render_viewport(&term);
+        let frame = render_viewport(&mut term);
         let viewport = viewport_text(&term);
 
         assert_eq!(viewport, "e\u{301}x  \r\n    ");

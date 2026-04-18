@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod agents;
+pub mod bench_corpus;
 pub mod bus;
 pub mod commands;
 pub mod events;
