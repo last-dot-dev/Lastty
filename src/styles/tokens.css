@@ -5,6 +5,8 @@
     local("JetBrainsMono Nerd Font Mono"), local("JetBrainsMono Nerd Font"),
     local("FiraCode Nerd Font Mono"), local("Hack Nerd Font Mono"),
     local("IosevkaTerm Nerd Font Mono");
+  /* Scope fallback to the PUA ranges Nerd Fonts use so regular ASCII/mono
+     glyphs keep coming from --font-mono instead of the symbol font. */
   unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
 }
 
