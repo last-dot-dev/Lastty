@@ -58,9 +58,6 @@
         # macOS-specific build inputs
         darwinBuildInputs = with pkgs; [
           darwin.apple_sdk.frameworks.WebKit
-          darwin.apple_sdk.frameworks.Metal
-          darwin.apple_sdk.frameworks.CoreGraphics
-          darwin.apple_sdk.frameworks.QuartzCore
           darwin.apple_sdk.frameworks.Security
           darwin.apple_sdk.frameworks.AppKit
         ];
@@ -83,7 +80,6 @@
           inherit buildInputs;
 
           shellHook = if isDarwin then ''
-            # macOS: Metal is used by wgpu automatically
           '' else ''
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath libraries}:$LD_LIBRARY_PATH"
             export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS"

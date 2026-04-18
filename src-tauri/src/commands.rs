@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 use alacritty_terminal::grid::Scroll;
 use serde::Deserialize;
@@ -10,15 +9,12 @@ use tauri::{AppHandle, State};
 use crate::agents::{self, AgentDefinition, LaunchAgentRequest, LaunchAgentResult, RuleDefinition};
 use crate::bus::{BusEvent, EventBus, RecordingInfo};
 use crate::font_config::FontConfig;
-use crate::renderer::panes::{PaneFrameRect, PaneSurface, PaneSurfaces};
-use crate::renderer::TerminalRenderer;
 use crate::runtime_modes;
 use crate::terminal::manager::TerminalManager;
 use crate::terminal::render::TerminalFrame;
 use crate::terminal::session::CommandSpec;
 use crate::terminal::session::{SessionId, SessionInfo};
 
-/// Build environment variables for the terminal session.
 fn build_pane_env() -> HashMap<String, String> {
     let mut env = HashMap::new();
     env.insert("TERM".to_string(), "xterm-256color".to_string());
@@ -181,15 +177,6 @@ pub async fn get_benchmark_mode() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn get_renderer_mode() -> Result<Option<String>, String> {
-    let resolved = match runtime_modes::resolved_renderer_mode() {
-        runtime_modes::RendererMode::AlacrittySpike => runtime_modes::RendererMode::Xterm,
-        mode => mode,
-    };
-    Ok(Some(resolved.as_str().to_string()))
-}
-
-#[tauri::command]
 pub async fn get_benchmark_config() -> Result<runtime_modes::BenchmarkConfig, String> {
     Ok(runtime_modes::benchmark_config())
 }
@@ -346,264 +333,6 @@ pub async fn read_recording(
     event_bus: State<'_, EventBus>,
 ) -> Result<String, String> {
     event_bus.read_recording(&session_id)
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PaneViewDto {
-    pub session_id: String,
-    /// AppKit points, top-left origin in the window's content view.
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-/// React pushes the current pane layout here whenever it changes. Each pane
-/// gets its own child NSView + wgpu surface; the diff against the previous
-/// layout decides what to create, move, or destroy.
-#[tauri::command]
-pub async fn update_pane_layout(
-    panes: Vec<PaneViewDto>,
-    window: tauri::WebviewWindow,
-    surfaces: State<'_, Arc<PaneSurfaces>>,
-    manager: State<'_, TerminalManager>,
-) -> Result<(), String> {
-    // Parse session IDs at the boundary.
-    let mut requested: HashMap<SessionId, PaneViewDto> = HashMap::with_capacity(panes.len());
-    for pane in panes {
-        let id = SessionId::parse(&pane.session_id)?;
-        requested.insert(id, pane);
-    }
-
-    let scale = window.scale_factor().unwrap_or(1.0) as f64;
-    let existing_ids = surfaces.session_ids();
-
-    // Remove panes that dropped out of the new layout.
-    for id in &existing_ids {
-        if !requested.contains_key(id) {
-            remove_pane(&surfaces, &window, *id).await?;
-        }
-    }
-
-    // Create or move the rest.
-    for (id, dto) in requested {
-        let frame = PaneFrameRect {
-            x: dto.x,
-            y: dto.y,
-            width: dto.width.max(1.0),
-            height: dto.height.max(1.0),
-            scale,
-        };
-        if existing_ids.contains(&id) {
-            move_pane(&surfaces, &manager, &window, id, frame).await?;
-        } else {
-            create_pane(&surfaces, &manager, &window, id, frame).await?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn remove_pane(
-    surfaces: &Arc<PaneSurfaces>,
-    window: &tauri::WebviewWindow,
-    session_id: SessionId,
-) -> Result<(), String> {
-    let surfaces = Arc::clone(surfaces);
-    run_on_main(window, move || {
-        surfaces.with_mut(|panes| {
-            if let Some(pane) = panes.remove(&session_id) {
-                #[cfg(target_os = "macos")]
-                pane.subview.remove_from_superview();
-                drop(pane);
-            }
-        });
-        Ok(())
-    })
-    .await
-}
-
-async fn create_pane(
-    surfaces: &Arc<PaneSurfaces>,
-    manager: &State<'_, TerminalManager>,
-    window: &tauri::WebviewWindow,
-    session_id: SessionId,
-    frame: PaneFrameRect,
-) -> Result<(), String> {
-    let (cols, rows, cell_w, cell_h) = build_pane_on_main(surfaces, window, session_id, frame)?;
-    resize_session_term(manager, session_id, cols, rows, cell_w, cell_h)?;
-    Ok(())
-}
-
-async fn move_pane(
-    surfaces: &Arc<PaneSurfaces>,
-    manager: &State<'_, TerminalManager>,
-    window: &tauri::WebviewWindow,
-    session_id: SessionId,
-    frame: PaneFrameRect,
-) -> Result<(), String> {
-    let Some((cols, rows, cell_w, cell_h)) = move_pane_on_main(surfaces, window, session_id, frame)?
-    else {
-        return Ok(());
-    };
-    resize_session_term(manager, session_id, cols, rows, cell_w, cell_h)?;
-    Ok(())
-}
-
-/// Dispatches `f` to the main thread and blocks until it completes. NSView
-/// creation and manipulation must happen on the main thread.
-async fn run_on_main<F>(window: &tauri::WebviewWindow, f: F) -> Result<(), String>
-where
-    F: FnOnce() -> Result<(), String> + Send + 'static,
-{
-    let (tx, rx) = std::sync::mpsc::channel();
-    window
-        .run_on_main_thread(move || {
-            let _ = tx.send(f());
-        })
-        .map_err(|e| e.to_string())?;
-    tokio::task::spawn_blocking(move || rx.recv().map_err(|e| e.to_string())?)
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-#[cfg(not(target_os = "macos"))]
-fn build_pane_on_main(
-    _surfaces: &Arc<PaneSurfaces>,
-    _window: &tauri::WebviewWindow,
-    _session_id: SessionId,
-    _frame: PaneFrameRect,
-) -> Result<(u16, u16, u16, u16), String> {
-    Err("per-pane rendering is only implemented on macOS".to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn move_pane_on_main(
-    _surfaces: &Arc<PaneSurfaces>,
-    _window: &tauri::WebviewWindow,
-    _session_id: SessionId,
-    _frame: PaneFrameRect,
-) -> Result<Option<(u16, u16, u16, u16)>, String> {
-    Err("per-pane rendering is only implemented on macOS".to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn build_pane_on_main(
-    surfaces: &Arc<PaneSurfaces>,
-    window: &tauri::WebviewWindow,
-    session_id: SessionId,
-    frame: PaneFrameRect,
-) -> Result<(u16, u16, u16, u16), String> {
-    use crate::platform::macos;
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    let surfaces_clone = Arc::clone(surfaces);
-    let window_clone = window.clone();
-    window
-        .run_on_main_thread(move || {
-            let result: Result<(u16, u16, u16, u16), String> = (|| {
-                let ns_window = window_clone
-                    .ns_window()
-                    .map_err(|e| format!("failed to get NSWindow: {e}"))?;
-                let subview = unsafe {
-                    macos::create_pane_subview(
-                        ns_window,
-                        frame.x,
-                        frame.y,
-                        frame.width,
-                        frame.height,
-                        frame.scale,
-                    )
-                };
-                let surface = unsafe {
-                    macos::create_wgpu_surface(&surfaces_clone.gpu.instance, &subview)
-                        .map_err(|e| format!("wgpu surface: {e}"))?
-                };
-                let (pw, ph) = frame.physical_size();
-                let renderer = TerminalRenderer::new_for_pane(
-                    surfaces_clone.gpu.clone(),
-                    surface,
-                    pw,
-                    ph,
-                    Arc::clone(&surfaces_clone.atlas),
-                    frame.scale as f32,
-                )
-                .map_err(|e| format!("renderer: {e}"))?;
-                let cell_w = renderer.cell_width;
-                let cell_h = renderer.cell_height;
-                let (cols, rows) = renderer.grid_size();
-                let pane = PaneSurface {
-                    subview,
-                    renderer,
-                    frame,
-                    rendered_generation: 0,
-                };
-                surfaces_clone.with_mut(|panes| {
-                    panes.insert(session_id, pane);
-                });
-                Ok((cols, rows, cell_w as u16, cell_h as u16))
-            })();
-            let _ = tx.send(result);
-        })
-        .map_err(|e| e.to_string())?;
-    rx.recv().map_err(|e| e.to_string())?
-}
-
-#[cfg(target_os = "macos")]
-fn move_pane_on_main(
-    surfaces: &Arc<PaneSurfaces>,
-    window: &tauri::WebviewWindow,
-    session_id: SessionId,
-    frame: PaneFrameRect,
-) -> Result<Option<(u16, u16, u16, u16)>, String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let surfaces_clone = Arc::clone(surfaces);
-    window
-        .run_on_main_thread(move || {
-            let result = surfaces_clone.with_mut(|panes| {
-                let Some(pane) = panes.get_mut(&session_id) else {
-                    return Ok(None);
-                };
-                pane.subview.set_frame_points(
-                    frame.x,
-                    frame.y,
-                    frame.width,
-                    frame.height,
-                    frame.scale,
-                );
-                if pane.frame == frame {
-                    // Nothing changed physically; skip the expensive resize.
-                    return Ok(None);
-                }
-                let (pw, ph) = frame.physical_size();
-                pane.renderer
-                    .resize(pw, ph, frame.scale as f32)
-                    .map_err(|e| format!("resize: {e}"))?;
-                pane.frame = frame;
-                let cell_w = pane.renderer.cell_width;
-                let cell_h = pane.renderer.cell_height;
-                let (cols, rows) = pane.renderer.grid_size();
-                Ok(Some((cols, rows, cell_w as u16, cell_h as u16)))
-            });
-            let _ = tx.send(result);
-        })
-        .map_err(|e| e.to_string())?;
-    rx.recv().map_err(|e| e.to_string())?
-}
-
-fn resize_session_term(
-    manager: &State<'_, TerminalManager>,
-    session_id: SessionId,
-    cols: u16,
-    rows: u16,
-    cell_w: u16,
-    cell_h: u16,
-) -> Result<(), String> {
-    let session = manager.get(&session_id).ok_or("session not found")?;
-    session.resize(cols, rows, cell_w, cell_h)?;
-    drop(session);
-    manager.mark_dirty(session_id);
-    Ok(())
 }
 
 #[tauri::command]

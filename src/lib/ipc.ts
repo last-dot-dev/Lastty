@@ -63,10 +63,6 @@ export async function getBenchmarkConfig(): Promise<BenchmarkConfig> {
   return invoke("get_benchmark_config");
 }
 
-export async function getRendererMode(): Promise<string | null> {
-  return invoke("get_renderer_mode");
-}
-
 export interface FontConfig {
   family: string;
   size_px: number;
@@ -286,15 +282,3 @@ export async function getTerminalFrame(
   return invoke("get_terminal_frame", { sessionId });
 }
 
-export interface PaneLayoutEntry {
-  session_id: string;
-  /// AppKit points (≈ CSS px on macOS) relative to the window's content view.
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export async function updatePaneLayout(panes: PaneLayoutEntry[]): Promise<void> {
-  return invoke("update_pane_layout", { panes });
-}

@@ -1,30 +1,4 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RendererMode {
-    Xterm,
-    Wgpu,
-    AlacrittySpike,
-}
-
-impl RendererMode {
-    pub fn from_env_value(value: Option<&str>) -> Self {
-        match value {
-            Some("wgpu") => Self::Wgpu,
-            Some("alacritty_spike") => Self::AlacrittySpike,
-            Some("xterm") | None => Self::Xterm,
-            Some(_) => Self::Xterm,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Xterm => "xterm",
-            Self::Wgpu => "wgpu",
-            Self::AlacrittySpike => "alacritty_spike",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BenchmarkMode {
     Xterm,
 }
@@ -52,10 +26,6 @@ pub struct BenchmarkConfig {
     pub warmup_iterations: u32,
     pub output_path: String,
     pub force_failure_message: Option<String>,
-}
-
-pub fn resolved_renderer_mode() -> RendererMode {
-    RendererMode::from_env_value(std::env::var("LASTTY_RENDERER").ok().as_deref())
 }
 
 pub fn resolved_benchmark_mode() -> Option<BenchmarkMode> {
@@ -99,36 +69,7 @@ fn env_u32(get_var: &mut impl FnMut(&str) -> Option<String>, key: &str, default:
 mod tests {
     use std::collections::HashMap;
 
-    use super::{benchmark_config_from_env, BenchmarkMode, RendererMode};
-
-    #[test]
-    fn defaults_to_xterm_renderer() {
-        assert_eq!(RendererMode::from_env_value(None), RendererMode::Xterm);
-    }
-
-    #[test]
-    fn parses_known_renderer_modes() {
-        assert_eq!(
-            RendererMode::from_env_value(Some("wgpu")),
-            RendererMode::Wgpu
-        );
-        assert_eq!(
-            RendererMode::from_env_value(Some("alacritty_spike")),
-            RendererMode::AlacrittySpike
-        );
-        assert_eq!(
-            RendererMode::from_env_value(Some("xterm")),
-            RendererMode::Xterm
-        );
-    }
-
-    #[test]
-    fn unknown_renderer_mode_falls_back_to_xterm() {
-        assert_eq!(
-            RendererMode::from_env_value(Some("mystery")),
-            RendererMode::Xterm
-        );
-    }
+    use super::{benchmark_config_from_env, BenchmarkMode};
 
     #[test]
     fn parses_benchmark_mode() {

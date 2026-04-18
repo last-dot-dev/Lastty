@@ -2,28 +2,17 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-use tauri::{window::Color, Emitter, Manager, TitleBarStyle};
+use tauri::{window::Color, Manager, TitleBarStyle};
 use tracing_subscriber::EnvFilter;
 
 use lastty::render_sync::RenderCoordinator;
-use lastty::renderer::atlas::GlyphAtlas;
-use lastty::renderer::panes::{GpuContext, PaneSurfaces};
-use lastty::renderer::TerminalRenderer;
-use lastty::runtime_modes::{
-    resolved_benchmark_mode, resolved_renderer_mode, BenchmarkMode, RendererMode,
-};
+use lastty::runtime_modes::{resolved_benchmark_mode, BenchmarkMode};
 use lastty::terminal::manager::TerminalManager;
 use lastty::terminal::render::spawn_frame_emitter;
-use lastty::{bus, commands, font_config, platform};
-
-const PERF_EMIT_INTERVAL: Duration = Duration::from_millis(250);
-const RENDER_COALESCE_WINDOW: Duration = Duration::from_millis(8);
+use lastty::{bus, commands};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -36,7 +25,6 @@ fn main() {
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
             let benchmark_mode = resolved_benchmark_mode();
-            let renderer_mode = resolved_renderer_mode();
 
             #[cfg(target_os = "macos")]
             {
@@ -58,10 +46,8 @@ fn main() {
                 bus::EventBus::new(app.handle().clone(), PathBuf::from(".lastty-recordings"));
             app.manage(event_bus);
 
-            // Create terminal manager.
             let manager = TerminalManager::new(app.handle().clone(), render_coordinator.clone());
 
-            // Create a default terminal session (starts at 80x24, will resize after renderer init).
             let cwd = std::env::var("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/"));
@@ -73,12 +59,14 @@ fn main() {
             let session_id = manager
                 .create_session(None, &cwd, &env, 80, 24, None, None, None, None)
                 .expect("failed to create initial terminal session");
-            app.handle().state::<bus::EventBus>().publish(bus::BusEvent::SessionCreated {
-                session_id: session_id.to_string(),
-                agent_id: None,
-            });
+            app.handle()
+                .state::<bus::EventBus>()
+                .publish(bus::BusEvent::SessionCreated {
+                    session_id: session_id.to_string(),
+                    agent_id: None,
+                });
 
-            tracing::info!("created initial session: {}", session_id);
+            tracing::info!("created initial session: {session_id}");
 
             app.manage(manager);
             match std::env::current_dir() {
@@ -100,248 +88,7 @@ fn main() {
                 }
             }
 
-            if matches!(renderer_mode, RendererMode::Xterm | RendererMode::AlacrittySpike) {
-                if renderer_mode == RendererMode::AlacrittySpike {
-                    tracing::warn!(
-                        "renderer mode alacritty_spike is not implemented yet; using xterm path"
-                    );
-                } else {
-                    tracing::info!("starting in renderer mode: xterm");
-                }
-                spawn_frame_emitter(app_handle, render_coordinator, session_id);
-                return Ok(());
-            }
-
-            // Bootstrap GPU context + shared glyph atlas. React pushes
-            // per-pane rects via `update_pane_layout`, so we don't create a
-            // surface that renders into the whole window — the bootstrap
-            // subview exists only to give wgpu a valid surface for adapter
-            // probing, and is collapsed to zero size immediately after.
-            let scale_factor = window.scale_factor().unwrap_or(1.0) as f32;
-            let font_config = font_config::FontConfig::DEFAULT;
-            let instance = wgpu::Instance::default();
-
-            #[cfg(target_os = "macos")]
-            let (_bootstrap_subview, bootstrap_surface) = {
-                let ns_window = window.ns_window().expect("failed to get NSWindow handle");
-                let subview = unsafe { platform::macos::create_metal_subview(ns_window) };
-                subview.set_frame_points(0.0, 0.0, 0.0, 0.0, scale_factor as f64);
-                let surface = unsafe {
-                    platform::macos::create_wgpu_surface(&instance, &subview)
-                        .expect("failed to create wgpu surface from Metal subview")
-                };
-                (subview, surface)
-            };
-            #[cfg(not(target_os = "macos"))]
-            let bootstrap_surface = instance
-                .create_surface(window.clone())
-                .expect("failed to create bootstrap wgpu surface");
-
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-
-            let gpu: anyhow::Result<GpuContext> = rt.block_on(async {
-                let adapter = instance
-                    .request_adapter(&wgpu::RequestAdapterOptions {
-                        power_preference: wgpu::PowerPreference::HighPerformance,
-                        compatible_surface: Some(&bootstrap_surface),
-                        ..Default::default()
-                    })
-                    .await?;
-                let (device, queue) = adapter
-                    .request_device(&wgpu::DeviceDescriptor::default())
-                    .await?;
-                let caps = bootstrap_surface.get_capabilities(&adapter);
-                let format = caps
-                    .formats
-                    .iter()
-                    .find(|f| f.is_srgb())
-                    .copied()
-                    .unwrap_or(caps.formats[0]);
-                Ok(GpuContext {
-                    instance: instance.clone(),
-                    adapter,
-                    device,
-                    queue,
-                    format,
-                })
-            });
-
-            let gpu = match gpu {
-                Ok(ctx) => ctx,
-                Err(error) => {
-                    tracing::error!("failed to bootstrap wgpu context: {error}");
-                    return Err(error.into());
-                }
-            };
-            drop(bootstrap_surface);
-
-            let atlas = match GlyphAtlas::new(&gpu.device, &gpu.queue, font_config, scale_factor) {
-                Ok(atlas) => atlas,
-                Err(error) => {
-                    tracing::error!("failed to build glyph atlas: {error}");
-                    return Err(error.into());
-                }
-            };
-
-            tracing::info!(
-                "wgpu bootstrap complete: scale={scale_factor} cell={:.1}x{:.1}",
-                atlas.cell_width,
-                atlas.cell_height,
-            );
-
-            let pane_surfaces = Arc::new(PaneSurfaces::new(gpu, atlas, font_config));
-            app.manage(pane_surfaces.clone());
-
-            std::thread::spawn(move || {
-                let trace_start = Instant::now();
-                let mut perf_trace = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/lastty-perf.jsonl")
-                    .ok();
-                let mut last_perf_emit = Instant::now();
-                let mut avg_snapshot_ms = 0.0f64;
-                let mut avg_render_ms = 0.0f64;
-                let mut avg_frame_ms = 0.0f64;
-                let mut avg_cache_ms = 0.0f64;
-                let mut avg_rect_ms = 0.0f64;
-                let mut avg_prepare_ms = 0.0f64;
-                let mut avg_gpu_ms = 0.0f64;
-                let mut frames_since_emit = 0u64;
-                let mut rendered_generation = 0u64;
-                let mut last_total_wakeups = 0u64;
-
-                loop {
-                    let mut dirty = render_coordinator.wait_for_next(rendered_generation);
-                    let coalesce_start = Instant::now();
-                    while let Some(remaining) =
-                        RENDER_COALESCE_WINDOW.checked_sub(coalesce_start.elapsed())
-                    {
-                        let Some(newer_dirty) = render_coordinator
-                            .wait_for_next_timeout(dirty.generation, remaining)
-                        else {
-                            break;
-                        };
-                        dirty = newer_dirty;
-                    }
-                    rendered_generation = dirty.generation;
-
-                    let manager = app_handle.state::<TerminalManager>();
-                    let term_arc = manager.get(&dirty.session_id).map(|s| s.term.clone());
-                    drop(manager);
-                    let Some(term_arc) = term_arc else { continue };
-
-                    let snapshot_start = Instant::now();
-                    let snapshot = {
-                        let mut term = term_arc.lock();
-                        TerminalRenderer::snapshot(&mut term)
-                    };
-                    let snapshot_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
-                    let changed_lines = snapshot.changed_line_count();
-
-                    let render_start = Instant::now();
-                    let render_outcome = pane_surfaces.with_pane_mut(&dirty.session_id, |pane| {
-                        pane.rendered_generation = dirty.generation;
-                        pane.renderer.render(&snapshot)
-                    });
-
-                    let Some(result) = render_outcome else { continue };
-                    let render_metrics = match result {
-                        Ok(metrics) => metrics,
-                        Err(error) => {
-                            tracing::error!("render error: {error}");
-                            continue;
-                        }
-                    };
-
-                    let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-                    let frame_ms = snapshot_ms + render_ms;
-                    let cache_ms = render_metrics.cache_update.as_secs_f64() * 1000.0;
-                    let rect_ms = render_metrics.rect_build.as_secs_f64() * 1000.0;
-                    let prepare_ms = render_metrics.prepare.as_secs_f64() * 1000.0;
-                    let gpu_ms = render_metrics.gpu.as_secs_f64() * 1000.0;
-                    avg_snapshot_ms = avg_snapshot_ms * 0.8 + snapshot_ms * 0.2;
-                    avg_render_ms = avg_render_ms * 0.8 + render_ms * 0.2;
-                    avg_frame_ms = avg_frame_ms * 0.8 + frame_ms * 0.2;
-                    avg_cache_ms = avg_cache_ms * 0.8 + cache_ms * 0.2;
-                    avg_rect_ms = avg_rect_ms * 0.8 + rect_ms * 0.2;
-                    avg_prepare_ms = avg_prepare_ms * 0.8 + prepare_ms * 0.2;
-                    avg_gpu_ms = avg_gpu_ms * 0.8 + gpu_ms * 0.2;
-                    frames_since_emit += 1;
-                    let latest_generation = render_coordinator.current_generation();
-                    let total_wakeups = render_coordinator.total_wakeups();
-                    let wakeups_since_emit = total_wakeups.saturating_sub(last_total_wakeups);
-                    let pending_updates = latest_generation.saturating_sub(rendered_generation);
-
-                    if frame_ms > 33.0 {
-                        tracing::debug!(
-                            "slow frame session={} generation={} frame_ms={:.2} cache_ms={:.2} rect_ms={:.2} prepare_ms={:.2} gpu_ms={:.2} changed_lines={} text_areas={} wakeups_since_emit={} pending_updates={}",
-                            dirty.session_id,
-                            latest_generation,
-                            frame_ms,
-                            cache_ms,
-                            rect_ms,
-                            prepare_ms,
-                            gpu_ms,
-                            changed_lines,
-                            render_metrics.text_areas,
-                            wakeups_since_emit,
-                            pending_updates,
-                        );
-                    }
-
-                    let emit_elapsed = last_perf_emit.elapsed();
-                    if emit_elapsed >= PERF_EMIT_INTERVAL {
-                        let fps = frames_since_emit as f64 / emit_elapsed.as_secs_f64();
-                        app_handle
-                            .emit(
-                                "perf:stats",
-                                serde_json::json!({
-                                    "snapshot_ms": avg_snapshot_ms,
-                                    "render_ms": avg_render_ms,
-                                    "frame_ms": avg_frame_ms,
-                                    "cache_ms": avg_cache_ms,
-                                    "rect_ms": avg_rect_ms,
-                                    "prepare_ms": avg_prepare_ms,
-                                    "gpu_ms": avg_gpu_ms,
-                                    "fps": fps,
-                                    "changed_lines": changed_lines,
-                                    "text_areas": render_metrics.text_areas,
-                                    "wakeups": wakeups_since_emit,
-                                    "generation": latest_generation,
-                                    "pending_updates": pending_updates,
-                                }),
-                            )
-                            .ok();
-                        if let Some(file) = perf_trace.as_mut() {
-                            let _ = writeln!(
-                                file,
-                                "{}",
-                                serde_json::json!({
-                                    "ts_ms": trace_start.elapsed().as_millis(),
-                                    "frame_ms": avg_frame_ms,
-                                    "cache_ms": avg_cache_ms,
-                                    "rect_ms": avg_rect_ms,
-                                    "prepare_ms": avg_prepare_ms,
-                                    "gpu_ms": avg_gpu_ms,
-                                    "fps": fps,
-                                    "text_areas": render_metrics.text_areas,
-                                    "wakeups": wakeups_since_emit,
-                                    "generation": latest_generation,
-                                    "pending_updates": pending_updates,
-                                })
-                            );
-                        }
-                        last_perf_emit = Instant::now();
-                        last_total_wakeups = total_wakeups;
-                        frames_since_emit = 0;
-                    }
-                }
-            });
-
+            spawn_frame_emitter(app_handle, render_coordinator, session_id);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -355,7 +102,6 @@ fn main() {
             commands::get_benchmark_mode,
             commands::get_benchmark_config,
             commands::get_font_config,
-            commands::get_renderer_mode,
             commands::get_primary_session_id,
             commands::list_sessions,
             commands::restore_terminal_sessions,
@@ -367,7 +113,6 @@ fn main() {
             commands::read_recording,
             commands::terminal_input,
             commands::get_terminal_frame,
-            commands::update_pane_layout,
         ])
         .run(tauri::generate_context!())
         .expect("error running lastty");
