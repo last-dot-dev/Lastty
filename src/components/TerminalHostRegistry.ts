@@ -53,6 +53,8 @@ interface Entry {
   focusedRef: { current: boolean };
   snapshotCallbackRef: { current: ((s: PersistedTerminalSnapshot) => void) | undefined };
   restoredSnapshotRef: { current: PersistedTerminalSnapshot | null | undefined };
+  lastSentCols: number;
+  lastSentRows: number;
   disposed: boolean;
 }
 
@@ -85,17 +87,76 @@ function setStatus(entry: Entry, status: string) {
 
 const ERASE_SAVED_LINES = new Uint8Array([0x1b, 0x5b, 0x33, 0x4a]);
 
+const PASTE_CHUNK_CHARS = 16 * 1024;
+
+// Large pastes (xterm wraps bracketed pastes in a single onData call) can stall
+// the renderer while TextEncoder + IPC serialize the whole blob. Split into
+// 16K-char chunks with a macrotask yield between sends so paint lands in
+// between.
+function sendTerminalInput(sessionId: string, data: string) {
+  if (data.length <= PASTE_CHUNK_CHARS) {
+    const bytes = Array.from(new TextEncoder().encode(data));
+    terminalInput(sessionId, bytes).catch((error) => {
+      console.error("terminal input failed", error);
+    });
+    return;
+  }
+
+  let offset = 0;
+  const sendNext = () => {
+    if (offset >= data.length) return;
+    let end = Math.min(offset + PASTE_CHUNK_CHARS, data.length);
+    if (end < data.length) {
+      const code = data.charCodeAt(end - 1);
+      if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+    }
+    const chunk = data.slice(offset, end);
+    offset = end;
+    const bytes = Array.from(new TextEncoder().encode(chunk));
+    terminalInput(sessionId, bytes)
+      .then(() => {
+        if (offset < data.length) setTimeout(sendNext, 0);
+      })
+      .catch((error) => {
+        console.error("terminal input failed", error);
+      });
+  };
+  sendNext();
+}
+
+// Consume query-response sequences that apps sometimes echo back into the
+// output stream (CPR replies, focus in/out, DECRQSS replies). Without this the
+// parser tries to interpret them and can render stray cells or mis-advance the
+// cursor. `parser` is a proposed API, so guard against its absence.
+function suppressQueryResponses(terminal: Terminal) {
+  const parser = (terminal as unknown as { parser?: { registerCsiHandler?: Function; registerDcsHandler?: Function } }).parser;
+  if (!parser?.registerCsiHandler) return;
+  parser.registerCsiHandler({ final: "R" }, () => true);
+  parser.registerCsiHandler(
+    { final: "I" },
+    (params: (number | number[])[]) => params.length === 0,
+  );
+  parser.registerCsiHandler({ final: "O" }, () => true);
+  parser.registerDcsHandler?.({ intermediates: "$", final: "r" }, () => true);
+}
+
 function syncTerminalViewport(entry: Entry): Promise<void> {
   try {
     entry.fit.fit();
   } catch {
     return Promise.resolve();
   }
-  return terminalResize(entry.sessionId, entry.terminal.cols, entry.terminal.rows).catch(
-    (error) => {
-      console.error("terminal resize failed", error);
-    },
-  );
+
+  const { cols, rows } = entry.terminal;
+  if (cols === entry.lastSentCols && rows === entry.lastSentRows) {
+    return Promise.resolve();
+  }
+  entry.lastSentCols = cols;
+  entry.lastSentRows = rows;
+
+  return terminalResize(entry.sessionId, cols, rows).catch((error) => {
+    console.error("terminal resize failed", error);
+  });
 }
 
 function cellHeightPx(entry: Entry): number {
@@ -167,6 +228,7 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
   terminal.loadAddon(entry.fit);
   entry.serialize = new SerializeAddon();
   terminal.loadAddon(entry.serialize);
+  suppressQueryResponses(terminal);
 
   const scheduleSnapshot = () => {
     if (entry.snapshotTimer !== null) {
@@ -252,10 +314,7 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
 
   terminal.onData((data) => {
     if (entry.blockedRef.current) return;
-    const bytes = Array.from(new TextEncoder().encode(data));
-    terminalInput(sessionId, bytes).catch((error) => {
-      console.error("terminal input failed", error);
-    });
+    sendTerminalInput(sessionId, data);
   });
 
   const unlistenFrame = await listen<TerminalFrameEvent>("term:frame", (event) => {
@@ -308,6 +367,8 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     focusedRef: { current: props.focused },
     snapshotCallbackRef: { current: props.onSnapshotChange },
     restoredSnapshotRef: { current: props.restoredSnapshot },
+    lastSentCols: 0,
+    lastSentRows: 0,
     disposed: false,
   };
 
