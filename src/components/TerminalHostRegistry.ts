@@ -20,6 +20,22 @@ import { xtermThemeFor } from "./terminalTheme";
 
 type EffectiveTheme = "light" | "dark";
 
+// `options.theme` swap doesn't invalidate the WebGL renderer's glyph texture
+// atlas, so cells rendered under the old theme keep their baked-in fg/bg.
+// Clear the atlas (if the build supports it) and force a full repaint.
+function repaintAfterThemeChange(terminal: Terminal): void {
+  try {
+    (terminal as Terminal & { clearTextureAtlas?: () => void }).clearTextureAtlas?.();
+  } catch {
+    // best-effort
+  }
+  try {
+    terminal.refresh(0, terminal.rows - 1);
+  } catch {
+    // terminal may not yet be attached
+  }
+}
+
 export interface SessionHostProps {
   blocked: boolean;
   focused: boolean;
@@ -405,6 +421,7 @@ export function attachTerminalHost(
 
   if (entry.terminal.options && props.theme) {
     entry.terminal.options.theme = xtermThemeFor(props.theme);
+    repaintAfterThemeChange(entry.terminal);
   }
 
   if (props.focused && !props.blocked) {
@@ -441,6 +458,7 @@ export function updateTerminalHostProps(
   }
   if (props.theme && entry.terminal.options) {
     entry.terminal.options.theme = xtermThemeFor(props.theme);
+    repaintAfterThemeChange(entry.terminal);
   }
   if (props.focused && !entry.blockedRef.current) {
     try {

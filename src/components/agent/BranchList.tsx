@@ -4,9 +4,8 @@ import StatusBadge from "./StatusBadge";
 export interface BranchRow {
   sessionId: string;
   paneId: string | null;
-  branch: string;
+  title: string;
   status: AgentStatus;
-  color: string;
   focused: boolean;
   merged: boolean;
 }
@@ -43,11 +42,10 @@ export default function BranchList({
             onClick={() => row.paneId && onFocus(row.paneId)}
             disabled={!row.paneId}
           >
-            <span
-              className={`agent-dot ${row.status === "needs_help" ? "is-needs-help" : ""}`}
-              style={{ background: row.color }}
-            />
-            <span className="agent-branch-row__name">{row.branch}</span>
+            {row.status === "needs_help" && (
+              <span className="agent-dot is-needs-help" />
+            )}
+            <span className="agent-branch-row__name">{row.title}</span>
             <StatusBadge status={row.status} />
           </button>
         ))}

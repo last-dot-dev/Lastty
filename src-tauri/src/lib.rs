@@ -4,6 +4,7 @@ pub mod bus;
 pub mod commands;
 pub mod events;
 pub mod font_config;
+pub mod git_info;
 pub mod input;
 pub mod protocol;
 pub mod render_sync;

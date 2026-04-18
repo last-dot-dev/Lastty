@@ -133,6 +133,15 @@ export interface SessionInfo {
   started_at_ms: number;
 }
 
+export interface GitInfo {
+  repo: string;
+  branch: string;
+}
+
+export async function getGitInfo(cwd: string): Promise<GitInfo | null> {
+  return invoke("get_git_info", { cwd });
+}
+
 export interface AgentDefinition {
   id: string;
   name: string;

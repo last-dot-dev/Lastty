@@ -111,6 +111,7 @@ fn main() {
             commands::respond_to_approval,
             commands::list_recordings,
             commands::read_recording,
+            commands::get_git_info,
             commands::terminal_input,
             commands::get_terminal_frame,
         ])

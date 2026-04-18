@@ -336,6 +336,11 @@ pub async fn read_recording(
 }
 
 #[tauri::command]
+pub async fn get_git_info(cwd: String) -> Option<crate::git_info::GitInfo> {
+    crate::git_info::detect(Path::new(&cwd))
+}
+
+#[tauri::command]
 pub async fn get_terminal_frame(
     session_id: String,
     state: State<'_, TerminalManager>,

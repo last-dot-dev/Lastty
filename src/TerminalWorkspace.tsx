@@ -21,7 +21,6 @@ import {
   type ToolCallRecord,
 } from "./app/agentUi";
 import {
-  assignBranchColor,
   deriveAgentStatus,
   deriveAgentType,
   deriveBranchName,
@@ -80,6 +79,7 @@ import { releaseTerminalHost } from "./components/TerminalHostRegistry";
 import ViewPreview from "./components/agent/ViewPreview";
 import {
   createTerminal,
+  getGitInfo,
   getPrimarySessionId,
   killTerminal,
   launchAgent,
@@ -89,6 +89,7 @@ import {
   restoreTerminalSessions,
   type AgentDefinition,
   type AgentUiEvent,
+  type GitInfo,
   type LaunchAgentResult,
   type SessionExitEvent,
   type SessionInfo,
@@ -118,6 +119,7 @@ export default function TerminalWorkspace() {
   const [restoredSnapshotsBySessionId, setRestoredSnapshotsBySessionId] = useState<
     Record<string, PersistedTerminalSnapshot>
   >({});
+  const [gitInfoByCwd, setGitInfoByCwd] = useState<Record<string, GitInfo | null>>({});
   const sessionCreationOrder = useMemo(
     () => Object.keys(sessionInfoById),
     [sessionInfoById],
@@ -142,6 +144,32 @@ export default function TerminalWorkspace() {
       window.removeEventListener("keydown", onKey);
     };
   }, [draggingPaneId]);
+
+  useEffect(() => {
+    const cwds = new Set<string>();
+    for (const session of Object.values(sessionInfoById)) {
+      if (session.cwd) cwds.add(session.cwd);
+    }
+    const missing = [...cwds].filter((cwd) => !(cwd in gitInfoByCwd));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    void Promise.all(
+      missing.map(async (cwd) => {
+        const info = await getGitInfo(cwd).catch(() => null);
+        return [cwd, info] as const;
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setGitInfoByCwd((current) => {
+        const next = { ...current };
+        for (const [cwd, info] of entries) next[cwd] = info;
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionInfoById, gitInfoByCwd]);
 
   const theme = useThemeOverride();
 
@@ -671,9 +699,8 @@ export default function TerminalWorkspace() {
         return {
           sessionId,
           paneId: pane?.id ?? null,
-          branch: deriveBranchName(info),
+          title: deriveTaskName(info),
           status,
-          color: assignBranchColor(sessionId, sessionCreationOrder),
           focused: pane?.id === focusedPaneId,
           merged: false,
         };
@@ -793,6 +820,7 @@ export default function TerminalWorkspace() {
                       sessionInfoById,
                       agentUiBySession,
                       restoredSnapshotsBySessionId,
+                      gitInfoByCwd,
                       onCloseChrome: (paneId) => handleClose(paneId),
                       onToggleMaximize: handleToggleMaximizePane,
                       onResize: (path, handleIndex, delta, baseWeights) =>
@@ -876,6 +904,7 @@ interface RenderLayoutCtx {
   sessionInfoById: Record<string, SessionInfo>;
   agentUiBySession: Record<string, AgentSessionState>;
   restoredSnapshotsBySessionId: Record<string, PersistedTerminalSnapshot>;
+  gitInfoByCwd: Record<string, GitInfo | null>;
   onCloseChrome: (paneId: string) => Promise<void>;
   onToggleMaximize: (paneId: string) => void;
   onResize: (
@@ -906,6 +935,7 @@ function renderLayout(
     sessionInfoById,
     agentUiBySession,
     restoredSnapshotsBySessionId,
+    gitInfoByCwd,
     onCloseChrome,
     onToggleMaximize,
     onResize,
@@ -1007,8 +1037,10 @@ function renderLayout(
         ) : (
           <div className="agent-pane-footer">
             <span>
-              {toolCounts.root} tool call{toolCounts.root === 1 ? "" : "s"}
-              {toolCounts.sub > 0 ? ` (+${toolCounts.sub} subagent)` : ""}
+              {(() => {
+                const info = session ? gitInfoByCwd[session.cwd] : null;
+                return info ? `${info.repo} · ${info.branch}` : "";
+              })()}
             </span>
             <span>
               {session?.worktree_path ? "isolated" : "shared"} · {agentType}
