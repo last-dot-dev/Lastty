@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 
 import type { PersistedTerminalSnapshot } from "../app/sessionRestore";
@@ -19,7 +19,7 @@ interface TerminalViewportProps {
   sessionId: string;
 }
 
-export default function TerminalViewport({
+function TerminalViewportInner({
   blocked = false,
   focused,
   onActivate,
@@ -91,3 +91,18 @@ export default function TerminalViewport({
     </div>
   );
 }
+
+// Layout re-renders (splitter drags, sibling updates) fire ancestor renders with
+// fresh inline callback identities. The registry stashes the latest callbacks in
+// refs via updateTerminalHostProps, and parent state setters use updater form, so
+// skipping re-renders driven solely by callback identity is safe.
+const TerminalViewport = memo(TerminalViewportInner, (prev, next) => {
+  return (
+    prev.sessionId === next.sessionId &&
+    prev.blocked === next.blocked &&
+    prev.focused === next.focused &&
+    prev.restoredSnapshot === next.restoredSnapshot
+  );
+});
+
+export default TerminalViewport;
