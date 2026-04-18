@@ -1,3 +1,13 @@
+@font-face {
+  font-family: "NFFallback";
+  src: local("Symbols Nerd Font Mono"), local("Symbols Nerd Font"),
+    local("MesloLGM Nerd Font Mono"), local("MesloLGS NF"),
+    local("JetBrainsMono Nerd Font Mono"), local("JetBrainsMono Nerd Font"),
+    local("FiraCode Nerd Font Mono"), local("Hack Nerd Font Mono"),
+    local("IosevkaTerm Nerd Font Mono");
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI",
     Roboto, system-ui, sans-serif;

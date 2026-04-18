@@ -217,7 +217,7 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
 
   try {
     const font = await getFontConfig();
-    terminal.options.fontFamily = `${font.family}, Monaco, monospace`;
+    terminal.options.fontFamily = `${font.family}, NFFallback, Monaco, monospace`;
     terminal.options.fontSize = font.size_px;
     terminal.options.lineHeight = font.line_height;
   } catch {
@@ -337,7 +337,7 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
   const terminal = new Terminal({
     allowProposedApi: true,
     cursorBlink: true,
-    fontFamily: "Menlo, Monaco, monospace",
+    fontFamily: "Menlo, NFFallback, Monaco, monospace",
     fontSize: 14,
     lineHeight: 1.2,
     scrollback: 10_000,

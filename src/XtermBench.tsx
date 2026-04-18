@@ -75,7 +75,7 @@ export default function XtermBench() {
           rows: config.rows,
           scrollback: 0,
           allowProposedApi: true,
-          fontFamily: `${font.family}, Monaco, monospace`,
+          fontFamily: `${font.family}, NFFallback, Monaco, monospace`,
           fontSize: font.size_px,
           lineHeight: font.line_height,
         });
