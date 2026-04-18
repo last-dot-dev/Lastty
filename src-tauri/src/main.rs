@@ -123,8 +123,11 @@ fn main() {
             commands::set_history_entry_pinned,
             commands::resume_history_entry,
             commands::get_git_info,
+            commands::git_graph,
+            commands::get_workspace_root,
             commands::terminal_input,
             commands::get_terminal_frame,
+            commands::check_command_available,
         ])
         .run(tauri::generate_context!())
         .expect("error running lastty");

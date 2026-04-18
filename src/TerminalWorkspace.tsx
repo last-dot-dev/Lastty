@@ -85,6 +85,8 @@ import {
   createTerminal,
   getGitInfo,
   getPrimarySessionId,
+  getWorkspaceRoot,
+  gitGraph,
   killTerminal,
   launchAgent,
   listAgents,
@@ -93,6 +95,7 @@ import {
   restoreTerminalSessions,
   type AgentDefinition,
   type AgentUiEvent,
+  type GitGraph,
   type GitInfo,
   type LaunchAgentResult,
   type SessionExitEvent,
@@ -101,6 +104,8 @@ import {
   type SessionTitleEvent,
   resumeHistoryEntry,
 } from "./lib/ipc";
+import { layoutGraph } from "./lib/graphLayout";
+import type { SidebarGraph } from "./components/agent/Sidebar";
 
 function needsAttention(message: AgentUiMessage): boolean {
   return (
@@ -138,6 +143,24 @@ export default function TerminalWorkspace() {
     Record<string, PersistedTerminalSnapshot>
   >({});
   const [gitInfoByCwd, setGitInfoByCwd] = useState<Record<string, GitInfo | null>>({});
+  type GraphEntry =
+    | { state: "loading" }
+    | { state: "error"; message: string }
+    | { state: "ready"; graph: GitGraph };
+  const [graphByCwd, setGraphByCwd] = useState<Record<string, GraphEntry>>({});
+  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getWorkspaceRoot()
+      .then((root) => {
+        if (!cancelled) setWorkspaceRoot(root);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [historyPanelPaneId, setHistoryPanelPaneId] = useState<string | null>(null);
   const [viewingHistoryByPaneId, setViewingHistoryByPaneId] = useState<
     Record<string, HistoryEntry>
@@ -206,6 +229,56 @@ export default function TerminalWorkspace() {
       cancelled = true;
     };
   }, [sessionInfoById, gitInfoByCwd]);
+
+  const focusedCwd = useMemo(() => {
+    if (focusedSessionId) {
+      const info = sessionInfoById[focusedSessionId];
+      const sessionCwd = info?.worktree_path || info?.cwd || null;
+      if (sessionCwd) return sessionCwd;
+    }
+    return workspaceRoot;
+  }, [focusedSessionId, sessionInfoById, workspaceRoot]);
+
+  useEffect(() => {
+    if (!focusedCwd) return;
+    let cancelled = false;
+    setGraphByCwd((current) =>
+      current[focusedCwd] ? current : { ...current, [focusedCwd]: { state: "loading" } },
+    );
+    void gitGraph(focusedCwd)
+      .then((graph) => {
+        if (cancelled) return;
+        setGraphByCwd((current) => ({
+          ...current,
+          [focusedCwd]: { state: "ready", graph },
+        }));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("git_graph failed for", focusedCwd, error);
+        setGraphByCwd((current) => ({
+          ...current,
+          [focusedCwd]: { state: "error", message },
+        }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [focusedCwd]);
+
+  const sidebarGraph = useMemo<SidebarGraph>(() => {
+    if (!focusedCwd) return { state: "idle", reason: "no repo" };
+    const entry = graphByCwd[focusedCwd];
+    if (!entry) return { state: "loading" };
+    if (entry.state !== "ready") return entry;
+    return {
+      state: "ready",
+      layout: layoutGraph(entry.graph.commits),
+      headSha: entry.graph.head,
+      headRef: entry.graph.head_ref,
+    };
+  }, [focusedCwd, graphByCwd]);
 
   const theme = useThemeOverride();
 
@@ -902,6 +975,8 @@ export default function TerminalWorkspace() {
         sidebarFooterExtras={
           <ThemeToggle override={theme.override} onCycle={theme.cycle} />
         }
+        sidebarGraph={sidebarGraph}
+        nowMs={clock}
       >
         <div className="agent-grid">
           <div

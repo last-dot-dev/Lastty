@@ -84,6 +84,21 @@ export async function terminalInput(
   return invoke("terminal_input", { sessionId, bytes });
 }
 
+const commandAvailabilityCache = new Map<string, Promise<boolean>>();
+
+export function checkCommandAvailable(command: string): Promise<boolean> {
+  let existing = commandAvailabilityCache.get(command);
+  if (!existing) {
+    // Fail open: if the IPC itself errors (e.g. missing in test env), treat
+    // the command as available so a broken check never hides a working button.
+    existing = invoke<boolean>("check_command_available", { command }).catch(
+      () => true,
+    );
+    commandAvailabilityCache.set(command, existing);
+  }
+  return existing;
+}
+
 export async function terminalScroll(
   sessionId: string,
   lines: number,
@@ -162,6 +177,29 @@ export interface GitInfo {
 
 export async function getGitInfo(cwd: string): Promise<GitInfo | null> {
   return invoke("get_git_info", { cwd });
+}
+
+export interface GitCommit {
+  sha: string;
+  parents: string[];
+  subject: string;
+  author: string;
+  committed_at: number;
+  refs: string[];
+}
+
+export interface GitGraph {
+  commits: GitCommit[];
+  head: string | null;
+  head_ref: string | null;
+}
+
+export async function gitGraph(cwd: string, limit?: number): Promise<GitGraph> {
+  return invoke("git_graph", { cwd, limit });
+}
+
+export async function getWorkspaceRoot(): Promise<string> {
+  return invoke("get_workspace_root");
 }
 
 export interface AgentDefinition {

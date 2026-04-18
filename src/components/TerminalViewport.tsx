@@ -1,14 +1,49 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 
 import type { PersistedTerminalSnapshot } from "../app/sessionRestore";
 import { useEffectiveTheme } from "../hooks/useThemeOverride";
+import { checkCommandAvailable, terminalInput } from "../lib/ipc";
 import {
   attachTerminalHost,
   detachTerminalHost,
   subscribeTerminalHostStatus,
   updateTerminalHostProps,
 } from "./TerminalHostRegistry";
+
+function ClaudeLogo() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="#D97757"
+      aria-hidden="true"
+    >
+      <path d="M12 2 Q13 10 22 12 Q13 14 12 22 Q11 14 2 12 Q11 10 12 2 Z" />
+    </svg>
+  );
+}
+
+function CodexLogo() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      aria-hidden="true"
+    >
+      <g transform="translate(12 12)">
+        <ellipse rx="4" ry="9" />
+        <ellipse rx="4" ry="9" transform="rotate(60)" />
+        <ellipse rx="4" ry="9" transform="rotate(120)" />
+      </g>
+    </svg>
+  );
+}
 
 interface TerminalViewportProps {
   blocked?: boolean;
@@ -59,6 +94,38 @@ function TerminalViewportInner({
     });
   }, [blocked, focused, onSnapshotChange, restoredSnapshot, effectiveTheme, sessionId]);
 
+  const [claudeAvailable, setClaudeAvailable] = useState(true);
+  const [codexAvailable, setCodexAvailable] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      checkCommandAvailable("claude"),
+      checkCommandAvailable("codex"),
+    ]).then(([claude, codex]) => {
+      if (cancelled) return;
+      setClaudeAvailable(claude);
+      setCodexAvailable(codex);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const launchCli = useCallback(
+    (command: string, installPackage: string, available: boolean) => {
+      const line = available
+        ? `${command}\n`
+        : `npm i -g ${installPackage} && ${command}\n`;
+      const bytes = Array.from(new TextEncoder().encode(line));
+      void terminalInput(sessionId, bytes);
+      if (!available) {
+        if (command === "claude") setClaudeAvailable(true);
+        if (command === "codex") setCodexAvailable(true);
+      }
+    },
+    [sessionId],
+  );
+
   return (
     <div
       style={{
@@ -71,16 +138,59 @@ function TerminalViewportInner({
       onMouseDown={onActivate}
     >
       <div
-        data-testid="terminal-status"
         style={{
-          padding: "4px 10px",
-          color: "var(--color-text-tertiary)",
-          fontFamily: "var(--font-mono)",
-          fontSize: 11,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 8px",
           borderBottom: "0.5px solid var(--color-border-tertiary)",
         }}
       >
-        {status}
+        <div
+          data-testid="terminal-status"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            color: "var(--color-text-tertiary)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {status}
+        </div>
+        <button
+          type="button"
+          className="terminal-launch-btn"
+          title={
+            claudeAvailable
+              ? "Start Claude Code in this terminal"
+              : "Install and start Claude Code (runs `npm i -g @anthropic-ai/claude-code`)"
+          }
+          aria-label="Start Claude Code in this terminal"
+          onClick={() =>
+            launchCli("claude", "@anthropic-ai/claude-code", claudeAvailable)
+          }
+        >
+          <ClaudeLogo />
+        </button>
+        <button
+          type="button"
+          className="terminal-launch-btn"
+          title={
+            codexAvailable
+              ? "Start Codex CLI in this terminal"
+              : "Install and start Codex CLI (runs `npm i -g @openai/codex`)"
+          }
+          aria-label="Start Codex CLI in this terminal"
+          onClick={() =>
+            launchCli("codex", "@openai/codex", codexAvailable)
+          }
+        >
+          <CodexLogo />
+        </button>
       </div>
       <div
         data-testid="terminal-slot"

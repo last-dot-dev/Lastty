@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import AlertBar, { type BlockedSessionRef } from "./AlertBar";
-import Sidebar from "./Sidebar";
+import Sidebar, { type SidebarGraph } from "./Sidebar";
 import DesktopStrip, { type DesktopEntry } from "./DesktopStrip";
 import type { BranchRow } from "./BranchList";
 
@@ -21,6 +21,8 @@ export default function AgentShell({
   canAcceptPaneDrop,
   renderDesktopPreview,
   sidebarFooterExtras,
+  sidebarGraph,
+  nowMs,
   children,
 }: {
   blocked: BlockedSessionRef[];
@@ -38,6 +40,8 @@ export default function AgentShell({
   canAcceptPaneDrop?: boolean;
   renderDesktopPreview?: (desktopId: string) => ReactNode;
   sidebarFooterExtras?: ReactNode;
+  sidebarGraph: SidebarGraph;
+  nowMs: number;
   children: ReactNode;
 }) {
   return (
@@ -60,6 +64,8 @@ export default function AgentShell({
           doneCount={doneCount}
           onFocus={onFocusBranch}
           footerExtras={sidebarFooterExtras}
+          graph={sidebarGraph}
+          nowMs={nowMs}
         />
         {children}
       </div>

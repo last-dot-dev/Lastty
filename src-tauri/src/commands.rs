@@ -451,6 +451,21 @@ pub async fn get_git_info(cwd: String) -> Option<crate::git_info::GitInfo> {
 }
 
 #[tauri::command]
+pub async fn git_graph(
+    cwd: String,
+    limit: Option<u32>,
+) -> Result<crate::git_graph::GitGraph, String> {
+    crate::git_graph::load(Path::new(&cwd), limit.unwrap_or(200)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_workspace_root() -> Result<String, String> {
+    std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_terminal_frame(
     session_id: String,
     state: State<'_, TerminalManager>,
@@ -461,6 +476,26 @@ pub async fn get_terminal_frame(
     // for a (re-)mounted pane and has no prior state to diff against.
     let term = session.term.lock();
     Ok(crate::terminal::render::render_viewport_full(&term))
+}
+
+#[tauri::command]
+pub async fn check_command_available(command: String) -> bool {
+    // Restrict to plain binary names so we can safely interpolate into the
+    // shell script below without quoting. Matches what a PTY would try to run.
+    if command.is_empty()
+        || !command
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return false;
+    }
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let script = format!("command -v -- {command}");
+    std::process::Command::new(shell)
+        .args(["-l", "-c", &script])
+        .output()
+        .map(|output| output.status.success() && !output.stdout.is_empty())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
