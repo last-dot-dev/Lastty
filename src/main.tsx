@@ -3,8 +3,11 @@ import { useEffect, useState } from "react";
 import XtermBench from "./XtermBench";
 import TerminalWorkspace from "./TerminalWorkspace";
 import { getBenchmarkMode } from "./lib/ipc";
+import { scheduleUpdateCheck } from "./lib/updater";
 import "./styles/tokens.css";
 import "./styles/agent.css";
+
+scheduleUpdateCheck();
 
 function Root() {
   const [benchMode, setBenchMode] = useState<string | null | undefined>(undefined);

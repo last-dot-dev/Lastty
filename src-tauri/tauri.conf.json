@@ -25,6 +25,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "category": "DeveloperTool",
     "shortDescription": "Agent-native tiled terminal for codemaxxing",
     "longDescription": "Lastty is an agent-native tiled terminal. Run coding agents in PTY panes with structured UI updates, built for orchestrating parallel AI workflows.",
@@ -39,6 +40,16 @@
       "minimumSystemVersion": "10.15",
       "signingIdentity": null,
       "providerShortName": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/ForeverAnApple/lastty/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdBNjVCQkY0QkU2NDFGClJXUWZaTDcwdTJWNkFJdFhZYS90WlVCdFNvT1RDYVFVUSs2M2FxTW55eXYycnh5WFk2KzFTL0ZxCg==",
+      "dialog": false
     }
   }
 }
