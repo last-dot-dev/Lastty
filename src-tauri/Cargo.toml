@@ -30,6 +30,13 @@ polling = "3"
 rusqlite = { version = "0.31", features = ["bundled"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-process = "2"
+automerge = "0.5"
+thiserror = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+parking_lot = "0.12"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
