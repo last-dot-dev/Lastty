@@ -270,7 +270,10 @@ pub async fn list_agents() -> Result<Vec<AgentDefinition>, String> {
 
 #[tauri::command]
 pub async fn list_rules() -> Result<Vec<RuleDefinition>, String> {
-    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let cwd = std::env::var("HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
     agents::load_rules(&cwd).map_err(|error| error.to_string())
 }
 
@@ -280,7 +283,10 @@ pub async fn launch_agent(
     state: State<'_, TerminalManager>,
     event_bus: State<'_, EventBus>,
 ) -> Result<LaunchAgentResult, String> {
-    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let cwd = std::env::var("HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
     let result = agents::launch_agent(&state, &cwd, request).map_err(|error| error.to_string())?;
     let agent_id = state
         .get(&SessionId::parse(&result.session_id)?)
