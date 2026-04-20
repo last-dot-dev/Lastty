@@ -352,7 +352,11 @@ mod tests {
         let msgs = run_stream(&[line]);
         assert_eq!(msgs.len(), 1);
         match &msgs[0] {
-            AgentUiMessage::Ready { agent, version, session_id } => {
+            AgentUiMessage::Ready {
+                agent,
+                version,
+                session_id,
+            } => {
                 assert_eq!(agent, "claude");
                 assert_eq!(version.as_deref(), Some("claude-opus-4-5"));
                 assert_eq!(session_id.as_deref(), Some("s1"));

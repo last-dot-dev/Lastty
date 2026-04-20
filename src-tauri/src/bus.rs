@@ -242,11 +242,7 @@ impl<R: Runtime> EventBus<R> {
         Ok(())
     }
 
-    pub fn set_history_entry_pinned(
-        &self,
-        session_id: &str,
-        pinned: bool,
-    ) -> Result<(), String> {
+    pub fn set_history_entry_pinned(&self, session_id: &str, pinned: bool) -> Result<(), String> {
         let Some(mut entry) = self.read_sidecar(session_id) else {
             return Err("history entry not found".to_string());
         };

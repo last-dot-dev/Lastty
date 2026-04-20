@@ -203,11 +203,9 @@ fn extract_text(record: &Value) -> Option<String> {
     }
     match record.get("content")? {
         Value::String(s) => Some(s.clone()),
-        Value::Array(blocks) => blocks.iter().find_map(|b| {
-            b.get("text")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string())
-        }),
+        Value::Array(blocks) => blocks
+            .iter()
+            .find_map(|b| b.get("text").and_then(Value::as_str).map(|s| s.to_string())),
         _ => None,
     }
 }

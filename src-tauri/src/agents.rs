@@ -284,10 +284,7 @@ pub fn launch_agent<R: Runtime>(
     })
 }
 
-pub fn resume_command_spec(
-    agent: &AgentDefinition,
-    agent_session_id: &str,
-) -> Option<CommandSpec> {
+pub fn resume_command_spec(agent: &AgentDefinition, agent_session_id: &str) -> Option<CommandSpec> {
     let program = agent.resume_command.clone()?;
     let args = agent
         .resume_args

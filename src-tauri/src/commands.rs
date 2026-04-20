@@ -343,9 +343,7 @@ pub async fn read_recording(
 }
 
 #[tauri::command]
-pub async fn list_history(
-    event_bus: State<'_, EventBus>,
-) -> Result<Vec<HistoryEntry>, String> {
+pub async fn list_history(event_bus: State<'_, EventBus>) -> Result<Vec<HistoryEntry>, String> {
     let mut entries = event_bus.list_history();
     entries.retain(|entry| entry.agent_id.is_some());
     let external = tokio::task::spawn_blocking(history::discover_all)
@@ -411,12 +409,7 @@ fn merge_external(entries: &mut Vec<HistoryEntry>, external: Vec<HistoryEntry>) 
     use std::collections::HashSet;
     let claimed: HashSet<(String, String)> = entries
         .iter()
-        .filter_map(|entry| {
-            Some((
-                entry.agent_id.clone()?,
-                entry.agent_session_id.clone()?,
-            ))
-        })
+        .filter_map(|entry| Some((entry.agent_id.clone()?, entry.agent_session_id.clone()?)))
         .collect();
     for entry in external {
         let key = match (entry.agent_id.clone(), entry.agent_session_id.clone()) {
@@ -479,8 +472,13 @@ async fn resume_history_entry_for_runtime<R: tauri::Runtime>(
 
     let (command, resumed) = match (entry.agent_id.as_deref(), entry.agent_session_id.as_deref()) {
         (Some(agent_id), Some(agent_session_id)) => {
-            let agent = agents.into_iter().find(|candidate| candidate.id == agent_id);
-            match agent.as_ref().and_then(|a| resume_command_spec(a, agent_session_id)) {
+            let agent = agents
+                .into_iter()
+                .find(|candidate| candidate.id == agent_id);
+            match agent
+                .as_ref()
+                .and_then(|a| resume_command_spec(a, agent_session_id))
+            {
                 Some(spec) => (Some(spec), true),
                 None => (None, false),
             }
@@ -530,9 +528,7 @@ pub async fn git_graph(
 }
 
 #[tauri::command]
-pub async fn list_git_branches(
-    cwd: String,
-) -> Result<Vec<crate::git_branches::GitBranch>, String> {
+pub async fn list_git_branches(cwd: String) -> Result<Vec<crate::git_branches::GitBranch>, String> {
     crate::git_branches::list_branches(Path::new(&cwd)).map_err(|e| e.to_string())
 }
 

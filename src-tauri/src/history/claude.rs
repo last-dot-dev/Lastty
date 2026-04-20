@@ -215,7 +215,9 @@ fn build_entry(
 
     Some(HistoryEntry {
         session_id: format!("claude:{session_uuid}"),
-        title: title.clone().unwrap_or_else(|| format!("Claude · {session_uuid}")),
+        title: title
+            .clone()
+            .unwrap_or_else(|| format!("Claude · {session_uuid}")),
         agent_id: Some("claude".to_string()),
         cwd: project_cwd.display().to_string(),
         worktree_path: None,
@@ -471,9 +473,10 @@ mod tests {
 
     #[test]
     fn decodes_project_dir_back_to_absolute_path() {
-        let decoded =
-            decode_project_dir(Path::new("/home/x/.claude/projects/-Users-pabloeder-Lastty-Lastty"))
-                .unwrap();
+        let decoded = decode_project_dir(Path::new(
+            "/home/x/.claude/projects/-Users-pabloeder-Lastty-Lastty",
+        ))
+        .unwrap();
         assert_eq!(decoded.to_str().unwrap(), "/Users/pabloeder/Lastty/Lastty");
     }
 }

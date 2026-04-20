@@ -206,8 +206,8 @@ fn run_workload(workload: &Workload, frame_cap: Duration, absorb: Duration) -> R
                     // Soak up any marks that arrive immediately after wake;
                     // turns N adjacent marks into one render without raising
                     // the steady-state floor (frame cap still bounds rate).
-                    let _ = coordinator
-                        .wait_for_next_timeout(coordinator.current_generation(), absorb);
+                    let _ =
+                        coordinator.wait_for_next_timeout(coordinator.current_generation(), absorb);
                 }
                 let gen_at_render = coordinator.current_generation();
                 let mark_instant = first_pending_mark.lock().unwrap().take();

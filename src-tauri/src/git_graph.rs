@@ -27,21 +27,15 @@ pub fn load(cwd: &Path, limit: u32) -> Result<GitGraph> {
     let format_arg = format!("--format={format}");
     let output = Command::new("git")
         .current_dir(cwd)
-        .args([
-            "log",
-            "--all",
-            "--date-order",
-            &format_arg,
-            &limit_arg,
-        ])
+        .args(["log", "--all", "--date-order", &format_arg, &limit_arg])
         .output()
         .with_context(|| format!("failed to invoke git log in {}", cwd.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(anyhow!("git log failed: {stderr}"));
     }
-    let stdout = String::from_utf8(output.stdout)
-        .with_context(|| "git log produced non-utf8 output")?;
+    let stdout =
+        String::from_utf8(output.stdout).with_context(|| "git log produced non-utf8 output")?;
     let commits = stdout
         .lines()
         .filter(|line| !line.is_empty())
@@ -88,10 +82,7 @@ fn parse_commit_line(line: &str) -> Result<GitCommit> {
         .with_context(|| "failed to parse commit timestamp")?;
     let refs_raw = parts.next().unwrap_or("");
 
-    let parents = parents_raw
-        .split_whitespace()
-        .map(str::to_string)
-        .collect();
+    let parents = parents_raw.split_whitespace().map(str::to_string).collect();
     let refs = if refs_raw.is_empty() {
         Vec::new()
     } else {
@@ -136,7 +127,8 @@ mod tests {
 
     #[test]
     fn parses_linear_commit() {
-        let line = "abc123\x01def456\x01feat: thing\x01Alice\x011710000000\x01HEAD -> main, origin/main";
+        let line =
+            "abc123\x01def456\x01feat: thing\x01Alice\x011710000000\x01HEAD -> main, origin/main";
         let commit = parse_commit_line(line).unwrap();
         assert_eq!(
             commit,
@@ -195,10 +187,7 @@ mod tests {
 
     #[test]
     fn loads_graph_from_real_repo() {
-        let tmp = std::env::temp_dir().join(format!(
-            "lastty-graph-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let tmp = std::env::temp_dir().join(format!("lastty-graph-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).expect("create tmp dir");
 
         let run = |args: &[&str]| {
