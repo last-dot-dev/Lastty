@@ -10,6 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 
 import KeyboardHelpOverlay from "./components/KeyboardHelpOverlay";
+import UpdateBadge from "./components/UpdateBadge";
 import { detectPlatform, matchBinding } from "./app/keybindings";
 
 import {
@@ -1236,12 +1237,16 @@ export default function TerminalWorkspace() {
         }}
       >
         Booting terminal workspace…
+        <UpdateBadge activeSessionCount={0} />
       </div>
     );
   }
 
+  const activeSessionCount = Object.keys(sessionInfoById).length;
+
   return (
     <div className="agent-root" data-platform={platform}>
+      <UpdateBadge activeSessionCount={activeSessionCount} />
       <AgentShell
         blocked={blockedRefs}
         onJumpToBlocked={handleJumpToBlocked}

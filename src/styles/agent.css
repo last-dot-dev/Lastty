@@ -2075,3 +2075,191 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---------------- Update badge ---------------- */
+
+@keyframes updateBadgeSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes updateBadgeIndeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.update-badge {
+  position: fixed;
+  top: 8px;
+  right: 12px;
+  z-index: 2147483646;
+  font-family: var(--font-sans);
+}
+
+.update-badge__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-background-secondary);
+  color: var(--color-text-primary);
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--elev-shadow);
+  line-height: 1;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.update-badge__button:hover:not(:disabled) {
+  border-color: var(--color-border-primary);
+}
+
+.update-badge__button:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
+
+.update-badge__button--ready-to-restart {
+  background: var(--status-help-bg);
+  border-color: var(--status-help-border);
+  color: var(--status-help-text-strong);
+}
+
+.update-badge__button--error {
+  background: var(--color-background-danger);
+  border-color: var(--color-border-danger);
+  color: var(--color-text-danger);
+}
+
+.update-badge__indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.update-badge__indicator--spinner {
+  border: 1.5px solid var(--color-border-secondary);
+  border-top-color: var(--color-text-primary);
+  border-radius: 50%;
+  background: transparent;
+  animation: updateBadgeSpin 900ms linear infinite;
+}
+
+.update-badge__indicator--ready {
+  background: var(--status-help-dot);
+}
+
+.update-badge__indicator--pulse {
+  background: var(--status-help-dot);
+  animation: statusPulse 1.3s ease-in-out infinite;
+}
+
+.update-badge__indicator--error {
+  background: #E5484D;
+}
+
+.update-badge__label {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.update-badge__popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 260px;
+  max-width: 320px;
+  background: var(--color-background-primary);
+  color: var(--color-text-primary);
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--elev-shadow);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.update-badge__title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.update-badge__body {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.update-badge__progress {
+  position: relative;
+  height: 6px;
+  background: var(--color-background-tertiary);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.update-badge__progress-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--status-help-dot);
+  border-radius: 999px;
+  transition: width 120ms linear;
+}
+
+.update-badge__progress-bar--indeterminate {
+  width: 40%;
+  animation: updateBadgeIndeterminate 1.4s ease-in-out infinite;
+}
+
+.update-badge__progress-label {
+  position: absolute;
+  top: 10px;
+  right: 0;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+
+.update-badge__actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.update-badge__action {
+  background: var(--color-background-secondary);
+  color: var(--color-text-primary);
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-sm);
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.update-badge__action:hover {
+  border-color: var(--color-border-primary);
+}
+
+.update-badge__action--primary {
+  background: var(--status-help-bg-strong);
+  border-color: var(--status-help-border);
+  color: var(--status-help-text-strong);
+  font-weight: 600;
+}
+
+.update-badge__link {
+  font-size: 11px;
+  color: var(--color-text-info);
+  margin-right: auto;
+  text-decoration: none;
+}
+
+.update-badge__link:hover {
+  text-decoration: underline;
+}
