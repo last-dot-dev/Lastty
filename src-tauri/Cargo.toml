@@ -62,3 +62,7 @@ tauri-plugin-updater = "2"
 [[bin]]
 name = "bench_pipeline"
 path = "src/bin/bench_pipeline.rs"
+
+[[bin]]
+name = "doc_smoke"
+path = "src/bin/doc_smoke.rs"

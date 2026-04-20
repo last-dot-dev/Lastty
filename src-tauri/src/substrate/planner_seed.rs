@@ -1,4 +1,4 @@
-use automerge::{transaction::Transactable, ObjType, ROOT};
+use automerge::{transaction::Transactable, ObjType, ReadDoc, ROOT};
 
 use super::doc::Document;
 use super::schema::{FieldKind, FieldSpec, NodeType, SchemaRegistry};
@@ -60,6 +60,20 @@ pub fn seed_trip_doc(destination: &str) -> Document {
         am.put_object(ROOT, "activities", ObjType::List).unwrap();
     }
     d
+}
+
+pub fn populate_demo_trip(doc: &mut Document) {
+    let am = doc.inner_mut();
+    am.put(ROOT, "budget", 2400.0_f64).unwrap();
+    let (_, activities) = am.get(ROOT, "activities").unwrap().unwrap();
+    let a = am.insert_object(&activities, 0, ObjType::Map).unwrap();
+    am.put(&a, "title", "Shinjuku walking tour").unwrap();
+    am.put(&a, "day", 1_i64).unwrap();
+    am.put(&a, "cost", 0.0_f64).unwrap();
+    let b = am.insert_object(&activities, 1, ObjType::Map).unwrap();
+    am.put(&b, "title", "Tsukiji breakfast").unwrap();
+    am.put(&b, "day", 2_i64).unwrap();
+    am.put(&b, "cost", 45.0_f64).unwrap();
 }
 
 pub fn planner_view() -> ViewSpec {
