@@ -12,6 +12,7 @@ use lastty::render_sync::RenderCoordinator;
 use lastty::runtime_modes::{resolved_benchmark_mode, BenchmarkMode};
 use lastty::terminal::manager::TerminalManager;
 use lastty::terminal::render::spawn_frame_emitter;
+use lastty::substrate::commands::SubstrateState;
 use lastty::{bus, commands};
 
 fn main() {
@@ -25,6 +26,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .manage(SubstrateState::new())
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
             let benchmark_mode = resolved_benchmark_mode();
@@ -129,6 +131,14 @@ fn main() {
             commands::terminal_input,
             commands::get_terminal_frame,
             commands::check_command_available,
+            lastty::substrate::commands::substrate_spawn_seed,
+            lastty::substrate::commands::substrate_materialize,
+            lastty::substrate::commands::substrate_send_intent,
+            lastty::substrate::commands::substrate_subscribe,
+            lastty::substrate::commands::substrate_fork,
+            lastty::substrate::commands::substrate_spawn_generative,
+            lastty::substrate::commands::substrate_history,
+            lastty::substrate::commands::substrate_materialize_at,
         ])
         .run(tauri::generate_context!())
         .expect("error running lastty");
