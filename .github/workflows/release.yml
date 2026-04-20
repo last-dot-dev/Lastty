@@ -137,6 +137,20 @@ jobs:
             }' > latest.json
           gh release upload "$TAG" latest.json --clobber
 
+      - name: Rename dmg to Lastty.dmg
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.validate-tag.outputs.tag }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          versioned="Lastty_${VERSION}_aarch64.dmg"
+          mkdir -p /tmp/dmg
+          gh release download "$TAG" --pattern "$versioned" --dir /tmp/dmg
+          mv "/tmp/dmg/$versioned" /tmp/dmg/Lastty.dmg
+          gh release upload "$TAG" /tmp/dmg/Lastty.dmg --clobber
+          gh release delete-asset "$TAG" "$versioned" --yes
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
