@@ -12,6 +12,9 @@ pub struct GitBranch {
 }
 
 pub fn list_branches(cwd: &Path) -> Result<Vec<GitBranch>> {
+    if !crate::git_util::is_git_repo(cwd) {
+        return Ok(Vec::new());
+    }
     let format = "--format=%(refname:short)%00%(HEAD)%00%(worktreepath)";
     let output = Command::new("git")
         .current_dir(cwd)

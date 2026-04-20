@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import SessionList, { type SessionRow } from "./SessionList";
+import WorktreeList, { type WorktreeRow } from "./WorktreeList";
 import CommitGraph from "./CommitGraph";
 import MergeButton from "./MergeButton";
 import type { GraphLayout } from "../../lib/graphLayout";
+import type { AgentDefinition } from "../../lib/ipc";
 
 export type SidebarGraph =
   | { state: "idle"; reason: string }
@@ -23,12 +24,13 @@ const WIDTH_MAX = 600;
 const TOP_MIN = 60;
 const BOTTOM_MIN = 120;
 
-function loadNumber(key: string, fallback: number): number {
+function loadNumber(key: string, fallback: number, min: number, max: number): number {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
     const parsed = Number.parseFloat(raw);
-    return Number.isFinite(parsed) ? parsed : fallback;
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(min, Math.min(max, parsed));
   } catch {
     return fallback;
   }
@@ -44,21 +46,35 @@ function storeNumber(key: string, value: number): void {
 
 export default function Sidebar({
   rows,
-  doneCount,
-  onFocus,
+  agents,
+  projectRoot,
+  onChangeProjectRoot,
+  onFocusPane,
+  onAttach,
+  onMerge,
+  mergeable,
+  onOpenMergeDialog,
   footerExtras,
   graph,
   nowMs,
 }: {
-  rows: SessionRow[];
-  doneCount: number;
-  onFocus: (paneId: string) => void;
+  rows: WorktreeRow[];
+  agents: AgentDefinition[];
+  projectRoot: string;
+  onChangeProjectRoot: () => void;
+  onFocusPane: (paneId: string) => void;
+  onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
+  onMerge: (worktreePath: string) => void;
+  mergeable: number;
+  onOpenMergeDialog: () => void;
   footerExtras?: ReactNode;
   graph: SidebarGraph;
   nowMs: number;
 }) {
-  const [width, setWidth] = useState(() => loadNumber(WIDTH_KEY, 220));
-  const [topHeight, setTopHeight] = useState(() => loadNumber(TOP_HEIGHT_KEY, 200));
+  const [width, setWidth] = useState(() => loadNumber(WIDTH_KEY, 240, WIDTH_MIN, WIDTH_MAX));
+  const [topHeight, setTopHeight] = useState(() =>
+    loadNumber(TOP_HEIGHT_KEY, 240, TOP_MIN, 10_000),
+  );
   const asideRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => storeNumber(WIDTH_KEY, width), [width]);
@@ -113,11 +129,30 @@ export default function Sidebar({
       ref={asideRef}
       className="agent-sidebar"
       style={{ width, minWidth: width }}
-      aria-label="sessions"
+      aria-label="worktrees"
     >
-      <SessionList
+      <div className="agent-sidebar__project">
+        <span
+          className="agent-sidebar__project-path"
+          title={projectRoot || "no project folder picked"}
+        >
+          {projectRoot ? projectRoot.split("/").filter(Boolean).slice(-2).join("/") : "no folder"}
+        </span>
+        <button
+          type="button"
+          className="agent-sidebar__project-change"
+          onClick={onChangeProjectRoot}
+          title="change project folder"
+        >
+          change
+        </button>
+      </div>
+      <WorktreeList
         rows={rows}
-        onFocus={onFocus}
+        agents={agents}
+        onFocusPane={onFocusPane}
+        onAttach={onAttach}
+        onMerge={onMerge}
         style={{ height: topHeight, maxHeight: "none", flexShrink: 0 }}
       />
       <div
@@ -133,7 +168,11 @@ export default function Sidebar({
         </div>
       </div>
       <div className="agent-sidebar__footer">
-        <MergeButton doneCount={doneCount} />
+        <MergeButton
+          count={mergeable}
+          disabled={mergeable === 0}
+          onClick={onOpenMergeDialog}
+        />
         {footerExtras}
       </div>
       <div
@@ -148,7 +187,11 @@ export default function Sidebar({
 
 function GraphBody({ graph, nowMs }: { graph: SidebarGraph; nowMs: number }) {
   if (graph.state === "idle") {
-    return <span className="agent-graph-empty">{graph.reason}</span>;
+    return (
+      <span className="agent-graph-empty">
+        {graph.reason} — click <kbd>change</kbd> to pick a git repo
+      </span>
+    );
   }
   if (graph.state === "loading") {
     return <span className="agent-graph-empty">loading…</span>;
@@ -157,7 +200,11 @@ function GraphBody({ graph, nowMs }: { graph: SidebarGraph; nowMs: number }) {
     return <span className="agent-graph-empty">{graph.message}</span>;
   }
   if (graph.layout.rows.length === 0) {
-    return <span className="agent-graph-empty">no commits</span>;
+    return (
+      <span className="agent-graph-empty">
+        no commits — click <kbd>change</kbd> to pick a git repo
+      </span>
+    );
   }
   return (
     <CommitGraph

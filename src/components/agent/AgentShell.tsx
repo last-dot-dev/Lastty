@@ -3,14 +3,21 @@ import type { ReactNode } from "react";
 import AlertBar, { type BlockedSessionRef } from "./AlertBar";
 import Sidebar, { type SidebarGraph } from "./Sidebar";
 import DesktopStrip, { type DesktopEntry } from "./DesktopStrip";
-import type { SessionRow } from "./SessionList";
+import type { WorktreeRow } from "./WorktreeList";
+import type { AgentDefinition } from "../../lib/ipc";
 
 export default function AgentShell({
   blocked,
   onJumpToBlocked,
-  sessionRows,
-  doneCount,
-  onFocusSession,
+  worktreeRows,
+  agents,
+  projectRoot,
+  onChangeProjectRoot,
+  onFocusPane,
+  onAttach,
+  onMerge,
+  mergeable,
+  onOpenMergeDialog,
   desktops,
   activeDesktopId,
   onSwitchDesktop,
@@ -27,9 +34,15 @@ export default function AgentShell({
 }: {
   blocked: BlockedSessionRef[];
   onJumpToBlocked: (sessionId: string) => void;
-  sessionRows: SessionRow[];
-  doneCount: number;
-  onFocusSession: (paneId: string) => void;
+  worktreeRows: WorktreeRow[];
+  agents: AgentDefinition[];
+  projectRoot: string;
+  onChangeProjectRoot: () => void;
+  onFocusPane: (paneId: string) => void;
+  onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
+  onMerge: (worktreePath: string) => void;
+  mergeable: number;
+  onOpenMergeDialog: () => void;
   desktops: DesktopEntry[];
   activeDesktopId: string;
   onSwitchDesktop: (id: string) => void;
@@ -60,9 +73,15 @@ export default function AgentShell({
       />
       <div className="agent-body">
         <Sidebar
-          rows={sessionRows}
-          doneCount={doneCount}
-          onFocus={onFocusSession}
+          rows={worktreeRows}
+          agents={agents}
+          projectRoot={projectRoot}
+          onChangeProjectRoot={onChangeProjectRoot}
+          onFocusPane={onFocusPane}
+          onAttach={onAttach}
+          onMerge={onMerge}
+          mergeable={mergeable}
+          onOpenMergeDialog={onOpenMergeDialog}
           footerExtras={sidebarFooterExtras}
           graph={sidebarGraph}
           nowMs={nowMs}

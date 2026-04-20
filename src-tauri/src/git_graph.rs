@@ -22,6 +22,13 @@ pub struct GitGraph {
 }
 
 pub fn load(cwd: &Path, limit: u32) -> Result<GitGraph> {
+    if !crate::git_util::is_git_repo(cwd) {
+        return Ok(GitGraph {
+            commits: Vec::new(),
+            head: None,
+            head_ref: None,
+        });
+    }
     let format = "%H%x01%P%x01%s%x01%an%x01%ct%x01%D";
     let limit_arg = format!("-n{limit}");
     let format_arg = format!("--format={format}");

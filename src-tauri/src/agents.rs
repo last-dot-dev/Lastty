@@ -59,6 +59,8 @@ pub struct LaunchAgentRequest {
     #[serde(default)]
     pub isolate_in_worktree: bool,
     pub branch_name: Option<String>,
+    #[serde(default)]
+    pub attach_to_worktree: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -174,10 +176,25 @@ pub fn launch_agent<R: Runtime>(
 
     let base_cwd = request
         .cwd
+        .clone()
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_root.to_path_buf());
 
-    let (cwd, worktree_path) = if request.isolate_in_worktree {
+    let (cwd, worktree_path) = if let Some(existing) = request
+        .attach_to_worktree
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        let path = PathBuf::from(existing);
+        if !path.exists() {
+            return Err(anyhow::anyhow!(
+                "attach_to_worktree path does not exist: {}",
+                path.display()
+            ));
+        }
+        (path.clone(), Some(path.to_string_lossy().to_string()))
+    } else if request.isolate_in_worktree {
         let branch_name = request
             .branch_name
             .clone()

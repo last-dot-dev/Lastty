@@ -213,6 +213,16 @@ describe("desktop management", () => {
     expect(withSecond.panes[rootB.id]).toBeDefined();
   });
 
+  it("skips reused numbers when a prior desktop was closed", () => {
+    const rootA = createPaneRecord("session-a");
+    let state = createWorkspace(rootA, "/proj");
+    state = createDesktop(state, createPaneRecord("session-b"), "/proj");
+    const firstId = state.desktops[0]!.id;
+    state = closeDesktop(state, firstId).workspace;
+    state = createDesktop(state, createPaneRecord("session-c"), "/proj");
+    expect(state.desktops.map((d) => d.name)).toEqual(["View 2", "View 3"]);
+  });
+
   it("closeDesktop removes its panes and returns their session ids", () => {
     const rootA = createPaneRecord("session-a");
     const state = createWorkspace(rootA, "/proj");

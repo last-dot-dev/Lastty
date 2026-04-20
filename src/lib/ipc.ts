@@ -220,6 +220,83 @@ export async function checkoutGitBranch(
   return invoke("checkout_git_branch", { cwd, name });
 }
 
+export interface Worktree {
+  path: string;
+  branch: string;
+  head: string;
+  is_main: boolean;
+  is_lastty: boolean;
+  detached: boolean;
+}
+
+export type ChangeStatus =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "untracked"
+  | "ignored"
+  | "type_change"
+  | "conflicted"
+  | "other";
+
+export interface ChangedFile {
+  path: string;
+  status: ChangeStatus;
+}
+
+export interface WorktreeStatus {
+  uncommitted_files: number;
+  unmerged_commits: number;
+  base_branch: string | null;
+  changed_files: ChangedFile[];
+}
+
+export interface CreatePrRequest {
+  worktree_path: string;
+  target_branch: string;
+  title?: string | null;
+  body?: string | null;
+  auto_commit_message?: string | null;
+}
+
+export interface CreatePrResult {
+  url: string;
+  branch: string;
+  committed: boolean;
+  pushed: boolean;
+  already_existed: boolean;
+}
+
+export async function listWorktrees(cwd: string): Promise<Worktree[]> {
+  return invoke("list_worktrees", { cwd });
+}
+
+export async function isGitRepo(cwd: string): Promise<boolean> {
+  return invoke("is_git_repo", { cwd });
+}
+
+export async function worktreeStatus(
+  path: string,
+  baseBranch: string,
+): Promise<WorktreeStatus> {
+  return invoke("worktree_status", { path, baseBranch });
+}
+
+export async function createPullRequest(
+  req: CreatePrRequest,
+): Promise<CreatePrResult> {
+  return invoke("create_pull_request", { req });
+}
+
+export async function removeWorktree(
+  path: string,
+  repoRoot: string,
+): Promise<void> {
+  return invoke("remove_worktree", { path, repoRoot });
+}
+
 export async function getWorkspaceRoot(): Promise<string> {
   return invoke("get_workspace_root");
 }
@@ -241,6 +318,7 @@ export interface LaunchAgentRequest {
   cwd?: string | null;
   isolate_in_worktree?: boolean;
   branch_name?: string | null;
+  attach_to_worktree?: string | null;
 }
 
 export interface LaunchAgentResult {

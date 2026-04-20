@@ -408,13 +408,22 @@ function swapLeaves(node: LayoutNode, a: string, b: string): LayoutNode {
   };
 }
 
+function nextDefaultDesktopName(desktops: DesktopState[]): string {
+  const pattern = /^View (\d+)$/;
+  const maxN = desktops.reduce((acc, d) => {
+    const m = pattern.exec(d.name);
+    return m ? Math.max(acc, Number(m[1])) : acc;
+  }, 0);
+  return `View ${maxN + 1}`;
+}
+
 export function createDesktop(
   state: WorkspaceState,
   rootPane: PaneRecord,
   projectRoot: string,
   name?: string,
 ): WorkspaceState {
-  const desktopName = name || `View ${state.desktops.length + 1}`;
+  const desktopName = name || nextDefaultDesktopName(state.desktops);
   const desktop = createDesktopState(rootPane, desktopName, projectRoot);
   return {
     panes: { ...state.panes, [rootPane.id]: rootPane },

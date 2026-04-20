@@ -546,6 +546,40 @@ pub async fn checkout_git_branch(cwd: String, name: String) -> Result<(), String
 }
 
 #[tauri::command]
+pub async fn list_worktrees(
+    cwd: String,
+) -> Result<Vec<crate::git_worktrees::Worktree>, String> {
+    crate::git_worktrees::list_worktrees(Path::new(&cwd)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn is_git_repo(cwd: String) -> bool {
+    crate::git_util::is_git_repo(Path::new(&cwd))
+}
+
+#[tauri::command]
+pub async fn worktree_status(
+    path: String,
+    base_branch: String,
+) -> Result<crate::git_worktrees::WorktreeStatus, String> {
+    crate::git_worktrees::worktree_status(Path::new(&path), &base_branch)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_pull_request(
+    req: crate::git_pr::CreatePrRequest,
+) -> Result<crate::git_pr::CreatePrResult, String> {
+    crate::git_pr::create_pull_request(&req).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_worktree(path: String, repo_root: String) -> Result<(), String> {
+    crate::git_pr::remove_worktree(Path::new(&path), Path::new(&repo_root))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_workspace_root() -> Result<String, String> {
     std::env::current_dir()
         .map(|p| p.display().to_string())

@@ -630,6 +630,7 @@ impl RuleEngine {
                         rule.action.branch_name.as_deref(),
                         event,
                     )),
+                    attach_to_worktree: None,
                 },
             });
         }
