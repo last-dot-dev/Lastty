@@ -144,10 +144,7 @@ pub struct KeyInput {
 }
 
 #[tauri::command]
-pub async fn key_input(
-    input: KeyInput,
-    state: State<'_, TerminalManager>,
-) -> Result<(), String> {
+pub async fn key_input(input: KeyInput, state: State<'_, TerminalManager>) -> Result<(), String> {
     let session_id = match input.session_id {
         Some(raw) => SessionId::parse(&raw)?,
         None => state.first_session_id().ok_or("no active session")?,
