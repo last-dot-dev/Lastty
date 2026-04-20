@@ -4,7 +4,7 @@ Guidance for coding agents working in this repo.
 
 ## Project
 
-Lastty (npm `pane`) is a Tauri v2 agent-native tiled terminal. Agents run in PTY panes and push structured UI updates into React via a custom OSC protocol. Rust drives PTY, terminal grid, rendering, event bus, rule execution; React renders.
+Lastty is a Tauri v2 agent-native tiled terminal. Agents run in PTY panes and push structured UI updates into React via a custom OSC protocol. Rust drives PTY, terminal grid, rendering, event bus, rule execution; React renders.
 
 ## Philosophy
 
