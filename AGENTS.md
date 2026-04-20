@@ -84,6 +84,14 @@ Lastty is a Tauri v2 agent-native tiled terminal. Agents run in PTY panes and pu
   - `feat: OSC protocol for structured UI updates from PTY`
   - `fix: glyph atlas eviction losing active cache entries`
 
+## Releasing
+
+- Single source of truth: root `package.json` version. All other version fields are derived.
+- Bump with `pnpm bump-version <X.Y.Z>` — writes `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `pane-protocol/Cargo.toml`, and refreshes `Cargo.lock`. Does not commit.
+- Release flow: `pnpm bump-version X.Y.Z` → `git commit -am "feat: vX.Y.Z"` → `git tag vX.Y.Z` → `git push origin main` → `git push origin vX.Y.Z`.
+- Pushing the tag triggers `.github/workflows/release.yml`: builds signed/notarized macOS arm64 `.dmg`, generates `latest.json` for the Tauri updater, publishes the GitHub Release. `release.yml` runs on the tag, not on main — commits between tag pushes do not produce releases.
+- Never hand-edit version strings. Use the bump script so all four files stay in lockstep.
+
 ## Before finishing
 
 - Rust → `cargo test` (`-p <crate>` when possible). Don't kill cargo by PID; lock contention is expected.
