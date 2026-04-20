@@ -26,6 +26,7 @@ use crate::events::AgentUiEvent;
 use crate::render_sync::RenderCoordinator;
 
 use super::event_proxy::EventProxy;
+use super::osc7::Osc7Scanner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SessionId(Uuid);
@@ -119,7 +120,7 @@ pub struct TerminalSession<R: Runtime = tauri::Wry> {
     pub started_at_unix_ms: u128,
     pub title: Arc<Mutex<String>>,
     pub agent_id: Option<String>,
-    pub cwd: String,
+    pub cwd: Arc<Mutex<String>>,
     pub prompt: Option<String>,
     pub prompt_summary: Option<String>,
     pub worktree_path: Option<String>,
@@ -165,6 +166,7 @@ pub fn create_session<R: Runtime>(
 
     let id = SessionId::new();
     let title = Arc::new(Mutex::new("shell".to_string()));
+    let cwd_shared = Arc::new(Mutex::new(cwd.display().to_string()));
     let adapter_active = adapter.is_some();
     let control_connected = Arc::new(AtomicBool::new(false));
     let control_accept_alive = Arc::new(AtomicBool::new(true));
@@ -242,7 +244,7 @@ pub fn create_session<R: Runtime>(
     } else {
         None
     };
-    let pty = InterceptingPty::new(pty, app.clone(), id)?;
+    let pty = InterceptingPty::new(pty, app.clone(), id, cwd_shared.clone())?;
 
     #[cfg(unix)]
     if let Some(socket_path) = control_socket_path.clone() {
@@ -308,7 +310,7 @@ pub fn create_session<R: Runtime>(
             .unwrap_or_default(),
         title,
         agent_id,
-        cwd: cwd_display,
+        cwd: cwd_shared,
         prompt,
         prompt_summary,
         worktree_path,
@@ -379,7 +381,7 @@ impl<R: Runtime> TerminalSession<R> {
             session_id: self.id.to_string(),
             title: self.title.lock().unwrap().clone(),
             agent_id: self.agent_id.clone(),
-            cwd: self.cwd.clone(),
+            cwd: self.cwd.lock().unwrap().clone(),
             prompt: self.prompt.clone(),
             prompt_summary: self.prompt_summary.clone(),
             worktree_path: self.worktree_path.clone(),
@@ -397,8 +399,13 @@ struct InterceptingPty<R: Runtime = tauri::Wry> {
 }
 
 impl<R: Runtime> InterceptingPty<R> {
-    fn new(inner: tty::Pty, app: tauri::AppHandle<R>, session_id: SessionId) -> io::Result<Self> {
-        let reader = ProtocolReader::new(inner.file().try_clone()?, app, session_id);
+    fn new(
+        inner: tty::Pty,
+        app: tauri::AppHandle<R>,
+        session_id: SessionId,
+        cwd: Arc<Mutex<String>>,
+    ) -> io::Result<Self> {
+        let reader = ProtocolReader::new(inner.file().try_clone()?, app, session_id, cwd);
         let writer = inner.file().try_clone()?;
         Ok(Self {
             inner,
@@ -458,16 +465,25 @@ impl<R: Runtime> alacritty_terminal::event::OnResize for InterceptingPty<R> {
 struct ProtocolReader<R: Runtime = tauri::Wry> {
     source: File,
     parser: OscParser,
+    osc7: Osc7Scanner,
+    cwd: Arc<Mutex<String>>,
     pending_terminal: std::collections::VecDeque<u8>,
     app: tauri::AppHandle<R>,
     session_id: SessionId,
 }
 
 impl<R: Runtime> ProtocolReader<R> {
-    fn new(source: File, app: tauri::AppHandle<R>, session_id: SessionId) -> Self {
+    fn new(
+        source: File,
+        app: tauri::AppHandle<R>,
+        session_id: SessionId,
+        cwd: Arc<Mutex<String>>,
+    ) -> Self {
         Self {
             source,
             parser: OscParser::new(),
+            osc7: Osc7Scanner::new(),
+            cwd,
             pending_terminal: std::collections::VecDeque::new(),
             app,
             session_id,
@@ -480,6 +496,22 @@ impl<R: Runtime> ProtocolReader<R> {
             *slot = self.pending_terminal.pop_front().unwrap_or_default();
         }
         count
+    }
+
+    fn update_cwd(&self, new_cwd: String) {
+        {
+            let mut guard = self.cwd.lock().unwrap();
+            if *guard == new_cwd {
+                return;
+            }
+            *guard = new_cwd.clone();
+        }
+        self.app
+            .state::<EventBus<R>>()
+            .publish(BusEvent::SessionCwdChanged {
+                session_id: self.session_id.to_string(),
+                cwd: new_cwd,
+            });
     }
 
     fn handle_chunks(&mut self, chunks: Vec<ParsedChunk>) {
@@ -513,6 +545,9 @@ impl<R: Runtime> Read for ProtocolReader<R> {
             match self.source.read(&mut raw) {
                 Ok(0) => return Ok(0),
                 Ok(read) => {
+                    for new_cwd in self.osc7.feed(&raw[..read]) {
+                        self.update_cwd(new_cwd);
+                    }
                     let chunks = self.parser.feed(&raw[..read]);
                     self.handle_chunks(chunks);
                     if !self.pending_terminal.is_empty() {

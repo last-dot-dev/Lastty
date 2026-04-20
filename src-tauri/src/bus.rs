@@ -26,6 +26,10 @@ pub enum BusEvent {
         session_id: String,
         exit_code: Option<i32>,
     },
+    SessionCwdChanged {
+        session_id: String,
+        cwd: String,
+    },
     AgentStatus {
         session_id: String,
         agent_id: Option<String>,
@@ -462,6 +466,7 @@ impl BusEvent {
         match self {
             BusEvent::SessionCreated { .. } => "session_created",
             BusEvent::SessionExited { .. } => "session_exited",
+            BusEvent::SessionCwdChanged { .. } => "session_cwd_changed",
             BusEvent::AgentStatus { .. } => "agent_status",
             BusEvent::AgentToolCall { .. } => "agent_tool_call",
             BusEvent::AgentFileEdit { .. } => "agent_file_edit",
@@ -478,6 +483,7 @@ impl BusEvent {
         match self {
             BusEvent::SessionCreated { session_id, .. }
             | BusEvent::SessionExited { session_id, .. }
+            | BusEvent::SessionCwdChanged { session_id, .. }
             | BusEvent::AgentStatus { session_id, .. }
             | BusEvent::AgentToolCall { session_id, .. }
             | BusEvent::AgentFileEdit { session_id, .. }
@@ -691,7 +697,7 @@ fn inherited_cwd<R: Runtime>(
         session
             .worktree_path
             .clone()
-            .unwrap_or_else(|| session.cwd.clone()),
+            .unwrap_or_else(|| session.cwd.lock().unwrap().clone()),
     )
 }
 
@@ -1291,6 +1297,61 @@ mod tests {
             .get_history_entry(&session_id.to_string())
             .expect("sidecar");
         assert_eq!(entry.exit_code, Some(7));
+
+        cleanup_sessions(&app);
+    }
+
+    #[test]
+    fn session_cwd_changed_event_updates_sidecar_cwd() {
+        let workspace_root = temp_dir("lastty-sidecar-cwd");
+        let app = tauri::test::mock_app();
+        let recordings_dir = workspace_root.join("recordings");
+        let render_coordinator = Arc::new(RenderCoordinator::new());
+        assert!(app.manage(EventBus::new(app.handle().clone(), recordings_dir.clone())));
+        assert!(app.manage(TerminalManager::new(
+            app.handle().clone(),
+            render_coordinator
+        )));
+
+        let manager = app.state::<TerminalManager<MockRuntime>>();
+        let session_id = manager
+            .create_session(SessionConfig {
+                command: Some(CommandSpec {
+                    program: "/bin/sh".to_string(),
+                    args: vec!["-lc".to_string(), "sleep 30".to_string()],
+                }),
+                cwd: workspace_root.clone(),
+                env: pane_env(),
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let event_bus = app.state::<EventBus<MockRuntime>>();
+        event_bus.publish(BusEvent::SessionCreated {
+            session_id: session_id.to_string(),
+            agent_id: None,
+        });
+
+        let nested = workspace_root.join("nested/dir");
+        fs::create_dir_all(&nested).unwrap();
+        let nested_str = nested.display().to_string();
+        {
+            let session = manager.get(&session_id).unwrap();
+            *session.cwd.lock().unwrap() = nested_str.clone();
+        }
+
+        thread::sleep(Duration::from_millis(1_100));
+        event_bus.publish(BusEvent::SessionCwdChanged {
+            session_id: session_id.to_string(),
+            cwd: nested_str.clone(),
+        });
+
+        let entry = event_bus
+            .get_history_entry(&session_id.to_string())
+            .expect("sidecar");
+        assert_eq!(entry.cwd, nested_str);
 
         cleanup_sessions(&app);
     }
