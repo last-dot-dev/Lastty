@@ -13,7 +13,8 @@
     "bench:xterm": "./scripts/run-xterm-bench.sh",
     "bench:xterm:verify-failure": "node ./scripts/verify-xterm-bench-failure.mjs",
     "bench:xterm:summary": "node ./scripts/summarize-xterm-bench.mjs /tmp/lastty-xterm-bench.json",
-    "bench:trace": "node ./scripts/summarize-perf-trace.mjs /tmp/lastty-perf.jsonl"
+    "bench:trace": "node ./scripts/summarize-perf-trace.mjs /tmp/lastty-perf.jsonl",
+    "bump-version": "node ./scripts/bump-version.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
