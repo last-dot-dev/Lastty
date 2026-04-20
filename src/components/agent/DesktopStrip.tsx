@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 export interface DesktopEntry {
   id: string;
   name: string;
+  projectLabel: string;
   paneCount: number;
   hasBlocked: boolean;
 }
@@ -80,7 +81,12 @@ export default function DesktopStrip({
   };
 
   return (
-    <div className="agent-desktop-strip" role="tablist" aria-label="views">
+    <div
+      className="agent-desktop-strip"
+      role="tablist"
+      aria-label="views"
+      data-tauri-drag-region
+    >
       {desktops.map((desktop) => {
         const active = desktop.id === activeDesktopId;
         const isEditing = editingId === desktop.id;
@@ -131,7 +137,7 @@ export default function DesktopStrip({
               cancelHover();
               onDropPaneOnDesktop?.(desktop.id);
             }}
-            title={`${desktop.name} · ${desktop.paneCount} pane${desktop.paneCount === 1 ? "" : "s"}`}
+            title={`${desktop.name}${desktop.projectLabel ? ` (${desktop.projectLabel})` : ""} · ${desktop.paneCount} pane${desktop.paneCount === 1 ? "" : "s"}`}
           >
             {desktop.hasBlocked && <span className="agent-desktop-tab__dot" aria-hidden />}
             {isEditing ? (
@@ -154,7 +160,12 @@ export default function DesktopStrip({
                 onClick={(event) => event.stopPropagation()}
               />
             ) : (
-              <span className="agent-desktop-tab__name">{desktop.name}</span>
+              <>
+                <span className="agent-desktop-tab__name">{desktop.name}</span>
+                {desktop.projectLabel && (
+                  <span className="agent-desktop-tab__project">{desktop.projectLabel}</span>
+                )}
+              </>
             )}
             <span className="agent-desktop-tab__count">{desktop.paneCount}</span>
             {desktops.length > 1 && !isEditing && (

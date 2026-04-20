@@ -192,4 +192,51 @@ mod tests {
     fn rejects_malformed_line() {
         assert!(parse_commit_line("only one field").is_err());
     }
+
+    #[test]
+    fn loads_graph_from_real_repo() {
+        let tmp = std::env::temp_dir().join(format!(
+            "lastty-graph-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&tmp).expect("create tmp dir");
+
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(&tmp)
+                .args(args)
+                .output()
+                .expect("git ran");
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        run(&["init", "--initial-branch=main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "commit.gpgsign", "false"]);
+
+        std::fs::write(tmp.join("a.txt"), "hello").expect("write a.txt");
+        run(&["add", "a.txt"]);
+        run(&["commit", "-m", "initial"]);
+
+        std::fs::write(tmp.join("a.txt"), "hello world").expect("update a.txt");
+        run(&["commit", "-am", "update"]);
+
+        let graph = load(&tmp, 50).expect("graph loads");
+
+        assert_eq!(graph.commits.len(), 2, "expected two commits");
+        assert_eq!(graph.head_ref.as_deref(), Some("main"));
+        assert!(graph.head.is_some(), "head sha present");
+        assert_eq!(graph.commits[0].subject, "update");
+        assert_eq!(graph.commits[1].subject, "initial");
+        assert_eq!(graph.commits[0].parents.len(), 1);
+        assert!(graph.commits[1].parents.is_empty());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

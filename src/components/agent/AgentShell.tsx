@@ -3,14 +3,14 @@ import type { ReactNode } from "react";
 import AlertBar, { type BlockedSessionRef } from "./AlertBar";
 import Sidebar, { type SidebarGraph } from "./Sidebar";
 import DesktopStrip, { type DesktopEntry } from "./DesktopStrip";
-import type { BranchRow } from "./BranchList";
+import type { SessionRow } from "./SessionList";
 
 export default function AgentShell({
   blocked,
   onJumpToBlocked,
-  branchRows,
+  sessionRows,
   doneCount,
-  onFocusBranch,
+  onFocusSession,
   desktops,
   activeDesktopId,
   onSwitchDesktop,
@@ -27,9 +27,9 @@ export default function AgentShell({
 }: {
   blocked: BlockedSessionRef[];
   onJumpToBlocked: (sessionId: string) => void;
-  branchRows: BranchRow[];
+  sessionRows: SessionRow[];
   doneCount: number;
-  onFocusBranch: (paneId: string) => void;
+  onFocusSession: (paneId: string) => void;
   desktops: DesktopEntry[];
   activeDesktopId: string;
   onSwitchDesktop: (id: string) => void;
@@ -60,9 +60,9 @@ export default function AgentShell({
       />
       <div className="agent-body">
         <Sidebar
-          rows={branchRows}
+          rows={sessionRows}
           doneCount={doneCount}
-          onFocus={onFocusBranch}
+          onFocus={onFocusSession}
           footerExtras={sidebarFooterExtras}
           graph={sidebarGraph}
           nowMs={nowMs}

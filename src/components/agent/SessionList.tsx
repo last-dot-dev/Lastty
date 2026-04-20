@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import type { AgentStatus } from "../../app/agentDerived";
 import StatusBadge from "./StatusBadge";
 
-export interface BranchRow {
+export interface SessionRow {
   sessionId: string;
   paneId: string | null;
   title: string;
@@ -13,19 +13,19 @@ export interface BranchRow {
   unread: boolean;
 }
 
-export default function BranchList({
+export default function SessionList({
   rows,
   onFocus,
   style,
 }: {
-  rows: BranchRow[];
+  rows: SessionRow[];
   onFocus: (paneId: string) => void;
   style?: CSSProperties;
 }) {
   return (
     <div className="agent-sidebar__section is-top" style={style}>
-      <div className="agent-sidebar__label">Branches</div>
-      <div className="agent-sidebar__branches">
+      <div className="agent-sidebar__label">Sessions</div>
+      <div className="agent-sidebar__sessions">
         {rows.length === 0 && (
           <div
             style={{
@@ -41,7 +41,7 @@ export default function BranchList({
           <button
             key={row.sessionId}
             type="button"
-            className={`agent-branch-row ${row.focused ? "is-focused" : ""} ${
+            className={`agent-session-row ${row.focused ? "is-focused" : ""} ${
               row.merged ? "is-merged" : ""
             } ${row.unread && row.status !== "needs_help" ? "is-unread" : ""}`}
             onClick={() => row.paneId && onFocus(row.paneId)}
@@ -54,7 +54,7 @@ export default function BranchList({
                 }`}
               />
             )}
-            <span className="agent-branch-row__name">{row.title}</span>
+            <span className="agent-session-row__name">{row.title}</span>
             <StatusBadge status={row.status} />
           </button>
         ))}

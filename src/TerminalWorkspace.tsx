@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 
 import KeyboardHelpOverlay from "./components/KeyboardHelpOverlay";
 import { detectPlatform, matchBinding } from "./app/keybindings";
@@ -25,7 +26,6 @@ import {
 import {
   deriveAgentStatus,
   deriveAgentType,
-  deriveBranchName,
   deriveProgressPct,
   deriveTaskName,
   type AgentStatus,
@@ -34,11 +34,12 @@ import AgentShell from "./components/agent/AgentShell";
 import HistoryPanel from "./components/agent/HistoryPanel";
 import TranscriptView from "./components/agent/TranscriptView";
 import WindowHeader from "./components/agent/WindowHeader";
+import PaneFooter from "./components/agent/PaneFooter";
 import ProgressBar from "./components/agent/ProgressBar";
 import ReplyInput from "./components/agent/ReplyInput";
 import EdgeSpawner, { type SpawnDirection } from "./components/agent/EdgeSpawner";
 import ThemeToggle from "./components/agent/ThemeToggle";
-import type { BranchRow } from "./components/agent/BranchList";
+import type { SessionRow } from "./components/agent/SessionList";
 import type { DesktopEntry } from "./components/agent/DesktopStrip";
 import type { BlockedSessionRef } from "./components/agent/AlertBar";
 import { useThemeOverride } from "./hooks/useThemeOverride";
@@ -82,21 +83,22 @@ import TerminalViewport from "./components/TerminalViewport";
 import { releaseTerminalHost } from "./components/TerminalHostRegistry";
 import ViewPreview from "./components/agent/ViewPreview";
 import {
+  checkoutGitBranch,
   createTerminal,
-  getGitInfo,
   getPrimarySessionId,
   getWorkspaceRoot,
   gitGraph,
   killTerminal,
   launchAgent,
   listAgents,
+  listGitBranches,
   listSessions,
   respondToApproval,
   restoreTerminalSessions,
   type AgentDefinition,
   type AgentUiEvent,
+  type GitBranch,
   type GitGraph,
-  type GitInfo,
   type LaunchAgentResult,
   type SessionExitEvent,
   type HistoryEntry,
@@ -106,6 +108,13 @@ import {
 } from "./lib/ipc";
 import { layoutGraph } from "./lib/graphLayout";
 import type { SidebarGraph } from "./components/agent/Sidebar";
+
+function basenameOfPath(path: string): string {
+  if (!path) return "";
+  const trimmed = path.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  return idx >= 0 ? trimmed.slice(idx + 1) || trimmed : trimmed;
+}
 
 function needsAttention(message: AgentUiMessage): boolean {
   return (
@@ -132,7 +141,7 @@ export default function TerminalWorkspace() {
   const [launching, setLaunching] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [agentPrompt, setAgentPrompt] = useState("");
-  const [isolateWorktree, setIsolateWorktree] = useState(false);
+  const [isolateWorktree, setIsolateWorktree] = useState(true);
   const [branchName, setBranchName] = useState("");
   const [clock, setClock] = useState(Date.now());
   const [hydrated, setHydrated] = useState(false);
@@ -142,12 +151,18 @@ export default function TerminalWorkspace() {
   const [restoredSnapshotsBySessionId, setRestoredSnapshotsBySessionId] = useState<
     Record<string, PersistedTerminalSnapshot>
   >({});
-  const [gitInfoByCwd, setGitInfoByCwd] = useState<Record<string, GitInfo | null>>({});
   type GraphEntry =
     | { state: "loading" }
     | { state: "error"; message: string }
     | { state: "ready"; graph: GitGraph };
   const [graphByCwd, setGraphByCwd] = useState<Record<string, GraphEntry>>({});
+  type BranchesEntry =
+    | { state: "loading" }
+    | { state: "error"; message: string }
+    | { state: "ready"; branches: GitBranch[] };
+  const [branchesByCwd, setBranchesByCwd] = useState<Record<string, BranchesEntry>>({});
+  const [branchesReloadCounter, setBranchesReloadCounter] = useState(0);
+  const loadedBranchCwdsRef = useRef<Set<string>>(new Set());
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
 
   useEffect(() => {
@@ -204,72 +219,96 @@ export default function TerminalWorkspace() {
     };
   }, [draggingPaneId]);
 
-  useEffect(() => {
-    const cwds = new Set<string>();
-    for (const session of Object.values(sessionInfoById)) {
-      if (session.cwd) cwds.add(session.cwd);
-    }
-    const missing = [...cwds].filter((cwd) => !(cwd in gitInfoByCwd));
-    if (missing.length === 0) return;
-    let cancelled = false;
-    void Promise.all(
-      missing.map(async (cwd) => {
-        const info = await getGitInfo(cwd).catch(() => null);
-        return [cwd, info] as const;
-      }),
-    ).then((entries) => {
-      if (cancelled) return;
-      setGitInfoByCwd((current) => {
-        const next = { ...current };
-        for (const [cwd, info] of entries) next[cwd] = info;
-        return next;
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionInfoById, gitInfoByCwd]);
-
-  const focusedCwd = useMemo(() => {
-    if (focusedSessionId) {
-      const info = sessionInfoById[focusedSessionId];
-      const sessionCwd = info?.worktree_path || info?.cwd || null;
-      if (sessionCwd) return sessionCwd;
-    }
-    return workspaceRoot;
-  }, [focusedSessionId, sessionInfoById, workspaceRoot]);
+  const activeProjectRoot = useMemo(() => {
+    if (!workspace) return workspaceRoot;
+    return activeDesktop(workspace).projectRoot || workspaceRoot;
+  }, [workspace, workspaceRoot]);
 
   useEffect(() => {
-    if (!focusedCwd) return;
+    if (!activeProjectRoot) return;
     let cancelled = false;
     setGraphByCwd((current) =>
-      current[focusedCwd] ? current : { ...current, [focusedCwd]: { state: "loading" } },
+      current[activeProjectRoot]
+        ? current
+        : { ...current, [activeProjectRoot]: { state: "loading" } },
     );
-    void gitGraph(focusedCwd)
+    void gitGraph(activeProjectRoot)
       .then((graph) => {
         if (cancelled) return;
         setGraphByCwd((current) => ({
           ...current,
-          [focusedCwd]: { state: "ready", graph },
+          [activeProjectRoot]: { state: "ready", graph },
         }));
       })
       .catch((error: unknown) => {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : String(error);
-        console.error("git_graph failed for", focusedCwd, error);
+        console.error("git_graph failed for", activeProjectRoot, error);
         setGraphByCwd((current) => ({
           ...current,
-          [focusedCwd]: { state: "error", message },
+          [activeProjectRoot]: { state: "error", message },
         }));
       });
     return () => {
       cancelled = true;
     };
-  }, [focusedCwd]);
+  }, [activeProjectRoot]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    const cwds = new Set<string>();
+    for (const pane of Object.values(workspace.panes)) {
+      const session = sessionInfoById[pane.sessionId];
+      if (!session) continue;
+      const effective = session.worktree_path || session.cwd;
+      if (effective) cwds.add(effective);
+    }
+    let cancelled = false;
+    for (const cwd of cwds) {
+      if (loadedBranchCwdsRef.current.has(cwd)) continue;
+      loadedBranchCwdsRef.current.add(cwd);
+      setBranchesByCwd((current) => ({ ...current, [cwd]: { state: "loading" } }));
+      void listGitBranches(cwd)
+        .then((branches) => {
+          if (cancelled) return;
+          setBranchesByCwd((current) => ({
+            ...current,
+            [cwd]: { state: "ready", branches },
+          }));
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          const message = error instanceof Error ? error.message : String(error);
+          setBranchesByCwd((current) => ({
+            ...current,
+            [cwd]: { state: "error", message },
+          }));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace, sessionInfoById, branchesReloadCounter]);
+
+  async function handleCheckoutBranch(cwd: string, name: string): Promise<void> {
+    try {
+      await checkoutGitBranch(cwd, name);
+    } catch (error) {
+      console.error("git checkout failed", error);
+      return;
+    }
+    loadedBranchCwdsRef.current.delete(cwd);
+    setBranchesByCwd((current) => {
+      const next = { ...current };
+      delete next[cwd];
+      return next;
+    });
+    setBranchesReloadCounter((n) => n + 1);
+  }
 
   const sidebarGraph = useMemo<SidebarGraph>(() => {
-    if (!focusedCwd) return { state: "idle", reason: "no repo" };
-    const entry = graphByCwd[focusedCwd];
+    if (!activeProjectRoot) return { state: "idle", reason: "no repo" };
+    const entry = graphByCwd[activeProjectRoot];
     if (!entry) return { state: "loading" };
     if (entry.state !== "ready") return entry;
     return {
@@ -278,7 +317,7 @@ export default function TerminalWorkspace() {
       headSha: entry.graph.head,
       headRef: entry.graph.head_ref,
     };
-  }, [focusedCwd, graphByCwd]);
+  }, [activeProjectRoot, graphByCwd]);
 
   const theme = useThemeOverride();
 
@@ -338,10 +377,18 @@ export default function TerminalWorkspace() {
         });
         if (cancelled || !sessionId) return;
 
-        const sessionTitle =
-          sessions.find((session) => session.session_id === sessionId)?.title || "shell";
+        const bootstrapSession = sessions.find(
+          (session) => session.session_id === sessionId,
+        );
+        const sessionTitle = bootstrapSession?.title || "shell";
+        const bootstrapRoot =
+          bootstrapSession?.cwd || (await getWorkspaceRoot().catch(() => "")) || "";
         setWorkspace((current) =>
-          current ?? createWorkspace(createPaneRecord(sessionId, sessionTitle)),
+          current ??
+            createWorkspace(
+              createPaneRecord(sessionId, sessionTitle),
+              bootstrapRoot,
+            ),
         );
       } finally {
         if (!cancelled) {
@@ -361,14 +408,16 @@ export default function TerminalWorkspace() {
     if (!workspace) {
       const firstSessionId = Object.keys(sessionInfoById)[0];
       if (firstSessionId) {
+        const info = sessionInfoById[firstSessionId];
         setWorkspace(
           createWorkspace(
-            createPaneRecord(firstSessionId, sessionInfoById[firstSessionId]?.title || "shell"),
+            createPaneRecord(firstSessionId, info?.title || "shell"),
+            info?.cwd || workspaceRoot || "",
           ),
         );
       }
     }
-  }, [sessionInfoById, workspace]);
+  }, [sessionInfoById, workspace, workspaceRoot]);
 
   useEffect(() => {
     if (!hydrated || !workspace) {
@@ -427,15 +476,7 @@ export default function TerminalWorkspace() {
     }).then((fn) => unsubs.push(fn));
 
     void listen<SessionExitEvent>("session:exit", (event) => {
-      setWorkspace((current) =>
-        current
-          ? renamePane(
-              current,
-              event.payload.session_id,
-              `exited (${event.payload.code ?? "?"})`,
-            )
-          : current,
-      );
+      cleanupClosedSession(event.payload.session_id);
     }).then((fn) => unsubs.push(fn));
 
     void listen<AgentUiEvent>("agent:ui", (event) => {
@@ -539,7 +580,9 @@ export default function TerminalWorkspace() {
   }, [workspace, platform]);
 
   async function handleSplit(paneId: string, direction: SplitDirection) {
-    const sessionId = await createTerminal();
+    const desktop = workspace ? findDesktopForPane(workspace, paneId) : null;
+    const cwd = desktop?.projectRoot || undefined;
+    const sessionId = await createTerminal(cwd);
     await hydrateSessionInfo(
       sessionId,
       `shell ${Object.keys(sessionInfoById).length + 1}`,
@@ -557,16 +600,15 @@ export default function TerminalWorkspace() {
 
   async function handleLaunchAgent() {
     if (!workspace || !selectedAgentId) return;
-    const activePaneId = activeDesktop(workspace).focusedPaneId;
+    const desktop = activeDesktop(workspace);
+    const activePaneId = desktop.focusedPaneId;
     if (!activePaneId) return;
     setLaunching(true);
     try {
-      const focusedPane = workspace.panes[activePaneId];
-      const focusedSession = focusedPane ? sessionInfoById[focusedPane.sessionId] : undefined;
       const result = await launchAgent({
         agent_id: selectedAgentId,
         prompt: agentPrompt || null,
-        cwd: focusedSession?.worktree_path ?? null,
+        cwd: desktop.projectRoot || null,
         isolate_in_worktree: isolateWorktree,
         branch_name: isolateWorktree ? branchName || null : null,
       });
@@ -574,7 +616,7 @@ export default function TerminalWorkspace() {
       setLauncherOpen(false);
       setAgentPrompt("");
       setBranchName("");
-      setIsolateWorktree(false);
+      setIsolateWorktree(true);
     } catch (error) {
       console.error("failed to launch agent", error);
     } finally {
@@ -589,8 +631,7 @@ export default function TerminalWorkspace() {
     await killTerminal(sessionId).catch((error) => {
       console.error("failed to kill terminal", error);
     });
-    releaseTerminalHost(sessionId);
-    setWorkspace((current) => (current ? closePane(current, paneId) : current));
+    cleanupClosedSession(sessionId);
     setViewingHistoryByPaneId((current) => {
       if (!(paneId in current)) return current;
       const next = { ...current };
@@ -636,6 +677,12 @@ export default function TerminalWorkspace() {
   }
 
   async function handleResumeHistoryEntry(paneId: string, entry: HistoryEntry) {
+    console.log("[resume] handler entry", {
+      paneId,
+      session_id: entry.session_id,
+      agent_id: entry.agent_id,
+      agent_session_id: entry.agent_session_id,
+    });
     setHistoryPanelPaneId(null);
     setViewingHistoryByPaneId((current) => {
       if (!(paneId in current)) return current;
@@ -645,13 +692,25 @@ export default function TerminalWorkspace() {
     });
     try {
       const result = await resumeHistoryEntry(entry.session_id);
+      console.log("[resume] ipc result", result);
       const sessions = await listSessions();
       const info = sessions.find((s) => s.session_id === result.session_id);
       if (info) upsertSession(info);
       setWorkspace((current) => {
-        if (!current) return current;
+        if (!current) {
+          console.warn("[resume] workspace null, skipping swap");
+          return current;
+        }
         const pane = current.panes[paneId];
-        if (!pane) return current;
+        if (!pane) {
+          console.warn("[resume] pane missing, skipping swap", paneId);
+          return current;
+        }
+        console.log("[resume] swap committed", {
+          paneId,
+          old: pane.sessionId,
+          new: result.session_id,
+        });
         return {
           ...current,
           panes: {
@@ -688,18 +747,51 @@ export default function TerminalWorkspace() {
     }));
   }
 
+  function cleanupClosedSession(sessionId: string) {
+    releaseTerminalHost(sessionId);
+    const dropKey = <V,>(map: Record<string, V>): Record<string, V> => {
+      if (!(sessionId in map)) return map;
+      const next = { ...map };
+      delete next[sessionId];
+      return next;
+    };
+    setSessionInfoById(dropKey);
+    setAgentUiBySession(dropKey);
+    setUnreadBySession(dropKey);
+    setTerminalSnapshotsBySessionId(dropKey);
+    setRestoredSnapshotsBySessionId(dropKey);
+    setWorkspace((current) => {
+      if (!current) return current;
+      const pane = Object.values(current.panes).find(
+        (entry) => entry.sessionId === sessionId,
+      );
+      if (!pane) return current;
+      const desktop = findDesktopForPane(current, pane.id);
+      return closePane(current, pane.id, desktop?.id ?? current.activeDesktopId);
+    });
+  }
+
   function handleToggleMaximizePane(paneId: string) {
     setWorkspace((current) => (current ? toggleMaximize(current, paneId) : current));
   }
 
   async function handleNewDesktop() {
-    const sessionId = await createTerminal();
+    const picked = await openFolderDialog({
+      directory: true,
+      multiple: false,
+      title: "Pick project folder for new view",
+    }).catch((error) => {
+      console.error("folder picker failed", error);
+      return null;
+    });
+    if (!picked || typeof picked !== "string") return;
+    const sessionId = await createTerminal(picked);
     const title = `shell ${Object.keys(sessionInfoById).length + 1}`;
     await hydrateSessionInfo(sessionId, title);
     setWorkspace((current) =>
       current
-        ? createDesktop(current, createPaneRecord(sessionId, title))
-        : createWorkspace(createPaneRecord(sessionId, title)),
+        ? createDesktop(current, createPaneRecord(sessionId, title), picked)
+        : createWorkspace(createPaneRecord(sessionId, title), picked),
     );
   }
 
@@ -708,7 +800,7 @@ export default function TerminalWorkspace() {
     const desktopId = workspace.activeDesktopId;
     const desktop = activeDesktop(workspace);
     if (desktop.layout) return;
-    const sessionId = await createTerminal();
+    const sessionId = await createTerminal(desktop.projectRoot || undefined);
     const title = `shell ${Object.keys(sessionInfoById).length + 1}`;
     const pane = createPaneRecord(sessionId, title);
     await hydrateSessionInfo(sessionId, title);
@@ -747,7 +839,7 @@ export default function TerminalWorkspace() {
       killTerminal(sessionId).catch((error) => {
         console.error("failed to kill terminal", error);
       });
-      releaseTerminalHost(sessionId);
+      cleanupClosedSession(sessionId);
     }
   }
 
@@ -808,13 +900,18 @@ export default function TerminalWorkspace() {
       (entry) => entry.sessionId === sessionId,
     );
     if (!pane) return;
-    const owningDesktop = findDesktopForPane(workspace, pane.id);
+    handleFocusPaneAnywhere(pane.id);
+  }
+
+  function handleFocusPaneAnywhere(paneId: string) {
     setWorkspace((current) => {
       if (!current) return current;
+      if (!(paneId in current.panes)) return current;
+      const owningDesktop = findDesktopForPane(current, paneId);
       const switched = owningDesktop
         ? switchDesktop(current, owningDesktop.id)
         : current;
-      return focusPane(switched, pane.id, owningDesktop?.id ?? switched.activeDesktopId);
+      return focusPane(switched, paneId, owningDesktop?.id ?? switched.activeDesktopId);
     });
   }
 
@@ -874,7 +971,7 @@ export default function TerminalWorkspace() {
     })),
   );
 
-  const branchRows: BranchRow[] = workspace
+  const sessionRows: SessionRow[] = workspace
     ? sessionCreationOrder.map((sessionId) => {
         const pane = Object.values(workspace.panes).find(
           (entry) => entry.sessionId === sessionId,
@@ -913,6 +1010,7 @@ export default function TerminalWorkspace() {
         return {
           id: desktop.id,
           name: desktop.name,
+          projectLabel: basenameOfPath(desktop.projectRoot),
           paneCount: paneIds.length,
           hasBlocked,
         };
@@ -927,6 +1025,7 @@ export default function TerminalWorkspace() {
     return (
       <div
         className="agent-root"
+        data-platform={platform}
         style={{
           display: "grid",
           placeItems: "center",
@@ -940,13 +1039,13 @@ export default function TerminalWorkspace() {
   }
 
   return (
-    <div className="agent-root">
+    <div className="agent-root" data-platform={platform}>
       <AgentShell
         blocked={blockedRefs}
         onJumpToBlocked={handleJumpToBlocked}
-        branchRows={branchRows}
+        sessionRows={sessionRows}
         doneCount={doneCount}
-        onFocusBranch={(paneId) =>
+        onFocusSession={(paneId) =>
           setWorkspace((current) => (current ? focusPane(current, paneId) : current))
         }
         desktops={desktopEntries}
@@ -1010,7 +1109,6 @@ export default function TerminalWorkspace() {
                       sessionInfoById,
                       agentUiBySession,
                       restoredSnapshotsBySessionId,
-                      gitInfoByCwd,
                       onCloseChrome: (paneId) => handleClose(paneId),
                       onToggleMaximize: handleToggleMaximizePane,
                       onResize: (path, handleIndex, delta, baseWeights) =>
@@ -1030,6 +1128,8 @@ export default function TerminalWorkspace() {
                         setWorkspace((current) =>
                           current ? focusPane(current, paneId, desktop.id) : current,
                         ),
+                      branchesByCwd,
+                      onCheckoutBranch: handleCheckoutBranch,
                       onSnapshot: handleTerminalSnapshot,
                       onApproval: (sessionId, approvalId, choice) => {
                         void respondToApproval(sessionId, approvalId, choice).then(() => {
@@ -1101,7 +1201,6 @@ interface RenderLayoutCtx {
   sessionInfoById: Record<string, SessionInfo>;
   agentUiBySession: Record<string, AgentSessionState>;
   restoredSnapshotsBySessionId: Record<string, PersistedTerminalSnapshot>;
-  gitInfoByCwd: Record<string, GitInfo | null>;
   onCloseChrome: (paneId: string) => Promise<void>;
   onToggleMaximize: (paneId: string) => void;
   onResize: (
@@ -1111,6 +1210,13 @@ interface RenderLayoutCtx {
     baseWeights: number[],
   ) => void;
   onFocus: (paneId: string) => void;
+  branchesByCwd: Record<
+    string,
+    | { state: "loading" }
+    | { state: "error"; message: string }
+    | { state: "ready"; branches: GitBranch[] }
+  >;
+  onCheckoutBranch: (cwd: string, name: string) => void;
   onSnapshot: (sessionId: string, snapshot: PersistedTerminalSnapshot) => void;
   onApproval: (sessionId: string, approvalId: string, choice: string) => void;
   onSpawnAdjacent: (paneId: string, direction: SpawnDirection) => void;
@@ -1139,11 +1245,12 @@ function renderLayout(
     sessionInfoById,
     agentUiBySession,
     restoredSnapshotsBySessionId,
-    gitInfoByCwd,
     onCloseChrome,
     onToggleMaximize,
     onResize,
     onFocus,
+    branchesByCwd,
+    onCheckoutBranch,
     onSnapshot,
     onApproval,
     onSpawnAdjacent,
@@ -1174,8 +1281,12 @@ function renderLayout(
     const focused = desktop.focusedPaneId === pane.id;
     const status: AgentStatus = deriveAgentStatus(agent, Boolean(agent.finished));
     const taskName = deriveTaskName(session);
-    const branch = deriveBranchName(session);
     const agentType = deriveAgentType(session);
+    const paneCwd = session?.worktree_path || session?.cwd || null;
+    const branchesEntry = paneCwd ? branchesByCwd[paneCwd] : undefined;
+    const branches =
+      branchesEntry?.state === "ready" ? branchesEntry.branches : [];
+    const currentBranch = branches.find((b) => b.is_current)?.name ?? null;
     const progressPct = deriveProgressPct(agent);
     const toolCounts = toolCallCount(agent);
     const showInspector =
@@ -1193,7 +1304,6 @@ function renderLayout(
       >
         <WindowHeader
           taskName={taskName}
-          branch={branch}
           agentType={agentType}
           progressPct={progressPct}
           status={status}
@@ -1263,17 +1373,14 @@ function renderLayout(
             }
           />
         ) : (
-          <div className="agent-pane-footer">
-            <span>
-              {(() => {
-                const info = session ? gitInfoByCwd[session.cwd] : null;
-                return info ? `${info.repo} · ${info.branch}` : "";
-              })()}
-            </span>
-            <span>
-              {session?.worktree_path ? "isolated" : "shared"} · {agentType}
-            </span>
-          </div>
+          <PaneFooter
+            currentBranch={currentBranch}
+            branches={branches}
+            isolated={Boolean(session?.worktree_path)}
+            onCheckout={(name) => {
+              if (paneCwd) onCheckoutBranch(paneCwd, name);
+            }}
+          />
         )}
         <EdgeSpawner onSpawn={(direction) => onSpawnAdjacent(pane.id, direction)} />
       </section>

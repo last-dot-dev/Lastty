@@ -69,6 +69,7 @@ function TerminalViewportInner({
   useEffect(() => {
     const slot = slotRef.current;
     if (!slot) return;
+    console.log("[resume] viewport mount", sessionId);
     attachTerminalHost(sessionId, slot, {
       blocked,
       focused,
@@ -78,6 +79,7 @@ function TerminalViewportInner({
     });
     const unsubscribe = subscribeTerminalHostStatus(sessionId, setStatus);
     return () => {
+      console.log("[resume] viewport unmount", sessionId);
       unsubscribe();
       detachTerminalHost(sessionId);
     };
@@ -96,6 +98,7 @@ function TerminalViewportInner({
 
   const [claudeAvailable, setClaudeAvailable] = useState(true);
   const [codexAvailable, setCodexAvailable] = useState(true);
+  const [launched, setLaunched] = useState(false);
   useEffect(() => {
     let cancelled = false;
     void Promise.all([
@@ -122,9 +125,12 @@ function TerminalViewportInner({
         if (command === "claude") setClaudeAvailable(true);
         if (command === "codex") setCodexAvailable(true);
       }
+      setLaunched(true);
     },
     [sessionId],
   );
+
+  const hasSelection = launched || restoredSnapshot !== null;
 
   return (
     <div
@@ -132,66 +138,68 @@ function TerminalViewportInner({
         minHeight: 0,
         height: "100%",
         display: "grid",
-        gridTemplateRows: "auto 1fr",
+        gridTemplateRows: hasSelection ? "1fr" : "auto 1fr",
         background: "var(--color-background-primary)",
       }}
       onMouseDown={onActivate}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 8px",
-          borderBottom: "0.5px solid var(--color-border-tertiary)",
-        }}
-      >
+      {!hasSelection && (
         <div
-          data-testid="terminal-status"
           style={{
-            flex: 1,
-            minWidth: 0,
-            color: "var(--color-text-tertiary)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "4px 8px",
+            borderBottom: "0.5px solid var(--color-border-tertiary)",
           }}
         >
-          {status}
+          <div
+            data-testid="terminal-status"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              color: "var(--color-text-tertiary)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {status}
+          </div>
+          <button
+            type="button"
+            className="terminal-launch-btn"
+            title={
+              claudeAvailable
+                ? "Start Claude Code in this terminal"
+                : "Install and start Claude Code (runs `npm i -g @anthropic-ai/claude-code`)"
+            }
+            aria-label="Start Claude Code in this terminal"
+            onClick={() =>
+              launchCli("claude", "@anthropic-ai/claude-code", claudeAvailable)
+            }
+          >
+            <ClaudeLogo />
+          </button>
+          <button
+            type="button"
+            className="terminal-launch-btn"
+            title={
+              codexAvailable
+                ? "Start Codex CLI in this terminal"
+                : "Install and start Codex CLI (runs `npm i -g @openai/codex`)"
+            }
+            aria-label="Start Codex CLI in this terminal"
+            onClick={() =>
+              launchCli("codex", "@openai/codex", codexAvailable)
+            }
+          >
+            <CodexLogo />
+          </button>
         </div>
-        <button
-          type="button"
-          className="terminal-launch-btn"
-          title={
-            claudeAvailable
-              ? "Start Claude Code in this terminal"
-              : "Install and start Claude Code (runs `npm i -g @anthropic-ai/claude-code`)"
-          }
-          aria-label="Start Claude Code in this terminal"
-          onClick={() =>
-            launchCli("claude", "@anthropic-ai/claude-code", claudeAvailable)
-          }
-        >
-          <ClaudeLogo />
-        </button>
-        <button
-          type="button"
-          className="terminal-launch-btn"
-          title={
-            codexAvailable
-              ? "Start Codex CLI in this terminal"
-              : "Install and start Codex CLI (runs `npm i -g @openai/codex`)"
-          }
-          aria-label="Start Codex CLI in this terminal"
-          onClick={() =>
-            launchCli("codex", "@openai/codex", codexAvailable)
-          }
-        >
-          <CodexLogo />
-        </button>
-      </div>
+      )}
       <div
         data-testid="terminal-slot"
         ref={slotRef}

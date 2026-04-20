@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import BranchList, { type BranchRow } from "./BranchList";
+import SessionList, { type SessionRow } from "./SessionList";
 import CommitGraph from "./CommitGraph";
 import MergeButton from "./MergeButton";
 import type { GraphLayout } from "../../lib/graphLayout";
@@ -50,7 +50,7 @@ export default function Sidebar({
   graph,
   nowMs,
 }: {
-  rows: BranchRow[];
+  rows: SessionRow[];
   doneCount: number;
   onFocus: (paneId: string) => void;
   footerExtras?: ReactNode;
@@ -115,7 +115,7 @@ export default function Sidebar({
       style={{ width, minWidth: width }}
       aria-label="sessions"
     >
-      <BranchList
+      <SessionList
         rows={rows}
         onFocus={onFocus}
         style={{ height: topHeight, maxHeight: "none", flexShrink: 0 }}

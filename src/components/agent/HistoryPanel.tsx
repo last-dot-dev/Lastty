@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { HistoryEntry } from "../../lib/ipc";
+import type { HistoryEntry, HistorySource } from "../../lib/ipc";
 import {
   deleteHistoryEntry,
   listHistory,
@@ -98,6 +98,7 @@ export default function HistoryPanel({
       <ul className="history-panel__list">
         {filtered.map((entry) => {
           const active = entry.session_id === activeSessionId;
+          const imported = entry.source !== "lastty";
           return (
             <li
               key={entry.session_id}
@@ -117,6 +118,11 @@ export default function HistoryPanel({
                   {entryDisplayTitle(entry)}
                 </span>
                 <span className="history-panel__meta">
+                  {imported && (
+                    <span className="history-panel__source-badge">
+                      {sourceBadgeLabel(entry.source)}
+                    </span>
+                  )}
                   <span className="history-panel__cwd">{cwdBasename(entry.cwd)}</span>
                   <span className="history-panel__time">
                     {formatRelative(entry.last_event_ms)}
@@ -133,24 +139,28 @@ export default function HistoryPanel({
                 >
                   <TranscriptIcon />
                 </button>
-                <button
-                  type="button"
-                  className={`history-panel__icon-btn ${entry.pinned ? "is-on" : ""}`}
-                  title={entry.pinned ? "Unpin" : "Pin"}
-                  aria-label={entry.pinned ? "unpin" : "pin"}
-                  onClick={() => void handleTogglePin(entry)}
-                >
-                  <PinIcon filled={entry.pinned} />
-                </button>
-                <button
-                  type="button"
-                  className="history-panel__icon-btn"
-                  title="Delete"
-                  aria-label="delete"
-                  onClick={() => void handleDelete(entry.session_id)}
-                >
-                  <TrashIcon />
-                </button>
+                {!imported && (
+                  <>
+                    <button
+                      type="button"
+                      className={`history-panel__icon-btn ${entry.pinned ? "is-on" : ""}`}
+                      title={entry.pinned ? "Unpin" : "Pin"}
+                      aria-label={entry.pinned ? "unpin" : "pin"}
+                      onClick={() => void handleTogglePin(entry)}
+                    >
+                      <PinIcon filled={entry.pinned} />
+                    </button>
+                    <button
+                      type="button"
+                      className="history-panel__icon-btn"
+                      title="Delete"
+                      aria-label="delete"
+                      onClick={() => void handleDelete(entry.session_id)}
+                    >
+                      <TrashIcon />
+                    </button>
+                  </>
+                )}
               </div>
             </li>
           );
@@ -229,6 +239,17 @@ function entryDisplayTitle(entry: HistoryEntry) {
   if (entry.prompt_summary) return entry.prompt_summary;
   if (entry.agent_id) return `${entry.agent_id} @ ${cwdBasename(entry.cwd)}`;
   return `shell @ ${cwdBasename(entry.cwd)}`;
+}
+
+function sourceBadgeLabel(source: HistorySource) {
+  switch (source) {
+    case "claude_disk":
+      return "Claude";
+    case "codex_disk":
+      return "Codex";
+    default:
+      return "";
+  }
 }
 
 function cwdBasename(cwd: string) {

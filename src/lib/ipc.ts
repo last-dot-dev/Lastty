@@ -149,6 +149,8 @@ export interface SessionInfo {
   started_at_unix_ms: number;
 }
 
+export type HistorySource = "lastty" | "claude_disk" | "codex_disk";
+
 export interface HistoryEntry {
   session_id: string;
   title: string;
@@ -161,6 +163,7 @@ export interface HistoryEntry {
   exit_code: number | null;
   pinned: boolean;
   agent_session_id: string | null;
+  source: HistorySource;
 }
 
 export interface ResumeHistoryEntryResult {
@@ -196,6 +199,23 @@ export interface GitGraph {
 
 export async function gitGraph(cwd: string, limit?: number): Promise<GitGraph> {
   return invoke("git_graph", { cwd, limit });
+}
+
+export interface GitBranch {
+  name: string;
+  is_current: boolean;
+  worktree_path: string | null;
+}
+
+export async function listGitBranches(cwd: string): Promise<GitBranch[]> {
+  return invoke("list_git_branches", { cwd });
+}
+
+export async function checkoutGitBranch(
+  cwd: string,
+  name: string,
+): Promise<void> {
+  return invoke("checkout_git_branch", { cwd, name });
 }
 
 export async function getWorkspaceRoot(): Promise<string> {

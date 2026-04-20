@@ -23,7 +23,6 @@ function HistoryIcon() {
 
 export default function WindowHeader({
   taskName,
-  branch,
   agentType,
   progressPct,
   status,
@@ -35,7 +34,6 @@ export default function WindowHeader({
   historyActive = false,
 }: {
   taskName: string;
-  branch: string;
   agentType: string;
   progressPct: number;
   status: AgentStatus;
@@ -63,7 +61,6 @@ export default function WindowHeader({
       <span className="agent-window-header__task" title={taskName}>
         {taskName}
       </span>
-      <span className="agent-window-header__branch">{branch}</span>
       <span className="agent-window-header__agent">{agentType}</span>
       <span className={`agent-window-header__pct ${pctCls}`}>{progressPct}%</span>
       <StatusBadge status={status} />

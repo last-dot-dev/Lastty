@@ -13,7 +13,7 @@ name = "lastty"
 path = "src/main.rs"
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "test"] }
+tauri = { version = "2", features = ["test"] }
 tauri-build = { version = "2", features = [] }
 alacritty_terminal = "0.26"
 anyhow = "1"
@@ -27,6 +27,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pane-protocol = { path = "../pane-protocol" }
 toml = "0.8"
 polling = "3"
+rusqlite = { version = "0.31", features = ["bundled"] }
+tauri-plugin-dialog = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

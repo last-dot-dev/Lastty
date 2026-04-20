@@ -280,6 +280,7 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
     entry.webgl = null;
   }
 
+  console.log(`[resume] initEntry terminal.open ${sessionId}`);
   terminal.open(host);
   bindWheelScroll(entry);
   entry.resizeObserver = new ResizeObserver(() => {
@@ -312,22 +313,6 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
     }
   };
 
-  if (persistedSnapshot?.serializedBuffer) {
-    setStatus(entry, `session ${sessionId} (restored)`);
-    scheduleSnapshot();
-  } else {
-    try {
-      const initialFrame = await getTerminalFrame(sessionId);
-      writeFrame(initialFrame);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus(entry, `failed: ${message}`);
-      return;
-    }
-    setStatus(entry, `session ${sessionId}`);
-    scheduleSnapshot();
-  }
-
   terminal.onData((data) => {
     if (entry.blockedRef.current) return;
     sendTerminalInput(sessionId, data);
@@ -339,6 +324,28 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
     scheduleSnapshot();
   });
   entry.unlistenFrame = unlistenFrame;
+  console.log(`[resume] initEntry listener registered ${sessionId}`);
+
+  if (persistedSnapshot?.serializedBuffer) {
+    setStatus(entry, `session ${sessionId} (restored)`);
+    scheduleSnapshot();
+  } else {
+    console.log(`[resume] initEntry fetching initial frame ${sessionId}`);
+    try {
+      const initialFrame = await getTerminalFrame(sessionId);
+      if (entry.frameState === null) {
+        writeFrame(initialFrame);
+      }
+      setStatus(entry, `session ${sessionId}`);
+      scheduleSnapshot();
+      console.log(`[resume] initEntry initial frame applied ${sessionId}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[resume] initEntry initial frame failed ${sessionId}`, message);
+      setStatus(entry, `session ${sessionId} (live)`);
+      scheduleSnapshot();
+    }
+  }
 }
 
 function createEntry(sessionId: string, props: SessionHostProps): Entry {
@@ -401,6 +408,8 @@ export function attachTerminalHost(
   slot: HTMLElement,
   props: SessionHostProps,
 ): void {
+  const existing = entries.has(sessionId);
+  console.log(`[resume] attach ${sessionId} existing=${existing}`);
   const entry = entries.get(sessionId) ?? createEntry(sessionId, props);
   entry.blockedRef.current = props.blocked;
   entry.focusedRef.current = props.focused;

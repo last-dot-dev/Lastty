@@ -20,6 +20,7 @@ export type LayoutNode =
 export interface DesktopState {
   id: string;
   name: string;
+  projectRoot: string;
   layout: LayoutNode | null;
   focusedPaneId: string | null;
   maximizedPaneId: string | null;
@@ -54,19 +55,24 @@ export function createPaneRecord(sessionId: string, title = "shell"): PaneRecord
 export function createDesktopState(
   rootPane: PaneRecord | null,
   name: string,
+  projectRoot: string,
   id: string = nextDesktopId(),
 ): DesktopState {
   return {
     id,
     name,
+    projectRoot,
     layout: rootPane ? { type: "leaf", paneId: rootPane.id } : null,
     focusedPaneId: rootPane?.id ?? null,
     maximizedPaneId: null,
   };
 }
 
-export function createWorkspace(rootPane: PaneRecord): WorkspaceState {
-  const desktop = createDesktopState(rootPane, "View 1");
+export function createWorkspace(
+  rootPane: PaneRecord,
+  projectRoot: string,
+): WorkspaceState {
+  const desktop = createDesktopState(rootPane, "View 1", projectRoot);
   return {
     panes: { [rootPane.id]: rootPane },
     desktops: [desktop],
@@ -405,15 +411,24 @@ function swapLeaves(node: LayoutNode, a: string, b: string): LayoutNode {
 export function createDesktop(
   state: WorkspaceState,
   rootPane: PaneRecord,
+  projectRoot: string,
   name?: string,
 ): WorkspaceState {
   const desktopName = name || `View ${state.desktops.length + 1}`;
-  const desktop = createDesktopState(rootPane, desktopName);
+  const desktop = createDesktopState(rootPane, desktopName, projectRoot);
   return {
     panes: { ...state.panes, [rootPane.id]: rootPane },
     desktops: [...state.desktops, desktop],
     activeDesktopId: desktop.id,
   };
+}
+
+export function setDesktopProjectRoot(
+  state: WorkspaceState,
+  desktopId: string,
+  projectRoot: string,
+): WorkspaceState {
+  return updateDesktop(state, desktopId, (desktop) => ({ ...desktop, projectRoot }));
 }
 
 export function closeDesktop(

@@ -9,7 +9,7 @@ import {
 import type { SessionInfo } from "../lib/ipc";
 
 const STORAGE_KEY = "lastty.workspace.v1";
-const PERSISTED_VERSION = 2;
+const PERSISTED_VERSION = 3;
 
 export interface PersistedTerminalSnapshot {
   capturedAtMs: number;
@@ -28,6 +28,7 @@ export interface PersistedPaneState {
 export interface PersistedDesktop {
   id: string;
   name: string;
+  projectRoot: string;
   layout: LayoutNode | null;
   focusedPaneId: string | null;
   maximizedPaneId: string | null;
@@ -39,6 +40,22 @@ export interface PersistedWorkspaceState {
   panes: PersistedPaneState[];
   savedAtMs: number;
   version: number;
+}
+
+interface PersistedDesktopV2 {
+  id: string;
+  name: string;
+  layout: LayoutNode | null;
+  focusedPaneId: string | null;
+  maximizedPaneId: string | null;
+}
+
+interface PersistedWorkspaceStateV2 {
+  activeDesktopId: string;
+  desktops: PersistedDesktopV2[];
+  panes: PersistedPaneState[];
+  savedAtMs: number;
+  version: 2;
 }
 
 interface PersistedWorkspaceStateV1 {
@@ -82,6 +99,7 @@ export function buildPersistedWorkspaceState(
     desktops.push({
       id: desktop.id,
       name: desktop.name,
+      projectRoot: desktop.projectRoot,
       layout: desktop.layout,
       focusedPaneId: desktop.focusedPaneId,
       maximizedPaneId: desktop.maximizedPaneId,
@@ -115,6 +133,7 @@ export function readPersistedWorkspaceState(
   try {
     const parsed = JSON.parse(raw) as
       | PersistedWorkspaceState
+      | PersistedWorkspaceStateV2
       | PersistedWorkspaceStateV1
       | null;
     if (!parsed || typeof parsed.savedAtMs !== "number" || !Array.isArray(parsed.panes)) {
@@ -122,7 +141,12 @@ export function readPersistedWorkspaceState(
     }
 
     if (parsed.version === 1) {
-      return migrateV1(parsed as PersistedWorkspaceStateV1);
+      const v2 = migrateV1(parsed as PersistedWorkspaceStateV1);
+      return v2 ? migrateV2(v2) : null;
+    }
+
+    if (parsed.version === 2) {
+      return migrateV2(parsed as PersistedWorkspaceStateV2);
     }
 
     if (
@@ -139,7 +163,7 @@ export function readPersistedWorkspaceState(
   }
 }
 
-function migrateV1(v1: PersistedWorkspaceStateV1): PersistedWorkspaceState | null {
+function migrateV1(v1: PersistedWorkspaceStateV1): PersistedWorkspaceStateV2 | null {
   if (!v1.layout) return null;
   const desktopId = "desktop-legacy-1";
   return {
@@ -155,8 +179,123 @@ function migrateV1(v1: PersistedWorkspaceStateV1): PersistedWorkspaceState | nul
     ],
     panes: v1.panes,
     savedAtMs: v1.savedAtMs,
+    version: 2,
+  };
+}
+
+function migrateV2(v2: PersistedWorkspaceStateV2): PersistedWorkspaceState | null {
+  const cwdByPaneId = new Map<string, string>();
+  for (const pane of v2.panes) {
+    cwdByPaneId.set(pane.paneId, pane.cwd);
+  }
+
+  const outDesktops: PersistedDesktop[] = [];
+  let activeDesktopId = v2.activeDesktopId;
+  let fallbackCounter = 0;
+
+  for (const desktop of v2.desktops) {
+    const paneIds = desktop.layout ? orderedPaneIds(desktop.layout) : [];
+    if (paneIds.length === 0) {
+      outDesktops.push({
+        id: desktop.id,
+        name: desktop.name,
+        projectRoot: "",
+        layout: null,
+        focusedPaneId: null,
+        maximizedPaneId: null,
+      });
+      continue;
+    }
+
+    const groups = new Map<string, string[]>();
+    const order: string[] = [];
+    for (const paneId of paneIds) {
+      const cwd = cwdByPaneId.get(paneId) ?? "";
+      if (!groups.has(cwd)) {
+        groups.set(cwd, []);
+        order.push(cwd);
+      }
+      groups.get(cwd)!.push(paneId);
+    }
+
+    order.forEach((cwd, index) => {
+      const keepPaneIds = new Set(groups.get(cwd)!);
+      const layout = desktop.layout
+        ? restrictLayoutToPanes(desktop.layout, keepPaneIds)
+        : null;
+      if (!layout) return;
+
+      const retained = orderedPaneIds(layout);
+      const focusedPaneId =
+        desktop.focusedPaneId && retained.includes(desktop.focusedPaneId)
+          ? desktop.focusedPaneId
+          : retained[0] ?? null;
+      const maximizedPaneId =
+        desktop.maximizedPaneId && retained.includes(desktop.maximizedPaneId)
+          ? desktop.maximizedPaneId
+          : null;
+
+      if (index === 0) {
+        outDesktops.push({
+          id: desktop.id,
+          name: desktop.name,
+          projectRoot: cwd,
+          layout,
+          focusedPaneId,
+          maximizedPaneId,
+        });
+      } else {
+        fallbackCounter += 1;
+        outDesktops.push({
+          id: `${desktop.id}-split-${fallbackCounter}`,
+          name: `${desktop.name} — ${basenameOf(cwd)}`,
+          projectRoot: cwd,
+          layout,
+          focusedPaneId,
+          maximizedPaneId,
+        });
+      }
+    });
+  }
+
+  if (outDesktops.length === 0) return null;
+  if (!outDesktops.some((desktop) => desktop.id === activeDesktopId)) {
+    activeDesktopId = outDesktops[0]!.id;
+  }
+
+  return {
+    activeDesktopId,
+    desktops: outDesktops,
+    panes: v2.panes,
+    savedAtMs: v2.savedAtMs,
     version: PERSISTED_VERSION,
   };
+}
+
+function restrictLayoutToPanes(
+  node: LayoutNode,
+  keep: Set<string>,
+): LayoutNode | null {
+  if (node.type === "leaf") {
+    return keep.has(node.paneId) ? node : null;
+  }
+  const children: LayoutNode[] = [];
+  const weights: number[] = [];
+  node.children.forEach((child, index) => {
+    const restricted = restrictLayoutToPanes(child, keep);
+    if (!restricted) return;
+    children.push(restricted);
+    weights.push(node.weights[index] ?? 1);
+  });
+  if (children.length === 0) return null;
+  if (children.length === 1) return children[0]!;
+  return { ...node, children, weights };
+}
+
+function basenameOf(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  return idx >= 0 ? trimmed.slice(idx + 1) || trimmed : trimmed;
 }
 
 export function buildRestoredWorkspaceState(
@@ -183,6 +322,8 @@ export function buildRestoredWorkspaceState(
     ]),
   );
 
+  const firstPaneCwd = persisted.panes[0]!.cwd;
+
   const desktops: DesktopState[] = persisted.desktops.map((desktop) => {
     const paneIds = desktop.layout ? orderedPaneIds(desktop.layout) : [];
     const validPaneIds = paneIds.filter((paneId) => paneId in panes);
@@ -199,6 +340,7 @@ export function buildRestoredWorkspaceState(
     return {
       id: desktop.id,
       name: desktop.name,
+      projectRoot: desktop.projectRoot || firstPaneCwd,
       layout,
       focusedPaneId,
       maximizedPaneId,
@@ -211,7 +353,7 @@ export function buildRestoredWorkspaceState(
     const firstPane = panes[firstPaneId];
     if (!firstPane) return null;
     return {
-      workspace: createWorkspace(firstPane),
+      workspace: createWorkspace(firstPane, firstPaneCwd),
       restoredSnapshotsBySessionId: buildRestoredSnapshots(persisted, sessions),
     };
   }
@@ -222,7 +364,10 @@ export function buildRestoredWorkspaceState(
 
   const workspace: WorkspaceState = {
     panes,
-    desktops: desktops.length > 0 ? desktops : [createDesktopState(null, "Desktop 1")],
+    desktops:
+      desktops.length > 0
+        ? desktops
+        : [createDesktopState(null, "Desktop 1", firstPaneCwd)],
     activeDesktopId,
   };
 
@@ -231,7 +376,7 @@ export function buildRestoredWorkspaceState(
     const firstPane = panes[firstPaneId];
     if (!firstPane) return null;
     return {
-      workspace: createWorkspace(firstPane),
+      workspace: createWorkspace(firstPane, firstPaneCwd),
       restoredSnapshotsBySessionId: buildRestoredSnapshots(persisted, sessions),
     };
   }

@@ -182,8 +182,15 @@ pub fn launch_agent<R: Runtime>(
             .branch_name
             .clone()
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| format!("lastty-{}", sanitize_branch_component(&agent.id)));
-        let worktree_root = workspace_root.join(".pane-worktrees");
+            .unwrap_or_else(|| {
+                let suffix = uuid::Uuid::new_v4().simple().to_string();
+                format!(
+                    "lastty-{}-{}",
+                    sanitize_branch_component(&agent.id),
+                    &suffix[..6]
+                )
+            });
+        let worktree_root = base_cwd.join(".pane-worktrees");
         std::fs::create_dir_all(&worktree_root)?;
         let worktree_path = worktree_root.join(&branch_name);
         if worktree_path.exists() {
@@ -200,7 +207,7 @@ pub fn launch_agent<R: Runtime>(
                 &branch_name,
                 worktree_path.to_string_lossy().as_ref(),
             ])
-            .current_dir(workspace_root)
+            .current_dir(&base_cwd)
             .status()?;
         if !status.success() {
             return Err(anyhow::anyhow!(

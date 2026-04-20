@@ -92,6 +92,20 @@ pub struct RecordingInfo {
     pub size_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistorySource {
+    Lastty,
+    ClaudeDisk,
+    CodexDisk,
+}
+
+impl Default for HistorySource {
+    fn default() -> Self {
+        HistorySource::Lastty
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub session_id: String,
@@ -107,6 +121,8 @@ pub struct HistoryEntry {
     pub pinned: bool,
     #[serde(default)]
     pub agent_session_id: Option<String>,
+    #[serde(default)]
+    pub source: HistorySource,
 }
 
 impl<R: Runtime> EventBus<R> {
@@ -417,6 +433,7 @@ fn history_entry_from_live(
         exit_code: None,
         pinned: false,
         agent_session_id: None,
+        source: HistorySource::Lastty,
     }
 }
 

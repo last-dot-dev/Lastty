@@ -10,8 +10,9 @@ use crate::agents::{
     self, load_agent_registry, resume_command_spec, AgentDefinition, LaunchAgentRequest,
     LaunchAgentResult, RuleDefinition,
 };
-use crate::bus::{BusEvent, EventBus, HistoryEntry, RecordingInfo};
+use crate::bus::{BusEvent, EventBus, HistoryEntry, HistorySource, RecordingInfo};
 use crate::font_config::FontConfig;
+use crate::history;
 use crate::runtime_modes;
 use crate::terminal::manager::TerminalManager;
 use crate::terminal::render::TerminalFrame;
@@ -335,12 +336,20 @@ pub async fn read_recording(
     session_id: String,
     event_bus: State<'_, EventBus>,
 ) -> Result<String, String> {
-    event_bus.read_recording(&session_id)
+    match parse_prefixed_session_id(&session_id) {
+        Some((source, rest)) => history::read_transcript(source, rest),
+        None => event_bus.read_recording(&session_id),
+    }
 }
 
 #[tauri::command]
-pub async fn list_history(event_bus: State<'_, EventBus>) -> Result<Vec<HistoryEntry>, String> {
-    Ok(event_bus.list_history())
+pub async fn list_history(
+    event_bus: State<'_, EventBus>,
+) -> Result<Vec<HistoryEntry>, String> {
+    let mut entries = event_bus.list_history();
+    entries.retain(|entry| entry.agent_id.is_some());
+    merge_external(&mut entries, history::discover_all());
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -348,6 +357,9 @@ pub async fn get_history_entry(
     session_id: String,
     event_bus: State<'_, EventBus>,
 ) -> Result<Option<HistoryEntry>, String> {
+    if parse_prefixed_session_id(&session_id).is_some() {
+        return Ok(None);
+    }
     Ok(event_bus.get_history_entry(&session_id))
 }
 
@@ -356,6 +368,9 @@ pub async fn delete_history_entry(
     session_id: String,
     event_bus: State<'_, EventBus>,
 ) -> Result<(), String> {
+    if parse_prefixed_session_id(&session_id).is_some() {
+        return Err("imported sessions cannot be deleted from Lastty".to_string());
+    }
     event_bus.delete_history_entry(&session_id)
 }
 
@@ -365,7 +380,58 @@ pub async fn set_history_entry_pinned(
     pinned: bool,
     event_bus: State<'_, EventBus>,
 ) -> Result<(), String> {
+    if parse_prefixed_session_id(&session_id).is_some() {
+        return Err("imported sessions cannot be pinned".to_string());
+    }
     event_bus.set_history_entry_pinned(&session_id, pinned)
+}
+
+fn lookup_imported_entry(source: HistorySource, rest: &str) -> Option<HistoryEntry> {
+    match source {
+        HistorySource::ClaudeDisk => history::claude::find_entry(rest),
+        HistorySource::CodexDisk => history::codex::find_entry(rest),
+        HistorySource::Lastty => None,
+    }
+}
+
+fn parse_prefixed_session_id(session_id: &str) -> Option<(HistorySource, &str)> {
+    if let Some(rest) = session_id.strip_prefix("claude:") {
+        return Some((HistorySource::ClaudeDisk, rest));
+    }
+    if let Some(rest) = session_id.strip_prefix("codex:") {
+        return Some((HistorySource::CodexDisk, rest));
+    }
+    None
+}
+
+fn merge_external(entries: &mut Vec<HistoryEntry>, external: Vec<HistoryEntry>) {
+    use std::collections::HashSet;
+    let claimed: HashSet<(String, String)> = entries
+        .iter()
+        .filter_map(|entry| {
+            Some((
+                entry.agent_id.clone()?,
+                entry.agent_session_id.clone()?,
+            ))
+        })
+        .collect();
+    for entry in external {
+        let key = match (entry.agent_id.clone(), entry.agent_session_id.clone()) {
+            (Some(agent_id), Some(agent_session_id)) => Some((agent_id, agent_session_id)),
+            _ => None,
+        };
+        if let Some(key) = key.as_ref() {
+            if claimed.contains(key) {
+                continue;
+            }
+        }
+        entries.push(entry);
+    }
+    entries.sort_by(|a, b| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then_with(|| b.last_event_ms.cmp(&a.last_event_ms))
+    });
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -390,9 +456,11 @@ async fn resume_history_entry_for_runtime<R: tauri::Runtime>(
     state: State<'_, TerminalManager<R>>,
     event_bus: State<'_, EventBus<R>>,
 ) -> Result<ResumeHistoryEntryResult, String> {
-    let entry = event_bus
-        .get_history_entry(&session_id)
-        .ok_or_else(|| "history entry not found".to_string())?;
+    let entry = match parse_prefixed_session_id(&session_id) {
+        Some((source, rest)) => lookup_imported_entry(source, rest),
+        None => event_bus.get_history_entry(&session_id),
+    }
+    .ok_or_else(|| "history entry not found".to_string())?;
 
     let cwd_path = if entry.cwd.is_empty() || !Path::new(&entry.cwd).is_dir() {
         std::env::var("HOME")
@@ -456,6 +524,18 @@ pub async fn git_graph(
     limit: Option<u32>,
 ) -> Result<crate::git_graph::GitGraph, String> {
     crate::git_graph::load(Path::new(&cwd), limit.unwrap_or(200)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_git_branches(
+    cwd: String,
+) -> Result<Vec<crate::git_branches::GitBranch>, String> {
+    crate::git_branches::list_branches(Path::new(&cwd)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn checkout_git_branch(cwd: String, name: String) -> Result<(), String> {
+    crate::git_branches::checkout_branch(Path::new(&cwd), &name).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

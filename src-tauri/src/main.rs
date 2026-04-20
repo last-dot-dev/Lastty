@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::{window::Color, Manager, TitleBarStyle};
+use tauri::{Manager, TitleBarStyle};
 use tracing_subscriber::EnvFilter;
 
 use lastty::render_sync::RenderCoordinator;
@@ -22,17 +22,14 @@ fn main() {
         .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
             let benchmark_mode = resolved_benchmark_mode();
 
             #[cfg(target_os = "macos")]
             {
-                window.set_title_bar_style(TitleBarStyle::Transparent)?;
-                // Fully transparent so the HTML body's theme-aware background
-                // (see src/styles/tokens.css — --color-background-tertiary)
-                // shows through the title bar area in both light and dark themes.
-                window.set_background_color(Some(Color(0, 0, 0, 0)))?;
+                window.set_title_bar_style(TitleBarStyle::Overlay)?;
             }
 
             if benchmark_mode == Some(BenchmarkMode::Xterm) {
@@ -124,6 +121,8 @@ fn main() {
             commands::resume_history_entry,
             commands::get_git_info,
             commands::git_graph,
+            commands::list_git_branches,
+            commands::checkout_git_branch,
             commands::get_workspace_root,
             commands::terminal_input,
             commands::get_terminal_frame,

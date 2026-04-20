@@ -28,7 +28,7 @@ import {
 describe("layout state", () => {
   it("boots with a single desktop containing the root pane", () => {
     const root = createPaneRecord("session-a", "root");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
 
     expect(state.desktops).toHaveLength(1);
     const desktop = activeDesktop(state);
@@ -40,7 +40,7 @@ describe("layout state", () => {
 
   it("splits the focused pane into a two-child layout", () => {
     const root = createPaneRecord("session-a", "root");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
 
     const next = createPaneRecord("session-b", "secondary");
     const updated = splitPane(state, root.id, "horizontal", next);
@@ -52,7 +52,7 @@ describe("layout state", () => {
 
   it("returns the same reference when focusing a pane that is already focused", () => {
     const root = createPaneRecord("session-a", "root");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
 
     expect(focusPane(state, root.id)).toBe(state);
   });
@@ -60,7 +60,7 @@ describe("layout state", () => {
   it("produces a new reference when focus actually moves", () => {
     const root = createPaneRecord("session-a", "root");
     const next = createPaneRecord("session-b", "secondary");
-    const state = splitPane(createWorkspace(root), root.id, "horizontal", next);
+    const state = splitPane(createWorkspace(root, "/proj"), root.id, "horizontal", next);
 
     const refocused = focusPane(state, root.id);
     expect(refocused).not.toBe(state);
@@ -69,7 +69,7 @@ describe("layout state", () => {
 
   it("collapses a split when one pane is removed", () => {
     const root = createPaneRecord("session-a", "root");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
     const split = splitPane(state, root.id, "vertical", createPaneRecord("session-b", "b"));
 
     const collapsed = closePane(split, root.id);
@@ -81,7 +81,7 @@ describe("layout state", () => {
 
   it("allows closing the last pane of a desktop, leaving it empty", () => {
     const root = createPaneRecord("session-a", "root");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
 
     const empty = closePane(state, root.id);
     const desktop = activeDesktop(empty);
@@ -93,7 +93,7 @@ describe("layout state", () => {
 
   it("updates split weights while preserving total size", () => {
     const root = createPaneRecord("session-a", "root");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
     const split = splitPane(state, root.id, "horizontal", createPaneRecord("session-b", "b"));
 
     const resized = resizeSplit(split, [], 0, 0.45);
@@ -112,7 +112,7 @@ describe("layout state", () => {
 
   it("preserves ancestor weights when a nested split collapses", () => {
     const root = createPaneRecord("session-a", "root");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
     const outer = splitPane(state, root.id, "horizontal", createPaneRecord("session-b", "b"));
     const resizedOuter = resizeSplit(outer, [], 0, 0.6);
     const nested = splitPane(
@@ -137,7 +137,7 @@ describe("layout state", () => {
 
   it("moves focus spatially instead of cycling ordered pane ids", () => {
     const root = createPaneRecord("session-a", "root");
-    const initial = createWorkspace(root);
+    const initial = createWorkspace(root, "/proj");
     const withBottom = splitPane(
       initial,
       root.id,
@@ -175,7 +175,7 @@ describe("layout state", () => {
 
   it("finds neighbors across nested splits using pane geometry", () => {
     const root = createPaneRecord("session-a", "root");
-    const initial = createWorkspace(root);
+    const initial = createWorkspace(root, "/proj");
     const withRight = splitPane(
       initial,
       root.id,
@@ -200,10 +200,10 @@ describe("layout state", () => {
 describe("desktop management", () => {
   it("creates a new desktop and switches to it", () => {
     const rootA = createPaneRecord("session-a");
-    const state = createWorkspace(rootA);
+    const state = createWorkspace(rootA, "/proj");
 
     const rootB = createPaneRecord("session-b");
-    const withSecond = createDesktop(state, rootB);
+    const withSecond = createDesktop(state, rootB, "/proj");
 
     expect(withSecond.desktops).toHaveLength(2);
     expect(withSecond.activeDesktopId).toBe(withSecond.desktops[1]!.id);
@@ -215,9 +215,9 @@ describe("desktop management", () => {
 
   it("closeDesktop removes its panes and returns their session ids", () => {
     const rootA = createPaneRecord("session-a");
-    const state = createWorkspace(rootA);
+    const state = createWorkspace(rootA, "/proj");
     const rootB = createPaneRecord("session-b");
-    const withSecond = createDesktop(state, rootB);
+    const withSecond = createDesktop(state, rootB, "/proj");
     const secondId = withSecond.activeDesktopId;
     const withSplit = splitPane(
       withSecond,
@@ -238,7 +238,7 @@ describe("desktop management", () => {
 
   it("closeDesktop refuses to close the last remaining desktop", () => {
     const root = createPaneRecord("session-a");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
 
     const { workspace, removedSessionIds } = closeDesktop(state, state.activeDesktopId);
 
@@ -248,9 +248,9 @@ describe("desktop management", () => {
 
   it("switchDesktop activates the target desktop without mutating panes", () => {
     const root = createPaneRecord("session-a");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
     const firstId = state.activeDesktopId;
-    const withSecond = createDesktop(state, createPaneRecord("session-b"));
+    const withSecond = createDesktop(state, createPaneRecord("session-b"), "/proj");
 
     const back = switchDesktop(withSecond, firstId);
 
@@ -259,7 +259,7 @@ describe("desktop management", () => {
   });
 
   it("renameDesktop trims whitespace and preserves names on empty input", () => {
-    const state = createWorkspace(createPaneRecord("session-a"));
+    const state = createWorkspace(createPaneRecord("session-a"), "/proj");
     const renamed = renameDesktop(state, state.activeDesktopId, "  Build  ");
     expect(activeDesktop(renamed).name).toBe("Build");
 
@@ -268,9 +268,9 @@ describe("desktop management", () => {
   });
 
   it("nextDesktopIdInDirection wraps around", () => {
-    let state = createWorkspace(createPaneRecord("session-a"));
-    state = createDesktop(state, createPaneRecord("session-b"));
-    state = createDesktop(state, createPaneRecord("session-c"));
+    let state = createWorkspace(createPaneRecord("session-a"), "/proj");
+    state = createDesktop(state, createPaneRecord("session-b"), "/proj");
+    state = createDesktop(state, createPaneRecord("session-c"), "/proj");
     const [, , third] = state.desktops;
     state = switchDesktop(state, state.desktops[0]!.id);
 
@@ -280,7 +280,7 @@ describe("desktop management", () => {
 
   it("toggleMaximize flips a pane's maximized state within its desktop", () => {
     const root = createPaneRecord("session-a");
-    const state = createWorkspace(root);
+    const state = createWorkspace(root, "/proj");
     const split = splitPane(state, root.id, "horizontal", createPaneRecord("session-b"));
 
     const maxed = toggleMaximize(split, root.id);
@@ -291,9 +291,9 @@ describe("desktop management", () => {
   });
 
   it("findDesktopForPane locates a pane across desktops", () => {
-    const state = createWorkspace(createPaneRecord("session-a"));
+    const state = createWorkspace(createPaneRecord("session-a"), "/proj");
     const firstDesktopId = state.activeDesktopId;
-    const withSecond = createDesktop(state, createPaneRecord("session-b"));
+    const withSecond = createDesktop(state, createPaneRecord("session-b"), "/proj");
 
     expect(findDesktopForPane(withSecond, "pane-session-a")?.id).toBe(firstDesktopId);
     expect(findDesktopForPane(withSecond, "pane-session-b")?.id).toBe(withSecond.activeDesktopId);
@@ -305,7 +305,7 @@ describe("drag-and-drop layout helpers", () => {
   it("detachPane removes a leaf and collapses singleton splits, keeping the pane in the global map", () => {
     const root = createPaneRecord("session-a");
     const state = splitPane(
-      createWorkspace(root),
+      createWorkspace(root, "/proj"),
       root.id,
       "horizontal",
       createPaneRecord("session-b"),
@@ -320,8 +320,8 @@ describe("drag-and-drop layout helpers", () => {
   });
 
   it("attachPaneToDesktop wraps an existing layout with the incoming pane on the right", () => {
-    let state = createWorkspace(createPaneRecord("session-a"));
-    state = createDesktop(state, createPaneRecord("session-b"));
+    let state = createWorkspace(createPaneRecord("session-a"), "/proj");
+    state = createDesktop(state, createPaneRecord("session-b"), "/proj");
     const firstDesktopId = state.desktops[0]!.id;
 
     const detached = detachPane(state, "pane-session-b");
@@ -340,8 +340,8 @@ describe("drag-and-drop layout helpers", () => {
   });
 
   it("attachPaneToDesktop fills an empty desktop with a single leaf", () => {
-    let state = createWorkspace(createPaneRecord("session-a"));
-    state = createDesktop(state, createPaneRecord("session-b"));
+    let state = createWorkspace(createPaneRecord("session-a"), "/proj");
+    state = createDesktop(state, createPaneRecord("session-b"), "/proj");
     const secondDesktopId = state.activeDesktopId;
     const emptied = detachPane(state, "pane-session-b");
     const emptyDesktop = emptied.desktops.find((entry) => entry.id === secondDesktopId)!;
@@ -353,8 +353,8 @@ describe("drag-and-drop layout helpers", () => {
   });
 
   it("splitAtPane places the source leaf beside the target in the requested direction", () => {
-    let state = createWorkspace(createPaneRecord("session-a"));
-    state = createDesktop(state, createPaneRecord("session-b"));
+    let state = createWorkspace(createPaneRecord("session-a"), "/proj");
+    state = createDesktop(state, createPaneRecord("session-b"), "/proj");
     const firstDesktopId = state.desktops[0]!.id;
 
     const after = splitAtPane(state, "pane-session-a", "pane-session-b", "right");
@@ -374,7 +374,7 @@ describe("drag-and-drop layout helpers", () => {
 
   it("splitAtPane is a no-op when source and target are the same", () => {
     const state = splitPane(
-      createWorkspace(createPaneRecord("session-a")),
+      createWorkspace(createPaneRecord("session-a"), "/proj"),
       "pane-session-a",
       "horizontal",
       createPaneRecord("session-b"),
@@ -385,8 +385,8 @@ describe("drag-and-drop layout helpers", () => {
   });
 
   it("swapPanes swaps two leaves across desktops without mutating the panes map", () => {
-    let state = createWorkspace(createPaneRecord("session-a"));
-    state = createDesktop(state, createPaneRecord("session-b"));
+    let state = createWorkspace(createPaneRecord("session-a"), "/proj");
+    state = createDesktop(state, createPaneRecord("session-b"), "/proj");
 
     const swapped = swapPanes(state, "pane-session-a", "pane-session-b");
     const [first, second] = swapped.desktops;
@@ -399,7 +399,7 @@ describe("drag-and-drop layout helpers", () => {
   });
 
   it("swapPanes works within a single desktop's nested layout", () => {
-    let state = createWorkspace(createPaneRecord("session-a"));
+    let state = createWorkspace(createPaneRecord("session-a"), "/proj");
     state = splitPane(state, "pane-session-a", "horizontal", createPaneRecord("session-b"));
     state = splitPane(state, "pane-session-b", "vertical", createPaneRecord("session-c"));
 

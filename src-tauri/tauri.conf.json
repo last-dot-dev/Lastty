@@ -10,15 +10,14 @@
     "beforeBuildCommand": "pnpm build"
   },
   "app": {
-    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
         "title": "lastty",
         "width": 1200,
         "height": 800,
-        "transparent": true,
         "decorations": true,
+        "hiddenTitle": true,
         "dragDropEnabled": false
       }
     ]
