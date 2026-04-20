@@ -21,6 +21,12 @@ pub struct RenderCoordinator {
     cv: Condvar,
 }
 
+impl Default for RenderCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RenderCoordinator {
     pub fn new() -> Self {
         Self {

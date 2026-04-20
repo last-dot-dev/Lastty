@@ -62,7 +62,13 @@ fn main() {
             env.insert("LASTTY".to_string(), "1".to_string());
 
             let session_id = manager
-                .create_session(None, &cwd, &env, 80, 24, None, None, None, None)
+                .create_session(lastty::terminal::session::SessionConfig {
+                    cwd,
+                    env,
+                    cols: 80,
+                    rows: 24,
+                    ..Default::default()
+                })
                 .expect("failed to create initial terminal session");
             app.handle()
                 .state::<bus::EventBus>()

@@ -49,11 +49,7 @@ fn emit_frame_for_session<R: Runtime>(
 ) -> Option<FrameEmitMetrics> {
     let manager = app_handle.state::<TerminalManager<R>>();
     let term_arc = manager.get(&session_id).map(|session| session.term.clone());
-    drop(manager);
-
-    let Some(term_arc) = term_arc else {
-        return None;
-    };
+    let term_arc = term_arc?;
 
     let frame_start = Instant::now();
     let mut term = term_arc.lock();

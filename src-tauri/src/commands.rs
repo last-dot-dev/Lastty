@@ -16,8 +16,7 @@ use crate::history;
 use crate::runtime_modes;
 use crate::terminal::manager::TerminalManager;
 use crate::terminal::render::TerminalFrame;
-use crate::terminal::session::CommandSpec;
-use crate::terminal::session::{SessionId, SessionInfo};
+use crate::terminal::session::{CommandSpec, SessionConfig, SessionId, SessionInfo};
 
 fn build_pane_env() -> HashMap<String, String> {
     let mut env = HashMap::new();
@@ -49,17 +48,14 @@ pub async fn create_terminal(
         args: Vec::new(),
     });
     let session_id = state
-        .create_session(
+        .create_session(SessionConfig {
             command,
-            Path::new(&cwd),
-            &env,
-            80,
-            24,
-            None,
-            None,
-            None,
-            None,
-        )
+            cwd,
+            env,
+            cols: 80,
+            rows: 24,
+            ..Default::default()
+        })
         .map_err(|e| e.to_string())?;
     event_bus.publish(BusEvent::SessionCreated {
         session_id: session_id.to_string(),
@@ -135,30 +131,44 @@ pub async fn kill_terminal(
     Ok(())
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyInput {
+    pub key: String,
+    pub code: String,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub meta: bool,
+    pub session_id: Option<String>,
+}
+
 #[tauri::command]
 pub async fn key_input(
-    key: String,
-    code: String,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    meta: bool,
-    session_id: Option<String>,
+    input: KeyInput,
     state: State<'_, TerminalManager>,
 ) -> Result<(), String> {
-    let session_id = match session_id {
+    let session_id = match input.session_id {
         Some(raw) => SessionId::parse(&raw)?,
         None => state.first_session_id().ok_or("no active session")?,
     };
     let session = state.get(&session_id).ok_or("session not found")?;
 
-    let mode = if crate::input::key_requires_mode_lookup(&code) {
+    let mode = if crate::input::key_requires_mode_lookup(&input.code) {
         Some(*session.term.lock().mode())
     } else {
         None
     };
 
-    if let Some(bytes) = crate::input::key_to_bytes(&key, &code, ctrl, alt, shift, meta, mode) {
+    if let Some(bytes) = crate::input::key_to_bytes(
+        &input.key,
+        &input.code,
+        input.ctrl,
+        input.alt,
+        input.shift,
+        input.meta,
+        mode,
+    ) {
         session.write(&bytes)?;
     }
     Ok(())
@@ -233,17 +243,13 @@ async fn restore_terminal_sessions_for_runtime<R: tauri::Runtime>(
     let mut restored = Vec::with_capacity(sessions.len());
     for session in sessions {
         let session_id = state
-            .create_session(
-                None,
-                Path::new(&session.cwd),
-                &env,
-                80,
-                24,
-                None,
-                None,
-                None,
-                None,
-            )
+            .create_session(SessionConfig {
+                cwd: std::path::PathBuf::from(&session.cwd),
+                env: env.clone(),
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            })
             .map_err(|error| error.to_string())?;
         event_bus.publish(BusEvent::SessionCreated {
             session_id: session_id.to_string(),
@@ -488,17 +494,16 @@ async fn resume_history_entry_for_runtime<R: tauri::Runtime>(
 
     let env = build_pane_env();
     let new_session_id = state
-        .create_session(
+        .create_session(SessionConfig {
             command,
-            cwd_path,
-            &env,
-            80,
-            24,
-            entry.agent_id.clone(),
-            entry.prompt_summary.clone(),
-            None,
-            None,
-        )
+            cwd: cwd_path.to_path_buf(),
+            env,
+            cols: 80,
+            rows: 24,
+            agent_id: entry.agent_id.clone(),
+            prompt_summary: entry.prompt_summary.clone(),
+            ..Default::default()
+        })
         .map_err(|error| error.to_string())?;
 
     event_bus.publish(BusEvent::SessionCreated {
@@ -593,7 +598,7 @@ mod tests {
     use crate::render_sync::RenderCoordinator;
     use crate::terminal::manager::TerminalManager;
     use crate::terminal::render::{spawn_frame_emitter, TerminalFrameEvent};
-    use crate::terminal::session::{CommandSpec, SessionId};
+    use crate::terminal::session::{CommandSpec, SessionConfig, SessionId};
     use tauri::test::MockRuntime;
     use tauri::Listener;
     use tauri::Manager;
@@ -621,22 +626,18 @@ mod tests {
 
         let manager = app.state::<TerminalManager<MockRuntime>>();
         let session_id = manager
-            .create_session(
-                Some(CommandSpec {
+            .create_session(SessionConfig {
+                command: Some(CommandSpec {
                     program: "/bin/sh".to_string(),
                     args: vec!["-lc".to_string(), "sleep 30".to_string()],
                 }),
-                &workspace_root,
-                &pane_env(),
-                80,
-                24,
-                None,
-                None,
-                None,
-                None,
-            )
+                cwd: workspace_root.clone(),
+                env: pane_env(),
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            })
             .expect("should create test session");
-        drop(manager);
 
         let _frame_emitter =
             spawn_frame_emitter(app.handle().clone(), render_coordinator, session_id);
@@ -686,19 +687,14 @@ mod tests {
 
         let manager = app.state::<TerminalManager<MockRuntime>>();
         let original = manager
-            .create_session(
-                None,
-                &workspace_root,
-                &pane_env(),
-                80,
-                24,
-                None,
-                None,
-                None,
-                None,
-            )
+            .create_session(SessionConfig {
+                cwd: workspace_root.clone(),
+                env: pane_env(),
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            })
             .expect("should create initial session");
-        drop(manager);
 
         let restored = tokio::runtime::Runtime::new()
             .unwrap()

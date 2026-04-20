@@ -92,18 +92,13 @@ pub struct RecordingInfo {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum HistorySource {
+    #[default]
     Lastty,
     ClaudeDisk,
     CodexDisk,
-}
-
-impl Default for HistorySource {
-    fn default() -> Self {
-        HistorySource::Lastty
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -851,7 +846,7 @@ mod tests {
     use crate::agents::{RuleAction, RuleDefinition, RuleFilter, RuleTrigger};
     use crate::render_sync::RenderCoordinator;
     use crate::terminal::manager::TerminalManager;
-    use crate::terminal::session::CommandSpec;
+    use crate::terminal::session::{CommandSpec, SessionConfig};
     use tauri::test::MockRuntime;
     use tauri::Manager;
 
@@ -962,22 +957,20 @@ mod tests {
         let manager = app.state::<TerminalManager<MockRuntime>>();
         let env = pane_env();
         let source_session_id = manager
-            .create_session(
-                Some(CommandSpec {
+            .create_session(SessionConfig {
+                command: Some(CommandSpec {
                     program: "/bin/sh".to_string(),
                     args: vec!["-lc".to_string(), "sleep 30".to_string()],
                 }),
-                &workspace_root,
-                &env,
-                80,
-                24,
-                Some("codex".to_string()),
-                Some("source".to_string()),
-                None,
-                None,
-            )
+                cwd: workspace_root.clone(),
+                env,
+                cols: 80,
+                rows: 24,
+                agent_id: Some("codex".to_string()),
+                prompt_summary: Some("source".to_string()),
+                ..Default::default()
+            })
             .unwrap();
-        drop(manager);
 
         let event_bus = app.state::<EventBus<MockRuntime>>();
         assert_eq!(
@@ -1019,7 +1012,6 @@ mod tests {
             .expect("missing follow-on session");
         assert_eq!(follow_on.agent_id.as_deref(), Some("reviewer"));
         assert_eq!(follow_on.cwd, workspace_root.display().to_string());
-        drop(manager);
 
         assert_eq!(
             recorded_event_count(&event_bus, &source_session_id.to_string(), "rule_triggered"),
@@ -1070,22 +1062,20 @@ mod tests {
 
         let manager = app.state::<TerminalManager<MockRuntime>>();
         let source_session_id = manager
-            .create_session(
-                Some(CommandSpec {
+            .create_session(SessionConfig {
+                command: Some(CommandSpec {
                     program: "/bin/sh".to_string(),
                     args: vec!["-lc".to_string(), agent_finished_command()],
                 }),
-                &workspace_root,
-                &pane_env(),
-                80,
-                24,
-                Some("codex".to_string()),
-                Some("source".to_string()),
-                None,
-                None,
-            )
+                cwd: workspace_root.clone(),
+                env: pane_env(),
+                cols: 80,
+                rows: 24,
+                agent_id: Some("codex".to_string()),
+                prompt_summary: Some("source".to_string()),
+                ..Default::default()
+            })
             .unwrap();
-        drop(manager);
 
         let event_bus = app.state::<EventBus<MockRuntime>>();
         assert_eq!(
@@ -1128,7 +1118,6 @@ mod tests {
             .expect("missing follow-on session");
         assert_eq!(follow_on.agent_id.as_deref(), Some("reviewer"));
         assert_eq!(follow_on.cwd, workspace_root.display().to_string());
-        drop(manager);
 
         assert_eq!(
             recorded_agent_ui_message_count(&event_bus, &source_session_id.to_string(), "Finished"),
@@ -1262,22 +1251,20 @@ mod tests {
 
         let manager = app.state::<TerminalManager<MockRuntime>>();
         let session_id = manager
-            .create_session(
-                Some(CommandSpec {
+            .create_session(SessionConfig {
+                command: Some(CommandSpec {
                     program: "/bin/sh".to_string(),
                     args: vec!["-lc".to_string(), "sleep 30".to_string()],
                 }),
-                &workspace_root,
-                &pane_env(),
-                80,
-                24,
-                Some("codex".to_string()),
-                Some("fix things".to_string()),
-                None,
-                None,
-            )
+                cwd: workspace_root.clone(),
+                env: pane_env(),
+                cols: 80,
+                rows: 24,
+                agent_id: Some("codex".to_string()),
+                prompt_summary: Some("fix things".to_string()),
+                ..Default::default()
+            })
             .unwrap();
-        drop(manager);
 
         let event_bus = app.state::<EventBus<MockRuntime>>();
         event_bus.publish(BusEvent::SessionCreated {
@@ -1322,22 +1309,18 @@ mod tests {
 
         let manager = app.state::<TerminalManager<MockRuntime>>();
         let session_id = manager
-            .create_session(
-                Some(CommandSpec {
+            .create_session(SessionConfig {
+                command: Some(CommandSpec {
                     program: "/bin/sh".to_string(),
                     args: vec!["-lc".to_string(), "sleep 30".to_string()],
                 }),
-                &workspace_root,
-                &pane_env(),
-                80,
-                24,
-                None,
-                None,
-                None,
-                None,
-            )
+                cwd: workspace_root.clone(),
+                env: pane_env(),
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            })
             .unwrap();
-        drop(manager);
 
         let event_bus = app.state::<EventBus<MockRuntime>>();
         event_bus.publish(BusEvent::SessionCreated {

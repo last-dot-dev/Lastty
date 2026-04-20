@@ -32,7 +32,9 @@ export async function sendKeyEvent(
   meta: boolean,
   sessionId?: string,
 ): Promise<void> {
-  return invoke("key_input", { key, code, ctrl, alt, shift, meta, sessionId });
+  return invoke("key_input", {
+    input: { key, code, ctrl, alt, shift, meta, sessionId },
+  });
 }
 
 export async function writeBenchmarkReport(

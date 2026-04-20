@@ -275,7 +275,7 @@ fn osc_split_across_two_reads() {
     // First feed should produce nothing (or empty terminal data).
     let all: Vec<ParsedChunk> = chunks1
         .into_iter()
-        .chain(chunks2.into_iter())
+        .chain(chunks2)
         .filter(|c| !matches!(c, ParsedChunk::TerminalData(d) if d.is_empty()))
         .collect();
 
@@ -409,7 +409,7 @@ fn osc_52_passes_through() {
 fn oversized_payload_emits_malformed() {
     let mut data = b"\x1b]7770;".to_vec();
     // Fill with 65KB of 'a' bytes (exceeds 64KB limit).
-    data.extend(std::iter::repeat(b'a').take(65 * 1024));
+    data.extend(std::iter::repeat_n(b'a', 65 * 1024));
     data.push(0x07);
 
     let chunks = parse_all(&data);

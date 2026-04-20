@@ -7,7 +7,7 @@ use tauri::Runtime;
 
 use crate::adapters::adapter_for;
 use crate::terminal::manager::TerminalManager;
-use crate::terminal::session::CommandSpec;
+use crate::terminal::session::{CommandSpec, SessionConfig};
 
 const AGENTS_CONFIG_PATH: &str = "agents.toml";
 
@@ -226,37 +226,36 @@ pub fn launch_agent<R: Runtime>(
     let mut env = build_agent_env();
     env.extend(agent.env.clone());
 
-    let prompt_summary = request
-        .prompt
-        .as_deref()
-        .map(|prompt| summarize_prompt(prompt));
+    let prompt_summary = request.prompt.as_deref().map(summarize_prompt);
 
     let session_id = if adapter.is_some() {
         manager.create_session_with_adapter(
-            None,
-            &cwd,
-            &env,
-            80,
-            24,
-            Some(agent.id.clone()),
-            prompt_summary.clone(),
-            request.prompt.clone(),
-            worktree_path.clone(),
+            SessionConfig {
+                cwd: cwd.clone(),
+                env: env.clone(),
+                cols: 80,
+                rows: 24,
+                agent_id: Some(agent.id.clone()),
+                prompt_summary: prompt_summary.clone(),
+                prompt: request.prompt.clone(),
+                worktree_path: worktree_path.clone(),
+                ..Default::default()
+            },
             adapter,
         )?
     } else {
         let command_spec = build_command_spec(&agent, request.prompt.as_deref())?;
-        let session_id = manager.create_session(
-            Some(command_spec.clone()),
-            &cwd,
-            &env,
-            80,
-            24,
-            Some(agent.id.clone()),
-            prompt_summary.clone(),
-            request.prompt.clone(),
-            worktree_path.clone(),
-        )?;
+        let session_id = manager.create_session(SessionConfig {
+            command: Some(command_spec.clone()),
+            cwd: cwd.clone(),
+            env: env.clone(),
+            cols: 80,
+            rows: 24,
+            agent_id: Some(agent.id.clone()),
+            prompt_summary: prompt_summary.clone(),
+            prompt: request.prompt.clone(),
+            worktree_path: worktree_path.clone(),
+        })?;
 
         if matches!(agent.prompt_transport.kind(), "stdin") {
             if let Some(prompt) = request.prompt.as_ref() {

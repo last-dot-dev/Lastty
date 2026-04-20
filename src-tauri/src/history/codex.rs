@@ -70,7 +70,7 @@ pub fn read_transcript(session_id: &str) -> Result<String, String> {
     let file = fs::File::open(&path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
     let mut out = String::new();
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         let Ok(record) = serde_json::from_str::<Value>(&line) else {
             continue;
         };

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -43,6 +43,12 @@ impl SessionId {
 
     pub fn as_u64(&self) -> u64 {
         self.0.as_u128() as u64
+    }
+}
+
+impl Default for SessionId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -98,14 +104,16 @@ impl alacritty_terminal::grid::Dimensions for TermDimensions {
     }
 }
 
+type EventLoopHandle<R> = thread::JoinHandle<(
+    EventLoop<InterceptingPty<R>, EventProxy<R>>,
+    alacritty_terminal::event_loop::State,
+)>;
+
 pub struct TerminalSession<R: Runtime = tauri::Wry> {
     pub id: SessionId,
     pub term: Arc<FairMutex<Term<EventProxy<R>>>>,
     pub event_tx: EventLoopSender,
-    _event_loop_handle: thread::JoinHandle<(
-        EventLoop<InterceptingPty<R>, EventProxy<R>>,
-        alacritty_terminal::event_loop::State,
-    )>,
+    _event_loop_handle: EventLoopHandle<R>,
     pub status: SessionStatus,
     pub started_at: Instant,
     pub started_at_unix_ms: u128,
@@ -124,20 +132,37 @@ pub struct TerminalSession<R: Runtime = tauri::Wry> {
 
 pub type EventLoopSender = alacritty_terminal::event_loop::EventLoopSender;
 
+#[derive(Debug, Clone, Default)]
+pub struct SessionConfig {
+    pub command: Option<CommandSpec>,
+    pub cwd: PathBuf,
+    pub env: HashMap<String, String>,
+    pub cols: u16,
+    pub rows: u16,
+    pub agent_id: Option<String>,
+    pub prompt_summary: Option<String>,
+    pub prompt: Option<String>,
+    pub worktree_path: Option<String>,
+}
+
 pub fn create_session<R: Runtime>(
-    command: Option<&CommandSpec>,
-    cwd: &Path,
-    env: &HashMap<String, String>,
-    cols: u16,
-    rows: u16,
+    config: SessionConfig,
     render_coordinator: Arc<RenderCoordinator>,
     app: tauri::AppHandle<R>,
-    agent_id: Option<String>,
-    prompt_summary: Option<String>,
-    prompt: Option<String>,
-    worktree_path: Option<String>,
     adapter: Option<Box<dyn AgentAdapter>>,
 ) -> anyhow::Result<TerminalSession<R>> {
+    let SessionConfig {
+        command,
+        cwd,
+        env,
+        cols,
+        rows,
+        agent_id,
+        prompt_summary,
+        prompt,
+        worktree_path,
+    } = config;
+
     let id = SessionId::new();
     let title = Arc::new(Mutex::new("shell".to_string()));
     let adapter_active = adapter.is_some();
@@ -148,7 +173,7 @@ pub fn create_session<R: Runtime>(
     #[cfg(unix)]
     let control_socket_path = Some(std::env::temp_dir().join(format!("lastty-{}.sock", id)));
     #[cfg(not(unix))]
-    let control_socket_path: Option<std::path::PathBuf> = None;
+    let control_socket_path: Option<PathBuf> = None;
 
     // Channel for PtyWrite events (DSR responses, etc.)
     let (pty_write_tx, pty_write_rx) = mpsc::channel::<String>();
@@ -183,10 +208,11 @@ pub fn create_session<R: Runtime>(
             vec!["-c".to_string(), "stty -echo; exec cat".to_string()],
         ))
     } else {
-        command.map(|c| tty::Shell::new(c.program.clone(), c.args.clone()))
+        command.map(|c| tty::Shell::new(c.program, c.args))
     };
-    let mut env = env.clone();
-    env.insert("PWD".to_string(), cwd.display().to_string());
+    let mut env = env;
+    let cwd_display = cwd.display().to_string();
+    env.insert("PWD".to_string(), cwd_display.clone());
     env.insert("LASTTY_SESSION_ID".to_string(), id.to_string());
     if let Some(agent_id) = agent_id.as_ref() {
         env.insert("LASTTY_AGENT_ID".to_string(), agent_id.clone());
@@ -199,7 +225,7 @@ pub fn create_session<R: Runtime>(
     }
     let pty_config = tty::Options {
         shell,
-        working_directory: Some(cwd.to_path_buf()),
+        working_directory: Some(cwd),
         env,
         ..Default::default()
     };
@@ -282,7 +308,7 @@ pub fn create_session<R: Runtime>(
             .unwrap_or_default(),
         title,
         agent_id,
-        cwd: cwd.display().to_string(),
+        cwd: cwd_display,
         prompt,
         prompt_summary,
         worktree_path,
