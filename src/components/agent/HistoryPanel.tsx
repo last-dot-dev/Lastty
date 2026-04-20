@@ -7,6 +7,8 @@ import {
   setHistoryEntryPinned,
 } from "../../lib/ipc";
 
+const RECENT_LIMIT = 20;
+
 interface HistoryPanelProps {
   activeSessionId: string;
   onResume: (entry: HistoryEntry) => void;
@@ -56,7 +58,7 @@ export default function HistoryPanel({
   const filtered = useMemo(() => {
     if (!entries) return [];
     const needle = query.trim().toLowerCase();
-    if (!needle) return entries;
+    if (!needle) return entries.slice(0, RECENT_LIMIT);
     return entries.filter((entry) => matchesQuery(entry, needle));
   }, [entries, query]);
 

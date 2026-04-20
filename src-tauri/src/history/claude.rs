@@ -1,10 +1,34 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::thread;
 
 use serde_json::{json, Value};
 
 use crate::bus::{HistoryEntry, HistorySource};
+
+const TITLE_SCAN_LINE_LIMIT: usize = 256;
+const DISCOVERY_WORKERS: usize = 8;
+
+struct CachedEntry {
+    mtime_ms: u128,
+    entry: HistoryEntry,
+}
+
+fn cache() -> &'static Mutex<HashMap<PathBuf, CachedEntry>> {
+    static CACHE: std::sync::OnceLock<Mutex<HashMap<PathBuf, CachedEntry>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+struct FileJob {
+    path: PathBuf,
+    session_uuid: String,
+    project_cwd: PathBuf,
+    mtime_ms: u128,
+}
 
 pub fn discover_all() -> Vec<HistoryEntry> {
     let Some(projects_dir) = super::home_dir().map(|h| h.join(".claude/projects")) else {
@@ -14,29 +38,100 @@ pub fn discover_all() -> Vec<HistoryEntry> {
         return Vec::new();
     };
 
-    let mut out = Vec::new();
-    for project in projects.flatten() {
-        if !project.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let project_path = project.path();
-        let decoded_cwd = decode_project_dir(&project_path).unwrap_or(project_path.clone());
-        let Ok(files) = fs::read_dir(&project_path) else {
-            continue;
-        };
-        for file in files.flatten() {
-            let Ok(file_name) = file.file_name().into_string() else {
+    let mut cached: Vec<HistoryEntry> = Vec::new();
+    let mut todo: Vec<FileJob> = Vec::new();
+    let mut seen_paths: Vec<PathBuf> = Vec::new();
+
+    {
+        let cache = cache().lock().unwrap();
+        for project in projects.flatten() {
+            if !project.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let project_path = project.path();
+            let decoded_cwd = decode_project_dir(&project_path).unwrap_or(project_path.clone());
+            let Ok(files) = fs::read_dir(&project_path) else {
                 continue;
             };
-            let Some(session_uuid) = file_name.strip_suffix(".jsonl") else {
-                continue;
-            };
-            if let Some(entry) = build_entry(&file.path(), session_uuid, &decoded_cwd) {
-                out.push(entry);
+            for file in files.flatten() {
+                let Ok(file_name) = file.file_name().into_string() else {
+                    continue;
+                };
+                let Some(session_uuid) = file_name.strip_suffix(".jsonl") else {
+                    continue;
+                };
+                let path = file.path();
+                let Ok(metadata) = file.metadata() else {
+                    continue;
+                };
+                let mtime_ms = mtime_millis(&metadata);
+                seen_paths.push(path.clone());
+
+                if let Some(hit) = cache.get(&path) {
+                    if hit.mtime_ms == mtime_ms {
+                        cached.push(hit.entry.clone());
+                        continue;
+                    }
+                }
+                todo.push(FileJob {
+                    path,
+                    session_uuid: session_uuid.to_string(),
+                    project_cwd: decoded_cwd.clone(),
+                    mtime_ms,
+                });
             }
         }
     }
+
+    let parsed = parse_jobs_in_parallel(todo);
+
+    {
+        let mut cache = cache().lock().unwrap();
+        let seen: std::collections::HashSet<&PathBuf> = seen_paths.iter().collect();
+        cache.retain(|path, _| seen.contains(path));
+        for (path, mtime_ms, entry) in &parsed {
+            cache.insert(
+                path.clone(),
+                CachedEntry {
+                    mtime_ms: *mtime_ms,
+                    entry: entry.clone(),
+                },
+            );
+        }
+    }
+
+    let mut out = cached;
+    out.extend(parsed.into_iter().map(|(_, _, entry)| entry));
     out
+}
+
+fn parse_jobs_in_parallel(jobs: Vec<FileJob>) -> Vec<(PathBuf, u128, HistoryEntry)> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+    let worker_count = DISCOVERY_WORKERS.min(jobs.len()).max(1);
+    let chunk_size = jobs.len().div_ceil(worker_count);
+
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for chunk in jobs.chunks(chunk_size) {
+            handles.push(scope.spawn(move || {
+                let mut out = Vec::with_capacity(chunk.len());
+                for job in chunk {
+                    if let Some(entry) =
+                        build_entry(&job.path, &job.session_uuid, &job.project_cwd, job.mtime_ms)
+                    {
+                        out.push((job.path.clone(), job.mtime_ms, entry));
+                    }
+                }
+                out
+            }));
+        }
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    })
 }
 
 pub fn read_transcript(session_uuid: &str) -> Result<String, String> {
@@ -71,15 +166,12 @@ pub fn read_transcript(session_uuid: &str) -> Result<String, String> {
     Ok(out)
 }
 
-fn build_entry(path: &Path, session_uuid: &str, project_cwd: &Path) -> Option<HistoryEntry> {
-    let metadata = fs::metadata(path).ok()?;
-    let mtime_ms = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-
+fn build_entry(
+    path: &Path,
+    session_uuid: &str,
+    project_cwd: &Path,
+    mtime_ms: u128,
+) -> Option<HistoryEntry> {
     let file = fs::File::open(path).ok()?;
     let reader = BufReader::new(file);
 
@@ -87,7 +179,7 @@ fn build_entry(path: &Path, session_uuid: &str, project_cwd: &Path) -> Option<Hi
     let mut title: Option<String> = None;
     let mut prompt_summary: Option<String> = None;
 
-    for line in reader.lines().flatten() {
+    for line in reader.lines().take(TITLE_SCAN_LINE_LIMIT).flatten() {
         let Ok(record) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
@@ -152,7 +244,18 @@ pub(crate) fn find_entry(session_uuid: &str) -> Option<HistoryEntry> {
     let jsonl = find_jsonl(session_uuid)?;
     let project_dir = jsonl.parent()?;
     let decoded = decode_project_dir(project_dir)?;
-    build_entry(&jsonl, session_uuid, &decoded)
+    let metadata = fs::metadata(&jsonl).ok()?;
+    let mtime_ms = mtime_millis(&metadata);
+    build_entry(&jsonl, session_uuid, &decoded, mtime_ms)
+}
+
+fn mtime_millis(metadata: &fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 fn decode_project_dir(project_dir: &Path) -> Option<PathBuf> {

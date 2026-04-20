@@ -348,7 +348,10 @@ pub async fn list_history(
 ) -> Result<Vec<HistoryEntry>, String> {
     let mut entries = event_bus.list_history();
     entries.retain(|entry| entry.agent_id.is_some());
-    merge_external(&mut entries, history::discover_all());
+    let external = tokio::task::spawn_blocking(history::discover_all)
+        .await
+        .map_err(|e| e.to_string())?;
+    merge_external(&mut entries, external);
     Ok(entries)
 }
 
