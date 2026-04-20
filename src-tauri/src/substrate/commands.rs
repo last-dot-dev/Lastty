@@ -154,7 +154,8 @@ pub async fn substrate_spawn_generative(
     state: State<'_, SubstrateState>,
 ) -> Result<SpawnedApp, String> {
     let raw = super::llm::generate_app_spec(&prompt).await?;
-    let parsed: Value = serde_json::from_str(&raw)
+    let trimmed = super::llm::strip_json_fences(&raw);
+    let parsed: Value = serde_json::from_str(trimmed)
         .map_err(|e| format!("bad llm json: {e}; body: {raw}"))?;
     let kind = parsed["kind"].as_str().unwrap_or("generated").to_string();
     let view: ViewSpec = serde_json::from_value(parsed["view"].clone())

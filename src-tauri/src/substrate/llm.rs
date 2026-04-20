@@ -73,6 +73,37 @@ No markdown. No prose. No commentary. Just the JSON object."#;
     complete(system, &user).await
 }
 
+pub fn strip_json_fences(s: &str) -> &str {
+    let t = s.trim();
+    if let Some(rest) = t.strip_prefix("```json") {
+        return rest
+            .trim_start_matches('\n')
+            .trim_end()
+            .trim_end_matches("```")
+            .trim();
+    }
+    if let Some(rest) = t.strip_prefix("```") {
+        return rest
+            .trim_start_matches('\n')
+            .trim_end()
+            .trim_end_matches("```")
+            .trim();
+    }
+    t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_json_fence() {
+        assert_eq!(strip_json_fences("```json\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_json_fences("```\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_json_fences("{\"a\":1}"), "{\"a\":1}");
+    }
+}
+
 pub fn seed_doc_from_json(am: &mut AutoCommit, value: &Value) {
     if let Some(obj) = value.as_object() {
         for (k, v) in obj {

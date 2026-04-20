@@ -33,7 +33,34 @@ function Root() {
   if (benchMode === undefined) return null;
   if (benchMode === "xterm") return <XtermBench />;
   if (hash === "#substrate") return <SubstrateWorkspace />;
-  return <TerminalWorkspace />;
+  return (
+    <>
+      <TerminalWorkspace />
+      <a
+        href="#substrate"
+        onClick={(e) => {
+          e.preventDefault();
+          window.location.hash = "substrate";
+        }}
+        style={{
+          position: "fixed",
+          top: 6,
+          right: 10,
+          zIndex: 9999,
+          fontSize: 10,
+          color: "#6af",
+          background: "rgba(10,10,16,0.7)",
+          padding: "3px 8px",
+          borderRadius: 4,
+          textDecoration: "none",
+          border: "1px solid #2d5fa3",
+          fontFamily: "system-ui",
+        }}
+      >
+        substrate
+      </a>
+    </>
+  );
 }
 
 createRoot(document.getElementById("root")!).render(<Root />);
