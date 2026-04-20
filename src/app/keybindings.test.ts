@@ -136,6 +136,47 @@ describe("matchBinding", () => {
     const match = matchBinding(keyEvent({ key: "z", meta: true, ctrl: true }), "mac");
     expect(match).toBeNull();
   });
+
+  describe("Ctrl+Tab view switching", () => {
+    it("matches Ctrl+Tab to desktop.next on mac", () => {
+      const match = matchBinding(keyEvent({ key: "Tab", ctrl: true }), "mac");
+      expect(match?.binding.id).toBe("desktop.next");
+    });
+
+    it("matches Ctrl+Shift+Tab to desktop.prev on mac", () => {
+      const match = matchBinding(
+        keyEvent({ key: "Tab", ctrl: true, shift: true }),
+        "mac",
+      );
+      expect(match?.binding.id).toBe("desktop.prev");
+    });
+
+    it("matches Ctrl+Tab to desktop.next on other", () => {
+      const match = matchBinding(keyEvent({ key: "Tab", ctrl: true }), "other");
+      expect(match?.binding.id).toBe("desktop.next");
+    });
+
+    it("matches Ctrl+Shift+Tab to desktop.prev on other", () => {
+      const match = matchBinding(
+        keyEvent({ key: "Tab", ctrl: true, shift: true }),
+        "other",
+      );
+      expect(match?.binding.id).toBe("desktop.prev");
+    });
+
+    it("does not match Ctrl+Cmd+Tab (Cmd must not be held)", () => {
+      const match = matchBinding(
+        keyEvent({ key: "Tab", ctrl: true, meta: true }),
+        "mac",
+      );
+      expect(match).toBeNull();
+    });
+
+    it("does not match plain Tab", () => {
+      expect(matchBinding(keyEvent({ key: "Tab" }), "mac")).toBeNull();
+      expect(matchBinding(keyEvent({ key: "Tab" }), "other")).toBeNull();
+    });
+  });
 });
 
 describe("formatKey", () => {
@@ -157,6 +198,18 @@ describe("formatKey", () => {
   it("preserves bracket and slash characters as-is", () => {
     expect(formatKey({ key: "/" }, "mac")).toBe("⌘⌃/");
     expect(formatKey({ key: "]" }, "other")).toBe("Ctrl+Shift+]");
+  });
+
+  it("formats Ctrl+Tab with ctrl-only modifier scheme", () => {
+    expect(formatKey({ key: "Tab", modifiers: "ctrl" }, "mac")).toBe("⌃⇥");
+    expect(formatKey({ key: "Tab", modifiers: "ctrl" }, "other")).toBe("Ctrl+⇥");
+  });
+
+  it("formats Ctrl+Shift+Tab with ctrl-only modifier scheme", () => {
+    expect(formatKey({ key: "Tab", shift: true, modifiers: "ctrl" }, "mac")).toBe("⌃⇧⇥");
+    expect(formatKey({ key: "Tab", shift: true, modifiers: "ctrl" }, "other")).toBe(
+      "Ctrl+Shift+⇥",
+    );
   });
 });
 

@@ -1,8 +1,11 @@
 export type Platform = "mac" | "other";
 
+export type ModifierScheme = "platform" | "ctrl";
+
 export interface KeySpec {
   key: string;
   shift?: boolean;
+  modifiers?: ModifierScheme;
 }
 
 export type ActionId =
@@ -92,13 +95,13 @@ export const BINDINGS: Binding[] = [
   },
   {
     id: "desktop.next",
-    keys: [{ key: "]" }],
+    keys: [{ key: "]" }, { key: "Tab", modifiers: "ctrl" }],
     category: "Desktops",
     label: "Next desktop",
   },
   {
     id: "desktop.prev",
-    keys: [{ key: "[" }],
+    keys: [{ key: "[" }, { key: "Tab", shift: true, modifiers: "ctrl" }],
     category: "Desktops",
     label: "Previous desktop",
   },
@@ -130,7 +133,11 @@ function keyMatches(eventKey: string, specKey: string): boolean {
   return eventKey === specKey;
 }
 
-function modifiersMatch(event: KeyboardEvent, platform: Platform): boolean {
+function specModifiersMatch(event: KeyboardEvent, platform: Platform, spec: KeySpec): boolean {
+  if (spec.modifiers === "ctrl") {
+    if (!event.ctrlKey || event.metaKey || event.altKey) return false;
+    return event.shiftKey === (spec.shift === true);
+  }
   if (platform === "mac") {
     return event.metaKey === true && event.ctrlKey === true && event.altKey === false;
   }
@@ -138,10 +145,10 @@ function modifiersMatch(event: KeyboardEvent, platform: Platform): boolean {
 }
 
 export function matchBinding(event: KeyboardEvent, platform: Platform): BindingMatch | null {
-  if (!modifiersMatch(event, platform)) return null;
   for (const binding of BINDINGS) {
     for (const spec of binding.keys) {
       if (!keyMatches(event.key, spec.key)) continue;
+      if (!specModifiersMatch(event, platform, spec)) continue;
       return { binding, spec };
     }
   }
@@ -150,6 +157,10 @@ export function matchBinding(event: KeyboardEvent, platform: Platform): BindingM
 
 export function formatKey(spec: KeySpec, platform: Platform): string {
   const keyLabel = formatKeyLabel(spec.key);
+  if (spec.modifiers === "ctrl") {
+    if (platform === "mac") return spec.shift ? `⌃⇧${keyLabel}` : `⌃${keyLabel}`;
+    return spec.shift ? `Ctrl+Shift+${keyLabel}` : `Ctrl+${keyLabel}`;
+  }
   if (platform === "mac") return `⌘⌃${keyLabel}`;
   return `Ctrl+Shift+${keyLabel}`;
 }
@@ -164,6 +175,8 @@ function formatKeyLabel(key: string): string {
       return "↑";
     case "ArrowDown":
       return "↓";
+    case "Tab":
+      return "⇥";
     default:
       return key.length === 1 ? key.toUpperCase() : key;
   }
