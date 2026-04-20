@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "lastty",
+  "productName": "Lastty",
   "version": "0.1.2",
   "identifier": "com.last.lastty",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "lastty",
+        "title": "Lastty",
         "width": 1200,
         "height": 800,
         "decorations": true,
@@ -46,7 +46,7 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/ForeverAnApple/lastty/releases/latest/download/latest.json"
+        "https://github.com/last-dot-dev/Lastty/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdBNjVCQkY0QkU2NDFGClJXUWZaTDcwdTJWNkFJdFhZYS90WlVCdFNvT1RDYVFVUSs2M2FxTW55eXYycnh5WFk2KzFTL0ZxCg==",
       "dialog": false

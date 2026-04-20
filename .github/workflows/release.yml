@@ -83,7 +83,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ needs.validate-tag.outputs.tag }}
-          releaseName: 'lastty ${{ needs.validate-tag.outputs.version }}'
+          releaseName: 'Lastty ${{ needs.validate-tag.outputs.version }}'
           releaseBody: ''
           releaseDraft: true
           prerelease: false
@@ -116,7 +116,7 @@ jobs:
           gh release download "$TAG" --pattern '*.app.tar.gz.sig' --dir /tmp/sigs
           sig_file=$(ls /tmp/sigs/*.app.tar.gz.sig | head -n1)
           signature=$(cat "$sig_file")
-          bundle_name="lastty_${VERSION}_aarch64.app.tar.gz"
+          bundle_name="Lastty_${VERSION}_aarch64.app.tar.gz"
           pub_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           jq -n \
             --arg version "$VERSION" \
@@ -126,12 +126,12 @@ jobs:
             --arg bundle "$bundle_name" \
             '{
               version: $version,
-              notes: ("See the release notes at https://github.com/ForeverAnApple/lastty/releases/tag/" + $tag),
+              notes: ("See the release notes at https://github.com/last-dot-dev/Lastty/releases/tag/" + $tag),
               pub_date: $pub_date,
               platforms: {
                 "darwin-aarch64": {
                   signature: $signature,
-                  url: ("https://github.com/ForeverAnApple/lastty/releases/download/" + $tag + "/" + $bundle)
+                  url: ("https://github.com/last-dot-dev/Lastty/releases/download/" + $tag + "/" + $bundle)
                 }
               }
             }' > latest.json
