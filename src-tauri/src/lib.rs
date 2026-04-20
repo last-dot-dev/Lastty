@@ -13,4 +13,5 @@ pub mod input;
 pub mod protocol;
 pub mod render_sync;
 pub mod runtime_modes;
+pub mod substrate;
 pub mod terminal;
