@@ -16,6 +16,12 @@ pub struct CreatePrRequest {
     pub body: Option<String>,
     #[serde(default)]
     pub auto_commit_message: Option<String>,
+    #[serde(default = "default_true")]
+    pub draft: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,15 +44,34 @@ pub fn create_pull_request(req: &CreatePrRequest) -> Result<CreatePrResult> {
     }
 
     let porcelain = run_git_checked(worktree, &["status", "--porcelain"])?;
-    let committed = !porcelain.lines().all(|l| l.trim().is_empty());
-    if committed {
+    let has_dirty = !porcelain.lines().all(|l| l.trim().is_empty());
+    let committed = has_dirty;
+    if has_dirty {
         let msg = req
             .auto_commit_message
             .clone()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| format!("agent work: {branch}"));
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                anyhow!("worktree has uncommitted changes; provide a commit message to open a PR")
+            })?;
         run_git_checked(worktree, &["add", "-A"])?;
         run_git_checked(worktree, &["commit", "-m", &msg])?;
+    }
+
+    // Require at least one commit beyond the base branch; otherwise `gh pr
+    // create` would push an empty branch and produce a zero-change PR.
+    let base = req.target_branch.trim();
+    if !base.is_empty() {
+        if let Some(count_text) =
+            run_git_trim(worktree, &["rev-list", "--count", &format!("{base}..HEAD")])
+        {
+            if count_text.parse::<u32>().unwrap_or(0) == 0 {
+                return Err(anyhow!(
+                    "no commits on {branch} beyond {base}; nothing to open a PR for"
+                ));
+            }
+        }
     }
 
     run_git_checked(worktree, &["push", "--set-upstream", "origin", &branch])
@@ -59,20 +84,24 @@ pub fn create_pull_request(req: &CreatePrRequest) -> Result<CreatePrResult> {
         .unwrap_or_else(|| branch.clone());
     let body = req.body.clone().unwrap_or_default();
 
+    let mut gh_args: Vec<&str> = vec![
+        "pr",
+        "create",
+        "--base",
+        &req.target_branch,
+        "--head",
+        &branch,
+        "--title",
+        &title,
+        "--body",
+        &body,
+    ];
+    if req.draft {
+        gh_args.push("--draft");
+    }
     let gh_output = Command::new("gh")
         .current_dir(worktree)
-        .args([
-            "pr",
-            "create",
-            "--base",
-            &req.target_branch,
-            "--head",
-            &branch,
-            "--title",
-            &title,
-            "--body",
-            &body,
-        ])
+        .args(&gh_args)
         .output()
         .with_context(|| "failed to invoke gh; is the GitHub CLI installed?")?;
 
@@ -139,6 +168,203 @@ pub fn remove_worktree(path: &Path, repo_root: &Path) -> Result<()> {
         &["worktree", "remove", path.to_string_lossy().as_ref()],
     )
     .map(|_| ())
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AbandonResult {
+    /// Whether the GitHub PR (if any) was closed.
+    pub pr_closed: bool,
+    /// Whether the remote branch was deleted.
+    pub remote_branch_deleted: bool,
+    /// Whether the local worktree directory was removed.
+    pub worktree_removed: bool,
+    /// Whether the local branch was deleted.
+    pub local_branch_deleted: bool,
+    /// The branch name the worktree was on, when known.
+    pub branch: Option<String>,
+    /// URL of the closed PR, if one existed.
+    pub pr_url: Option<String>,
+    /// Human-readable notes for steps that were skipped or non-fatal failures.
+    pub notes: Vec<String>,
+}
+
+/// Close the PR (if any), delete the remote + local branch, and remove the
+/// worktree. Keeps going on non-fatal errors so a partially-orphaned worktree
+/// still gets cleaned up instead of leaving the caller in a worse state.
+pub fn abandon_worktree(worktree_path: &Path, repo_root: &Path) -> Result<AbandonResult> {
+    let mut out = AbandonResult::default();
+
+    let branch = run_git_trim(worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    out.branch = branch.clone();
+
+    if let Some(branch) = branch.as_deref() {
+        if branch != "HEAD" {
+            if let Some(url) = gh_existing_pr_url(worktree_path, branch) {
+                out.pr_url = Some(url);
+                match Command::new("gh")
+                    .current_dir(worktree_path)
+                    .args(["pr", "close", branch, "--delete-branch"])
+                    .output()
+                {
+                    Ok(output) if output.status.success() => {
+                        out.pr_closed = true;
+                        out.remote_branch_deleted = true;
+                    }
+                    Ok(output) => {
+                        out.notes.push(format!(
+                            "gh pr close failed: {}",
+                            String::from_utf8_lossy(&output.stderr).trim(),
+                        ));
+                    }
+                    Err(error) => {
+                        out.notes.push(format!("failed to invoke gh: {error}"));
+                    }
+                }
+            }
+
+            if !out.remote_branch_deleted {
+                match run_git_checked(repo_root, &["push", "origin", "--delete", branch]) {
+                    Ok(_) => out.remote_branch_deleted = true,
+                    Err(error) => {
+                        let msg = error.to_string();
+                        if msg.contains("remote ref does not exist")
+                            || msg.contains("does not exist")
+                        {
+                            out.notes
+                                .push(format!("remote branch {branch} not present"));
+                        } else {
+                            out.notes
+                                .push(format!("failed to delete remote branch: {msg}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    match run_git_checked(
+        repo_root,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            worktree_path.to_string_lossy().as_ref(),
+        ],
+    ) {
+        Ok(_) => out.worktree_removed = true,
+        Err(error) => {
+            out.notes
+                .push(format!("git worktree remove failed: {error}"));
+        }
+    }
+
+    if let Some(branch) = out.branch.as_deref() {
+        if branch != "HEAD" && out.worktree_removed {
+            match run_git_checked(repo_root, &["branch", "-D", branch]) {
+                Ok(_) => out.local_branch_deleted = true,
+                Err(error) => {
+                    out.notes
+                        .push(format!("failed to delete local branch {branch}: {error}"));
+                }
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrunableWorktree {
+    pub path: String,
+    pub branch: String,
+    pub uncommitted_files: u32,
+    pub unmerged_commits: u32,
+    pub has_open_pr: bool,
+    pub reason: String,
+}
+
+/// Local-only prune: remove the worktree and delete the local branch iff the
+/// tree is fully clean (zero uncommitted files, zero commits ahead of
+/// `base_branch`). Deliberately does **no** network operations — no `gh`,
+/// no `git push`, no remote ref inspection — so we never trigger keychain
+/// prompts on close. Callers that also want remote cleanup should use
+/// `abandon_worktree` through the explicit "✕" button.
+pub fn prune_local_if_clean(
+    worktree_path: &Path,
+    repo_root: &Path,
+    base_branch: &str,
+) -> Result<bool> {
+    let status = match crate::git_worktrees::worktree_status(worktree_path, base_branch) {
+        Ok(status) => status,
+        Err(_) => return Ok(false),
+    };
+    if status.uncommitted_files > 0 || status.unmerged_commits > 0 {
+        return Ok(false);
+    }
+
+    let branch = run_git_trim(worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    if run_git_checked(
+        repo_root,
+        &[
+            "worktree",
+            "remove",
+            worktree_path.to_string_lossy().as_ref(),
+        ],
+    )
+    .is_err()
+    {
+        return Ok(false);
+    }
+
+    if let Some(branch) = branch.as_deref() {
+        if branch != "HEAD" {
+            let _ = run_git_checked(repo_root, &["branch", "-D", branch]);
+        }
+    }
+
+    Ok(true)
+}
+
+/// Enumerate worktrees that look abandoned: zero unmerged commits, no
+/// uncommitted files, and (when GitHub is reachable) no open PR. Skips the
+/// main checkout and any non-lastty worktree the user created manually.
+pub fn list_prunable_worktrees(
+    repo_root: &Path,
+    base_branch: &str,
+) -> Result<Vec<PrunableWorktree>> {
+    let worktrees = crate::git_worktrees::list_worktrees(repo_root)?;
+    let mut out = Vec::new();
+
+    for wt in worktrees {
+        if wt.is_main || !wt.is_lastty || wt.detached {
+            continue;
+        }
+        let path = Path::new(&wt.path);
+        let status = match crate::git_worktrees::worktree_status(path, base_branch) {
+            Ok(status) => status,
+            Err(_) => continue,
+        };
+        if status.uncommitted_files > 0 || status.unmerged_commits > 0 {
+            continue;
+        }
+
+        let has_open_pr = gh_existing_pr_url(path, &wt.branch).is_some();
+        if has_open_pr {
+            continue;
+        }
+
+        out.push(PrunableWorktree {
+            path: wt.path,
+            branch: wt.branch,
+            uncommitted_files: status.uncommitted_files,
+            unmerged_commits: status.unmerged_commits,
+            has_open_pr,
+            reason: "no commits ahead of base and no open PR".to_string(),
+        });
+    }
+
+    Ok(out)
 }
 
 #[cfg(test)]

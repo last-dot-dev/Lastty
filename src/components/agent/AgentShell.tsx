@@ -16,6 +16,7 @@ export default function AgentShell({
   onFocusPane,
   onAttach,
   onMerge,
+  onAbandon,
   mergeable,
   onOpenMergeDialog,
   desktops,
@@ -43,6 +44,7 @@ export default function AgentShell({
   onFocusPane: (paneId: string) => void;
   onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
   onMerge: (worktreePath: string) => void;
+  onAbandon?: (worktreePath: string) => void;
   mergeable: number;
   onOpenMergeDialog: () => void;
   desktops: DesktopEntry[];
@@ -86,6 +88,7 @@ export default function AgentShell({
           onFocusPane={onFocusPane}
           onAttach={onAttach}
           onMerge={onMerge}
+          onAbandon={onAbandon}
           mergeable={mergeable}
           onOpenMergeDialog={onOpenMergeDialog}
           footerExtras={sidebarFooterExtras}

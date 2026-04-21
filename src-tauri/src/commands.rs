@@ -659,6 +659,34 @@ pub async fn remove_worktree(path: String, repo_root: String) -> Result<(), Stri
 }
 
 #[tauri::command]
+pub async fn abandon_worktree(
+    path: String,
+    repo_root: String,
+) -> Result<crate::git_pr::AbandonResult, String> {
+    crate::git_pr::abandon_worktree(Path::new(&path), Path::new(&repo_root))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_prunable_worktrees(
+    repo_root: String,
+    base_branch: String,
+) -> Result<Vec<crate::git_pr::PrunableWorktree>, String> {
+    crate::git_pr::list_prunable_worktrees(Path::new(&repo_root), &base_branch)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn prune_local_if_clean(
+    path: String,
+    repo_root: String,
+    base_branch: String,
+) -> Result<bool, String> {
+    crate::git_pr::prune_local_if_clean(Path::new(&path), Path::new(&repo_root), &base_branch)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_workspace_root() -> Result<String, String> {
     std::env::current_dir()
         .map(|p| p.display().to_string())

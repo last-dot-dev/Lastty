@@ -107,6 +107,10 @@ export default function MergeDialog({
 
   const anySelected = candidates.some((c) => selected.has(c.path));
   const running = Object.values(results).some((r) => r.kind === "running");
+  const selectedHasDirty = candidates.some(
+    (c) => selected.has(c.path) && c.uncommittedFiles > 0,
+  );
+  const commitMessageMissing = selectedHasDirty && !commitMessage.trim();
 
   return (
     <div className="agent-merge-dialog-backdrop" onMouseDown={onClose}>
@@ -170,12 +174,25 @@ export default function MergeDialog({
             />
           </label>
           <label className="agent-merge-dialog__field">
-            <span>Auto-commit message (if worktree has uncommitted diff)</span>
+            <span>
+              Commit message
+              {selectedHasDirty && (
+                <span
+                  style={{
+                    marginLeft: 6,
+                    color: "var(--color-error, #f05050)",
+                    fontSize: 11,
+                  }}
+                >
+                  required — selected worktrees have uncommitted changes
+                </span>
+              )}
+            </span>
             <input
               type="text"
               value={commitMessage}
               onChange={(event) => setCommitMessage(event.target.value)}
-              placeholder="agent work: <branch name>"
+              placeholder="describe the change"
               disabled={running}
             />
           </label>
@@ -222,10 +239,17 @@ export default function MergeDialog({
           <button
             type="button"
             onClick={() => void runCreatePrs()}
-            disabled={!anySelected || !targetBranch || running}
+            disabled={
+              !anySelected || !targetBranch || running || commitMessageMissing
+            }
             className="agent-merge-dialog__btn is-primary"
+            title={
+              commitMessageMissing
+                ? "enter a commit message — selected worktrees have uncommitted changes"
+                : undefined
+            }
           >
-            {running ? "opening…" : "open PRs"}
+            {running ? "opening…" : "open PRs (draft)"}
           </button>
         </div>
       </div>

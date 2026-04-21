@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -72,4 +73,36 @@ impl<R: Runtime> TerminalManager<R> {
             .map(|entry| entry.value().info())
             .collect()
     }
+
+    /// Return the ids of live sessions whose effective checkout (worktree_path
+    /// if set, else cwd) canonicalises to the same path as `target`. Used to
+    /// decide whether an in-place launch should auto-promote to a worktree.
+    /// Sessions are removed from the registry on PTY exit, so membership is a
+    /// good proxy for "live".
+    pub fn live_sessions_on(&self, target: &Path) -> Vec<SessionId> {
+        let target = canonical(target);
+        self.sessions
+            .iter()
+            .filter_map(|entry| {
+                let effective = effective_checkout(entry.value());
+                if canonical(&effective) == target {
+                    Some(*entry.key())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+fn effective_checkout<R: Runtime>(session: &TerminalSession<R>) -> PathBuf {
+    if let Some(path) = session.worktree_path.as_ref() {
+        return PathBuf::from(path);
+    }
+    let guard = session.cwd.lock().expect("session cwd lock poisoned");
+    PathBuf::from(&*guard)
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }

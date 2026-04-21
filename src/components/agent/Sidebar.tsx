@@ -52,6 +52,7 @@ export default function Sidebar({
   onFocusPane,
   onAttach,
   onMerge,
+  onAbandon,
   mergeable,
   onOpenMergeDialog,
   footerExtras,
@@ -65,6 +66,7 @@ export default function Sidebar({
   onFocusPane: (paneId: string) => void;
   onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
   onMerge: (worktreePath: string) => void;
+  onAbandon?: (worktreePath: string) => void;
   mergeable: number;
   onOpenMergeDialog: () => void;
   footerExtras?: ReactNode;
@@ -153,6 +155,7 @@ export default function Sidebar({
         onFocusPane={onFocusPane}
         onAttach={onAttach}
         onMerge={onMerge}
+        onAbandon={onAbandon}
         style={{ height: topHeight, maxHeight: "none", flexShrink: 0 }}
       />
       <div

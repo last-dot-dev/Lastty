@@ -118,6 +118,9 @@ import {
   type SessionTitleEvent,
   type Worktree,
   type WorktreeStatus,
+  type WorktreeStrategy,
+  abandonWorktree,
+  pruneLocalIfClean,
   resumeHistoryEntry,
 } from "./lib/ipc";
 import { layoutGraph } from "./lib/graphLayout";
@@ -206,6 +209,12 @@ export default function TerminalWorkspace() {
   const platform = useMemo(() => detectPlatform(), []);
   const pendingBindingRef = useRef<PendingBinding[]>([]);
   const [launching, setLaunching] = useState(false);
+  const [autoPromoteNotice, setAutoPromoteNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!autoPromoteNotice) return;
+    const handle = window.setTimeout(() => setAutoPromoteNotice(null), 6000);
+    return () => window.clearTimeout(handle);
+  }, [autoPromoteNotice]);
   const [clock, setClock] = useState(Date.now());
   const [hydrated, setHydrated] = useState(false);
   const [benchMode, setBenchMode] = useState<string | null>(null);
@@ -420,6 +429,27 @@ export default function TerminalWorkspace() {
       delete next[path];
       return next;
     });
+  }
+
+  async function handleAbandonWorktree(worktreePath: string) {
+    if (!activeProjectRoot) return;
+    const label = basenameOfPath(worktreePath) || worktreePath;
+    const ok = window.confirm(
+      `Abandon "${label}"?\n\nThis will close the GitHub PR (if any), delete the remote + local branch, and remove the worktree directory.`,
+    );
+    if (!ok) return;
+    try {
+      await abandonWorktree(worktreePath, activeProjectRoot);
+    } catch (error) {
+      console.error("abandon_worktree failed", error);
+      window.alert(
+        `Failed to abandon worktree: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    invalidateWorktreeStatus(worktreePath);
+    reloadWorktrees();
   }
 
   const sidebarGraph = useMemo<SidebarGraph>(() => {
@@ -781,9 +811,17 @@ export default function TerminalWorkspace() {
         const result = await launchAgent({
           agent_id: choice.agentId,
           cwd: worktreePath,
-          attach_to_worktree: isMainRow ? null : worktreePath,
-          isolate_in_worktree: isMainRow,
+          worktree: isMainRow
+            ? { kind: "in_place" }
+            : { kind: "attach", path: worktreePath },
         });
+        if (result.auto_promoted) {
+          setAutoPromoteNotice(
+            `another agent is running here — created ${basenameOfPath(
+              result.worktree_path ?? "",
+            )} to isolate`,
+          );
+        }
         upsertSession({
           session_id: result.session_id,
           title: result.pane_title,
@@ -830,7 +868,8 @@ export default function TerminalWorkspace() {
     try {
       const count = Math.max(1, Math.min(5, config.launchCount));
       const isolate = config.worktreeChoice === "new";
-      const attachPath = isolate ? null : config.worktreeChoice;
+      const inPlace = config.worktreeChoice === "in_place";
+      const attachPath = isolate || inPlace ? null : config.worktreeChoice;
       let anchorPaneId: string = draftId;
       for (let i = 0; i < count; i += 1) {
         let newSessionId: string;
@@ -841,15 +880,28 @@ export default function TerminalWorkspace() {
           newTitle = basenameOfPath(cwd || "") || "shell";
           await hydrateSessionInfo(newSessionId, newTitle);
         } else {
+          const worktree: WorktreeStrategy = isolate
+            ? {
+                kind: "new",
+                branch:
+                  count === 1 && config.branchName ? config.branchName : null,
+              }
+            : attachPath
+              ? { kind: "attach", path: attachPath }
+              : { kind: "in_place" };
           const result = await launchAgent({
             agent_id: config.agentId,
             prompt: config.prompt || null,
             cwd: attachPath || desktop.projectRoot || null,
-            isolate_in_worktree: isolate,
-            branch_name:
-              isolate && count === 1 ? config.branchName || null : null,
-            attach_to_worktree: attachPath,
+            worktree,
           });
+          if (result.auto_promoted) {
+            setAutoPromoteNotice(
+              `another agent is running here — created ${basenameOfPath(
+                result.worktree_path ?? "",
+              )} to isolate`,
+            );
+          }
           upsertSession({
             session_id: result.session_id,
             title: result.pane_title,
@@ -982,6 +1034,29 @@ export default function TerminalWorkspace() {
     const pane = workspace?.panes[paneId];
     if (!pane) return;
     const sessionId = pane.sessionId;
+    const info = sessionInfoById[sessionId];
+    const worktreePath = info?.worktree_path;
+    const entry = activeProjectRoot
+      ? worktreesByRepo[activeProjectRoot]
+      : undefined;
+    const isLasttyWorktree = Boolean(
+      worktreePath &&
+        entry?.state === "ready" &&
+        entry.worktrees.find((w) => w.path === worktreePath)?.is_lastty,
+    );
+    if (worktreePath) {
+      const status = statusByWorktreePath[worktreePath];
+      const dirty = status?.uncommitted_files ?? 0;
+      if (dirty > 0) {
+        const label = basenameOfPath(worktreePath) || worktreePath;
+        const ok = window.confirm(
+          `"${label}" has ${dirty} uncommitted file${
+            dirty === 1 ? "" : "s"
+          }.\n\nClosing this pane will stop the agent. The worktree directory is kept on disk so your work isn't lost — open it in your editor or reattach a pane to recover.\n\nClose anyway?`,
+        );
+        if (!ok) return;
+      }
+    }
     await killTerminal(sessionId).catch((error) => {
       console.error("failed to kill terminal", error);
     });
@@ -993,6 +1068,18 @@ export default function TerminalWorkspace() {
       return next;
     });
     setHistoryPanelPaneId((current) => (current === paneId ? null : current));
+    if (worktreePath && isLasttyWorktree && activeProjectRoot) {
+      void pruneLocalIfClean(worktreePath, activeProjectRoot, "main")
+        .then((removed) => {
+          if (removed) {
+            invalidateWorktreeStatus(worktreePath);
+            reloadWorktrees();
+          }
+        })
+        .catch((error) => {
+          console.warn("auto-prune failed", error);
+        });
+    }
   }
 
   function handleToggleHistoryPanel(paneId: string) {
@@ -1389,6 +1476,7 @@ export default function TerminalWorkspace() {
           void handleAttachToWorktree(worktreePath, choice)
         }
         onMerge={(worktreePath) => setMergeDialog({ focusPath: worktreePath })}
+        onAbandon={(worktreePath) => void handleAbandonWorktree(worktreePath)}
         mergeable={mergeableCount}
         onOpenMergeDialog={() => setMergeDialog({ focusPath: null })}
         desktops={desktopEntries}
@@ -1559,6 +1647,27 @@ export default function TerminalWorkspace() {
           </div>
         </div>
       </AgentShell>
+      {autoPromoteNotice && (
+        <div
+          role="status"
+          style={{
+            position: "fixed",
+            bottom: 16,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "var(--color-surface-raised, rgba(30, 30, 30, 0.95))",
+            color: "var(--color-text-primary, #f4f4f4)",
+            padding: "8px 14px",
+            borderRadius: 6,
+            fontSize: 12,
+            boxShadow: "0 6px 24px rgba(0, 0, 0, 0.35)",
+            zIndex: 100,
+            maxWidth: 480,
+          }}
+        >
+          {autoPromoteNotice}
+        </div>
+      )}
       {mergeDialog && activeProjectRoot && (
         <MergeDialog
           repoRoot={activeProjectRoot}
@@ -2285,7 +2394,7 @@ function LaunchAgentModal({
     initialAgentId || agents[0]?.id || "",
   );
   const [prompt, setPrompt] = useState("");
-  const [worktreeChoice, setWorktreeChoice] = useState<string>("new");
+  const [worktreeChoice, setWorktreeChoice] = useState<string>("in_place");
   const [launchCount, setLaunchCount] = useState<number>(1);
   const [branchName, setBranchName] = useState<string>("");
   const isShell = selectedAgentId === "shell";
@@ -2306,27 +2415,30 @@ function LaunchAgentModal({
     ...(!isShell
       ? [
           {
+            value: "in_place",
+            label: "main (in-place)",
+            sublabel: "run in the main checkout",
+          },
+          {
             value: "new",
             label: "new worktree",
             sublabel: "fresh branch off main",
           },
         ]
       : []),
-    ...worktrees.map((wt) => ({
-      value: wt.path,
-      label: wt.branchName || basenameOfPath(wt.path) || "(detached)",
-      sublabel: wt.isMain
-        ? "primary checkout"
-        : wt.isLastty
-          ? "lastty worktree"
-          : undefined,
-    })),
+    ...worktrees
+      .filter((wt) => !wt.isMain)
+      .map((wt) => ({
+        value: wt.path,
+        label: wt.branchName || basenameOfPath(wt.path) || "(detached)",
+        sublabel: wt.isLastty ? "lastty worktree" : undefined,
+      })),
   ];
 
   const effectiveChoice =
     worktreeOptions.some((o) => o.value === worktreeChoice)
       ? worktreeChoice
-      : worktreeOptions[0]?.value ?? "new";
+      : worktreeOptions[0]?.value ?? "in_place";
 
   const worktreeLabel = (() => {
     const opt = worktreeOptions.find((o) => o.value === effectiveChoice);

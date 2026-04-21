@@ -34,6 +34,7 @@ export default function WorktreeList({
   onFocusPane,
   onAttach,
   onMerge,
+  onAbandon,
   style,
 }: {
   rows: WorktreeRow[];
@@ -41,6 +42,7 @@ export default function WorktreeList({
   onFocusPane: (paneId: string) => void;
   onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
   onMerge: (worktreePath: string) => void;
+  onAbandon?: (worktreePath: string) => void;
   style?: CSSProperties;
 }) {
   return (
@@ -58,6 +60,7 @@ export default function WorktreeList({
             onFocusPane={onFocusPane}
             onAttach={onAttach}
             onMerge={onMerge}
+            onAbandon={onAbandon}
           />
         ))}
       </div>
@@ -71,12 +74,14 @@ function WorktreeRowView({
   onFocusPane,
   onAttach,
   onMerge,
+  onAbandon,
 }: {
   row: WorktreeRow;
   agents: AgentDefinition[];
   onFocusPane: (paneId: string) => void;
   onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
   onMerge: (worktreePath: string) => void;
+  onAbandon?: (worktreePath: string) => void;
 }) {
   const [attachOpen, setAttachOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
@@ -137,7 +142,14 @@ function WorktreeRowView({
           </span>
           <span className="agent-worktree-row__meta">
             {row.isMain ? (
-              <span>primary checkout</span>
+              <>
+                <span>primary checkout</span>
+                {row.liveSessions > 0 && (
+                  <span title="agents running in-place on main">
+                    {row.liveSessions} live
+                  </span>
+                )}
+              </>
             ) : (
               <>
                 {row.uncommittedFiles > 0 && (
@@ -235,6 +247,20 @@ function WorktreeRowView({
             disabled={row.merged}
           >
             open PR
+          </button>
+        )}
+        {!row.isMain && onAbandon && (
+          <button
+            type="button"
+            className="agent-worktree-row__action"
+            onClick={(event) => {
+              event.stopPropagation();
+              onAbandon(row.path);
+            }}
+            title="close PR (if any), delete remote + local branch, remove worktree"
+            aria-label={`abandon ${row.branchName}`}
+          >
+            ✕
           </button>
         )}
       </div>

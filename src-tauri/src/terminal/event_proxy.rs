@@ -60,10 +60,32 @@ impl<R: Runtime> EventListener for EventProxy<R> {
                 if let (Some(workspace_path), Some(worktree_path)) =
                     (self.workspace_path.as_ref(), self.worktree_path.as_ref())
                 {
-                    let _ = std::process::Command::new("git")
-                        .args(["worktree", "remove", "--force", worktree_path])
+                    // Intentionally no --force: if the worktree is dirty, leave
+                    // the directory on disk so the user can recover uncommitted
+                    // work. Explicit cleanup goes through abandon_worktree.
+                    let branch = std::process::Command::new("git")
+                        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                        .current_dir(worktree_path)
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty() && s != "HEAD");
+                    let removed = std::process::Command::new("git")
+                        .args(["worktree", "remove", worktree_path])
                         .current_dir(workspace_path)
-                        .status();
+                        .status()
+                        .map(|status| status.success())
+                        .unwrap_or(false);
+                    if removed {
+                        if let Some(branch) = branch {
+                            let _ = std::process::Command::new("git")
+                                .args(["branch", "-D", &branch])
+                                .current_dir(workspace_path)
+                                .status();
+                        }
+                    }
                 }
                 self.app
                     .emit(

@@ -308,6 +308,7 @@ export interface CreatePrRequest {
   title?: string | null;
   body?: string | null;
   auto_commit_message?: string | null;
+  draft?: boolean;
 }
 
 export interface CreatePrResult {
@@ -316,6 +317,25 @@ export interface CreatePrResult {
   committed: boolean;
   pushed: boolean;
   already_existed: boolean;
+}
+
+export interface AbandonResult {
+  pr_closed: boolean;
+  remote_branch_deleted: boolean;
+  worktree_removed: boolean;
+  local_branch_deleted: boolean;
+  branch: string | null;
+  pr_url: string | null;
+  notes: string[];
+}
+
+export interface PrunableWorktree {
+  path: string;
+  branch: string;
+  uncommitted_files: number;
+  unmerged_commits: number;
+  has_open_pr: boolean;
+  reason: string;
 }
 
 export async function listWorktrees(cwd: string): Promise<Worktree[]> {
@@ -346,6 +366,28 @@ export async function removeWorktree(
   return invoke("remove_worktree", { path, repoRoot });
 }
 
+export async function abandonWorktree(
+  path: string,
+  repoRoot: string,
+): Promise<AbandonResult> {
+  return invoke("abandon_worktree", { path, repoRoot });
+}
+
+export async function listPrunableWorktrees(
+  repoRoot: string,
+  baseBranch: string,
+): Promise<PrunableWorktree[]> {
+  return invoke("list_prunable_worktrees", { repoRoot, baseBranch });
+}
+
+export async function pruneLocalIfClean(
+  path: string,
+  repoRoot: string,
+  baseBranch: string,
+): Promise<boolean> {
+  return invoke("prune_local_if_clean", { path, repoRoot, baseBranch });
+}
+
 export async function getWorkspaceRoot(): Promise<string> {
   return invoke("get_workspace_root");
 }
@@ -361,13 +403,18 @@ export interface AgentDefinition {
   icon?: string | null;
 }
 
+export type SyncPolicy = "shared" | "clean";
+
+export type WorktreeStrategy =
+  | { kind: "in_place" }
+  | { kind: "attach"; path: string }
+  | { kind: "new"; sync?: SyncPolicy; branch?: string | null };
+
 export interface LaunchAgentRequest {
   agent_id: string;
   prompt?: string | null;
   cwd?: string | null;
-  isolate_in_worktree?: boolean;
-  branch_name?: string | null;
-  attach_to_worktree?: string | null;
+  worktree?: WorktreeStrategy;
 }
 
 export interface LaunchAgentResult {
@@ -375,6 +422,7 @@ export interface LaunchAgentResult {
   pane_title: string;
   cwd: string;
   worktree_path?: string | null;
+  auto_promoted: boolean;
 }
 
 export interface RuleFilter {

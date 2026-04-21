@@ -21,3 +21,4 @@ pub mod render_sync;
 #[cfg(feature = "bench")]
 pub mod runtime_modes;
 pub mod terminal;
+pub mod worktree_prep;

@@ -615,6 +615,17 @@ impl RuleEngine {
             }
 
             self.last_triggered_at_ms.insert(rule.name.clone(), now_ms);
+            let worktree = if rule.action.isolate_in_worktree {
+                crate::agents::WorktreeStrategy::New {
+                    sync: crate::agents::SyncPolicy::default(),
+                    branch: normalize_optional(render_template(
+                        rule.action.branch_name.as_deref(),
+                        event,
+                    )),
+                }
+            } else {
+                crate::agents::WorktreeStrategy::InPlace
+            };
             actions.push(PreparedRuleAction {
                 rule_name: rule.name.clone(),
                 source_session_id: event.session_id().map(ToOwned::to_owned),
@@ -625,12 +636,7 @@ impl RuleEngine {
                         event,
                     )),
                     cwd: normalize_optional(render_template(rule.action.cwd.as_deref(), event)),
-                    isolate_in_worktree: rule.action.isolate_in_worktree,
-                    branch_name: normalize_optional(render_template(
-                        rule.action.branch_name.as_deref(),
-                        event,
-                    )),
-                    attach_to_worktree: None,
+                    worktree,
                 },
             });
         }

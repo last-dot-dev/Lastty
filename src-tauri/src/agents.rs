@@ -8,6 +8,7 @@ use tauri::Runtime;
 use crate::adapters::adapter_for;
 use crate::terminal::manager::TerminalManager;
 use crate::terminal::session::{CommandSpec, SessionConfig};
+use crate::worktree_prep::{self, PreparedWorktree};
 
 const AGENTS_CONFIG_PATH: &str = "agents.toml";
 
@@ -51,16 +52,42 @@ pub struct PromptTransportDetail {
     pub eof_marker: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncPolicy {
+    #[default]
+    Shared,
+    Clean,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorktreeStrategy {
+    InPlace,
+    Attach {
+        path: String,
+    },
+    New {
+        #[serde(default)]
+        sync: SyncPolicy,
+        #[serde(default)]
+        branch: Option<String>,
+    },
+}
+
+impl Default for WorktreeStrategy {
+    fn default() -> Self {
+        Self::InPlace
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchAgentRequest {
     pub agent_id: String,
     pub prompt: Option<String>,
     pub cwd: Option<String>,
     #[serde(default)]
-    pub isolate_in_worktree: bool,
-    pub branch_name: Option<String>,
-    #[serde(default)]
-    pub attach_to_worktree: Option<String>,
+    pub worktree: WorktreeStrategy,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,6 +96,7 @@ pub struct LaunchAgentResult {
     pub pane_title: String,
     pub cwd: String,
     pub worktree_path: Option<String>,
+    pub auto_promoted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -180,67 +208,20 @@ pub fn launch_agent<R: Runtime>(
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_root.to_path_buf());
 
-    let (cwd, worktree_path) = if let Some(existing) = request
-        .attach_to_worktree
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        let path = PathBuf::from(existing);
-        if !path.exists() {
-            return Err(anyhow::anyhow!(
-                "attach_to_worktree path does not exist: {}",
-                path.display()
-            ));
-        }
-        (path.clone(), Some(path.to_string_lossy().to_string()))
-    } else if request.isolate_in_worktree {
-        let branch_name = request
-            .branch_name
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| {
-                let suffix = uuid::Uuid::new_v4().simple().to_string();
-                format!(
-                    "lastty-{}-{}",
-                    sanitize_branch_component(&agent.id),
-                    &suffix[..6]
-                )
-            });
-        let worktree_root = base_cwd.join(".pane-worktrees");
-        std::fs::create_dir_all(&worktree_root)?;
-        let worktree_path = worktree_root.join(&branch_name);
-        if worktree_path.exists() {
-            return Err(anyhow::anyhow!(
-                "worktree already exists: {}",
-                worktree_path.display()
-            ));
-        }
-        let status = Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                "-b",
-                &branch_name,
-                worktree_path.to_string_lossy().as_ref(),
-            ])
-            .current_dir(&base_cwd)
-            .status()?;
-        if !status.success() {
-            return Err(anyhow::anyhow!(
-                "git worktree add failed for branch {branch_name}"
-            ));
-        }
-        (
-            worktree_path.clone(),
-            Some(worktree_path.to_string_lossy().to_string()),
-        )
-    } else {
-        (base_cwd, None)
-    };
+    let (strategy, auto_promoted) = auto_promote_if_busy(manager, &base_cwd, request.worktree);
+
+    let resolved = resolve_strategy(&base_cwd, &agent.id, strategy)?;
+    let ResolvedStrategy {
+        cwd,
+        worktree_path,
+        prepared,
+    } = resolved;
 
     let adapter = adapter_for(&agent.id, request.prompt.as_deref());
-    let mut env = build_agent_env();
+    let mut env = build_agent_env(&base_cwd);
+    if let Some(prepared) = prepared.as_ref() {
+        env.extend(prepared.env.clone());
+    }
     env.extend(agent.env.clone());
 
     let prompt_summary = request.prompt.as_deref().map(summarize_prompt);
@@ -292,12 +273,125 @@ pub fn launch_agent<R: Runtime>(
         session_id
     };
 
+    if let Some(prepared) = prepared {
+        prepared.spawn_post_create_hook();
+    }
+
     Ok(LaunchAgentResult {
         session_id: session_id.to_string(),
         pane_title: agent.name,
         cwd: cwd.to_string_lossy().to_string(),
         worktree_path,
+        auto_promoted,
     })
+}
+
+struct ResolvedStrategy {
+    cwd: PathBuf,
+    worktree_path: Option<String>,
+    prepared: Option<PreparedWorktree>,
+}
+
+fn auto_promote_if_busy<R: Runtime>(
+    manager: &TerminalManager<R>,
+    target_cwd: &Path,
+    strategy: WorktreeStrategy,
+) -> (WorktreeStrategy, bool) {
+    if !matches!(strategy, WorktreeStrategy::InPlace) {
+        return (strategy, false);
+    }
+    if manager.live_sessions_on(target_cwd).is_empty() {
+        return (strategy, false);
+    }
+    // Auto-promote only when the target is a git repo — otherwise there's no
+    // way to create a worktree and the launch would fail. Rule-driven launches
+    // into arbitrary cwds (e.g. scratch dirs) stay in-place.
+    if !crate::git_util::is_git_repo(target_cwd) {
+        return (strategy, false);
+    }
+    (
+        WorktreeStrategy::New {
+            sync: SyncPolicy::default(),
+            branch: None,
+        },
+        true,
+    )
+}
+
+fn resolve_strategy(
+    base_cwd: &Path,
+    agent_id: &str,
+    strategy: WorktreeStrategy,
+) -> anyhow::Result<ResolvedStrategy> {
+    match strategy {
+        WorktreeStrategy::InPlace => Ok(ResolvedStrategy {
+            cwd: base_cwd.to_path_buf(),
+            worktree_path: None,
+            prepared: None,
+        }),
+        WorktreeStrategy::Attach { path } => {
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                return Err(anyhow::anyhow!("attach strategy requires a path"));
+            }
+            let path = PathBuf::from(trimmed);
+            if !path.exists() {
+                return Err(anyhow::anyhow!(
+                    "attach path does not exist: {}",
+                    path.display()
+                ));
+            }
+            let display = path.to_string_lossy().to_string();
+            Ok(ResolvedStrategy {
+                cwd: path,
+                worktree_path: Some(display),
+                prepared: None,
+            })
+        }
+        WorktreeStrategy::New { sync, branch } => {
+            let branch_name = branch
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| {
+                    let suffix = uuid::Uuid::new_v4().simple().to_string();
+                    format!(
+                        "lastty-{}-{}",
+                        sanitize_branch_component(agent_id),
+                        &suffix[..6]
+                    )
+                });
+            let worktree_root = base_cwd.join(".pane-worktrees");
+            std::fs::create_dir_all(&worktree_root)?;
+            let worktree_path = worktree_root.join(&branch_name);
+            if worktree_path.exists() {
+                return Err(anyhow::anyhow!(
+                    "worktree already exists: {}",
+                    worktree_path.display()
+                ));
+            }
+            let status = Command::new("git")
+                .args([
+                    "worktree",
+                    "add",
+                    "-b",
+                    &branch_name,
+                    worktree_path.to_string_lossy().as_ref(),
+                ])
+                .current_dir(base_cwd)
+                .status()?;
+            if !status.success() {
+                return Err(anyhow::anyhow!(
+                    "git worktree add failed for branch {branch_name}"
+                ));
+            }
+            let prepared = worktree_prep::prepare(base_cwd, &worktree_path, sync)?;
+            let display = worktree_path.to_string_lossy().to_string();
+            Ok(ResolvedStrategy {
+                cwd: worktree_path,
+                worktree_path: Some(display),
+                prepared: Some(prepared),
+            })
+        }
+    }
 }
 
 pub fn resume_command_spec(agent: &AgentDefinition, agent_session_id: &str) -> Option<CommandSpec> {
@@ -353,7 +447,7 @@ fn build_command_spec(
     })
 }
 
-fn build_agent_env() -> HashMap<String, String> {
+fn build_agent_env(_base_cwd: &Path) -> HashMap<String, String> {
     let mut env = HashMap::new();
     env.insert("TERM".to_string(), "xterm-256color".to_string());
     env.insert("COLORTERM".to_string(), "truecolor".to_string());
