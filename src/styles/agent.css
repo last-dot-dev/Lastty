@@ -1531,8 +1531,7 @@
   padding: 0;
 }
 
-.agent-window-shell:hover .agent-edge-spawner__button,
-.agent-window-shell:focus-within .agent-edge-spawner__button {
+.agent-window-shell:hover .agent-edge-spawner__button {
   pointer-events: auto;
   opacity: 0.8;
 }
