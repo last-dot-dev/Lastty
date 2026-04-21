@@ -160,23 +160,38 @@ async function spawnPanes(
     );
   }
 
+  // BFS-style anchor rotation: split the oldest pane first, then push both
+  // halves to the back of the queue. Keeps areas balanced — anchoring on the
+  // newly created pane each step cascaded (pane N ≈ 1/2^N of the screen).
+  const splitQueue: string[] = [];
+  deps.setWorkspace((current) => {
+    if (!current) return current;
+    const firstId = Object.keys(current.panes).find(
+      (id) => current.panes[id]?.sessionId === firstSessionId,
+    );
+    if (firstId) splitQueue.push(firstId);
+    return current;
+  });
+
   let direction: SplitDirection = "horizontal";
   for (const scenario of restScenarios) {
     const sessionId = await spawnSimulatorPane(cfg, scenario, cwd, deps.hydrateSessionInfo);
     const splitDirection = direction;
     direction = direction === "vertical" ? "horizontal" : "vertical";
+    const anchor = splitQueue.shift() ?? null;
 
+    let newPaneId: string | null = null;
     deps.setWorkspace((current) => {
       if (!current) return current;
-      const anchor = anchorPaneId(current);
-      if (!anchor) return current;
-      return splitPane(
-        current,
-        anchor,
-        splitDirection,
-        createPaneRecord(sessionId, `stress-${scenario}`),
-      );
+      const fallback = anchorPaneId(current);
+      const effectiveAnchor = anchor ?? fallback;
+      if (!effectiveAnchor) return current;
+      const record = createPaneRecord(sessionId, `stress-${scenario}`);
+      newPaneId = record.id;
+      return splitPane(current, effectiveAnchor, splitDirection, record);
     });
+    if (anchor) splitQueue.push(anchor);
+    if (newPaneId) splitQueue.push(newPaneId);
   }
 }
 
