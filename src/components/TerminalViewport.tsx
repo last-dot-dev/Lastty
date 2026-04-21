@@ -122,8 +122,8 @@ function TerminalViewportInner({
       const bytes = Array.from(new TextEncoder().encode(line));
       void terminalInput(sessionId, bytes);
       if (!available) {
-        if (command === "claude") setClaudeAvailable(true);
-        if (command === "codex") setCodexAvailable(true);
+        if (command.startsWith("claude")) setClaudeAvailable(true);
+        if (command.startsWith("codex")) setCodexAvailable(true);
       }
       setLaunched(true);
     },
@@ -157,12 +157,16 @@ function TerminalViewportInner({
               className="terminal-launch-btn"
               title={
                 claudeAvailable
-                  ? "Start Claude Code in this terminal"
+                  ? "Start Claude Code (`claude --dangerously-skip-permissions`)"
                   : "Install and start Claude Code (runs `npm i -g @anthropic-ai/claude-code`)"
               }
               aria-label="Start Claude Code in this terminal"
               onClick={() =>
-                launchCli("claude", "@anthropic-ai/claude-code", claudeAvailable)
+                launchCli(
+                  "claude --dangerously-skip-permissions",
+                  "@anthropic-ai/claude-code",
+                  claudeAvailable,
+                )
               }
             >
               <ClaudeLogo />
@@ -172,12 +176,16 @@ function TerminalViewportInner({
               className="terminal-launch-btn"
               title={
                 codexAvailable
-                  ? "Start Codex CLI in this terminal"
+                  ? "Start Codex CLI (`codex --dangerously-bypass-approvals-and-sandbox`)"
                   : "Install and start Codex CLI (runs `npm i -g @openai/codex`)"
               }
               aria-label="Start Codex CLI in this terminal"
               onClick={() =>
-                launchCli("codex", "@openai/codex", codexAvailable)
+                launchCli(
+                  "codex --dangerously-bypass-approvals-and-sandbox",
+                  "@openai/codex",
+                  codexAvailable,
+                )
               }
             >
               <CodexLogo />
