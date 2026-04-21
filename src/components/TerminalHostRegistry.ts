@@ -76,6 +76,8 @@ interface Entry {
   wheelAccumDy: number;
   pendingScrollbackClear: boolean;
   snapshotTimer: number | null;
+  atlasClearTimer: number | null;
+  writesSinceAtlasClear: number;
   status: string;
   statusListeners: Set<StatusListener>;
   currentSlot: HTMLElement | null;
@@ -296,6 +298,21 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
     entry.webgl = null;
   }
 
+  // Truecolor-heavy workloads (agent output, syntax highlighting) saturate the
+  // WebGL glyph atlas after ~10-15s. Once full, new (char, color) combos fall
+  // back to CPU rasterization, causing lagspikes and visual glitches where
+  // wrong glyphs render at the correct cells. Reset periodically when writes
+  // have actually happened, so idle sessions stay cached.
+  entry.atlasClearTimer = window.setInterval(() => {
+    if (entry.disposed || entry.writesSinceAtlasClear < 200) return;
+    entry.writesSinceAtlasClear = 0;
+    try {
+      (terminal as Terminal & { clearTextureAtlas?: () => void }).clearTextureAtlas?.();
+    } catch {
+      // best-effort
+    }
+  }, 10_000);
+
   console.log(`[resume] initEntry terminal.open ${sessionId}`);
   terminal.open(host);
   focusTerminalIfActive(entry);
@@ -327,6 +344,7 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
       merged.set(bytes, ERASE_SAVED_LINES.length);
       bytes = merged;
     }
+    entry.writesSinceAtlasClear += 1;
     if (__LASTTY_BENCH__) {
       const writeStart = performance.now();
       terminal.write(bytes, () => {
@@ -411,6 +429,8 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     wheelAccumDy: 0,
     pendingScrollbackClear: false,
     snapshotTimer: null,
+    atlasClearTimer: null,
+    writesSinceAtlasClear: 0,
     status: "initializing",
     statusListeners: new Set(),
     currentSlot: null,
@@ -520,6 +540,9 @@ export function releaseTerminalHost(sessionId: string): void {
   entry.removeWheelListener?.();
   if (entry.snapshotTimer !== null) {
     window.clearTimeout(entry.snapshotTimer);
+  }
+  if (entry.atlasClearTimer !== null) {
+    window.clearInterval(entry.atlasClearTimer);
   }
   const snapshotCb = entry.snapshotCallbackRef.current;
   if (snapshotCb && entry.serialize) {
