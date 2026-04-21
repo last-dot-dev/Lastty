@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { TerminalFrame } from "../lib/ipc";
 
 import { prepareXtermFrameWrite, type XtermFrameState } from "./xtermFrame";
+import { encodeAnsiBase64 } from "./xtermFrame.testUtils";
 
 const { Terminal } = xtermPkg;
 const decoder = new TextDecoder();
@@ -38,11 +39,7 @@ describe("prepareXtermFrameWrite", () => {
 
 function makeFrame(alternateScreen: boolean, ansi: string): TerminalFrame {
   return {
-    ansi: btoa(
-      Array.from(new TextEncoder().encode(ansi))
-        .map((b) => String.fromCharCode(b))
-        .join(""),
-    ),
+    ansi: encodeAnsiBase64(ansi),
     cursor_x: 0,
     cursor_y: 0,
     cursor_visible: true,

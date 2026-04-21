@@ -157,9 +157,7 @@ export async function terminalScroll(
 }
 
 export interface TerminalFrame {
-  // Base64-encoded ANSI bytes. Backend switched from `Vec<u8>` (which
-  // serde_json renders as `[65, 66, ...]` — ~4x bloat) to base64 for IPC
-  // efficiency.
+  /** Base64-encoded ANSI bytes. */
   ansi: string;
   cursor_x: number;
   cursor_y: number;

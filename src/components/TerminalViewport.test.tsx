@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SelectionBuffer } from "../app/xtermSelection";
+import { encodeAnsiBase64 } from "../app/xtermFrame.testUtils";
 import type { TerminalFrameEvent } from "../lib/ipc";
 
 const harness = vi.hoisted(() => {
@@ -505,11 +506,7 @@ function makeFrame(
   }> = {},
 ) {
   return {
-    ansi: btoa(
-      Array.from(new TextEncoder().encode(ansi))
-        .map((b) => String.fromCharCode(b))
-        .join(""),
-    ),
+    ansi: encodeAnsiBase64(ansi),
     cursor_x: 0,
     cursor_y: 0,
     cursor_visible: !ansi.includes("?25l"),

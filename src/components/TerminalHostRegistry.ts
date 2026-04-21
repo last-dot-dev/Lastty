@@ -60,6 +60,9 @@ export interface SessionHostProps {
 
 type StatusListener = (status: string) => void;
 
+const ATLAS_CLEAR_INTERVAL_MS = 10_000;
+const ATLAS_CLEAR_WRITE_THRESHOLD = 200;
+
 interface Entry {
   sessionId: string;
   host: HTMLDivElement;
@@ -304,14 +307,13 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
   // wrong glyphs render at the correct cells. Reset periodically when writes
   // have actually happened, so idle sessions stay cached.
   entry.atlasClearTimer = window.setInterval(() => {
-    if (entry.disposed || entry.writesSinceAtlasClear < 200) return;
+    if (entry.disposed || !entry.webgl) return;
+    if (entry.writesSinceAtlasClear < ATLAS_CLEAR_WRITE_THRESHOLD) return;
     entry.writesSinceAtlasClear = 0;
     try {
       (terminal as Terminal & { clearTextureAtlas?: () => void }).clearTextureAtlas?.();
-    } catch {
-      // best-effort
-    }
-  }, 10_000);
+    } catch {}
+  }, ATLAS_CLEAR_INTERVAL_MS);
 
   console.log(`[resume] initEntry terminal.open ${sessionId}`);
   terminal.open(host);

@@ -11,6 +11,7 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{LineDamageBounds, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
+use base64::Engine as _;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 #[cfg(feature = "bench")]
@@ -248,7 +249,6 @@ fn finalize_frame<T: EventListener>(term: &Term<T>, mut out: String) -> Terminal
         out.push_str("\x1b[?25l");
     }
 
-    use base64::Engine as _;
     TerminalFrame {
         ansi: base64::engine::general_purpose::STANDARD.encode(out.as_bytes()),
         cursor_x: cursor.point.column.0,
