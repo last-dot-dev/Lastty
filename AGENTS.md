@@ -87,10 +87,12 @@ Lastty is a Tauri v2 agent-native tiled terminal. Agents run in PTY panes and pu
 ## Releasing
 
 - Single source of truth: root `package.json` version. All other version fields are derived.
-- Bump with `pnpm bump-version <X.Y.Z>` — writes `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `pane-protocol/Cargo.toml`, and refreshes `Cargo.lock`. Does not commit.
-- Release flow: `pnpm bump-version X.Y.Z` → `git commit -am "feat: vX.Y.Z"` → `git tag vX.Y.Z` → `git push origin main` → `git push origin vX.Y.Z`.
+- Bump with `pnpm bump-version <X.Y.Z>` — writes `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `pane-protocol/Cargo.toml`, `bench-harness/Cargo.toml`, and refreshes `Cargo.lock`. Does not commit.
+- **A version-bump commit contains version bumps and nothing else.** The diff must be limited to the files the bump script touches. If `git status` shows anything unrelated, commit that work first under its own `feat:`/`fix:` message, then run the bump.
+- Release flow: ensure tree is clean → `pnpm bump-version X.Y.Z` → `git commit -am "feat: vX.Y.Z"` (diff = version files only) → `git tag vX.Y.Z` → `git push origin main` → `git push origin vX.Y.Z`.
+- Never bundle features, fixes, or refactors into a `feat: vX.Y.Z` commit. Readers should be able to scan tag commits to see the version history without wading through unrelated code.
 - Pushing the tag triggers `.github/workflows/release.yml`: builds signed/notarized macOS arm64 `.dmg`, generates `latest.json` for the Tauri updater, publishes the GitHub Release. `release.yml` runs on the tag, not on main — commits between tag pushes do not produce releases.
-- Never hand-edit version strings. Use the bump script so all four files stay in lockstep.
+- Never hand-edit version strings. Use the bump script so all version files stay in lockstep.
 
 ## Before finishing
 
