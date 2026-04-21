@@ -217,7 +217,8 @@ fn run_workload(workload: &Workload, frame_cap: Duration, absorb: Duration) -> R
                 last_emit = Some(Instant::now());
                 emits.fetch_add(1, Ordering::Relaxed);
                 last_rendered.store(gen_at_render, Ordering::Release);
-                total_ansi_bytes.fetch_add(frame.ansi.len() as u64, Ordering::Relaxed);
+                let ansi_len = frame.as_ref().map(|f| f.ansi.len()).unwrap_or(0);
+                total_ansi_bytes.fetch_add(ansi_len as u64, Ordering::Relaxed);
                 render_us
                     .lock()
                     .unwrap()
@@ -228,7 +229,7 @@ fn run_workload(workload: &Workload, frame_cap: Duration, absorb: Duration) -> R
                         .unwrap()
                         .push(mark_instant.elapsed().as_micros() as u64);
                 }
-                let _ = dirty.session_id;
+                let _ = dirty.sessions;
             }
         })
     };
