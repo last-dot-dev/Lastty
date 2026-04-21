@@ -3,8 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 export async function createTerminal(
   cwd?: string,
   command?: string,
+  args?: string[],
 ): Promise<string> {
-  return invoke("create_terminal", { cwd, command });
+  return invoke("create_terminal", { cwd, command, args });
 }
 
 export interface RestoreTerminalRequest {
@@ -63,6 +64,53 @@ export interface BenchmarkConfig {
 
 export async function getBenchmarkConfig(): Promise<BenchmarkConfig> {
   return invoke("get_benchmark_config");
+}
+
+export interface StressBenchConfig {
+  duration_ms: number;
+  panes: number;
+  scenarios: string[];
+  simulator_path: string;
+  cols: number;
+  rows: number;
+  output_path: string;
+}
+
+export async function getStressBenchConfig(): Promise<StressBenchConfig> {
+  return invoke("get_stress_bench_config");
+}
+
+export async function registerStressSession(
+  sessionId: string,
+  scenario: string,
+): Promise<void> {
+  return invoke("register_stress_session", { sessionId, scenario });
+}
+
+export async function submitStressFrontendSample(
+  sessionId: string,
+  writeMs: number,
+): Promise<void> {
+  return invoke("submit_stress_frontend_sample", { sessionId, writeMs });
+}
+
+export async function submitStressLifecycle(
+  stage: string,
+  ms: number,
+): Promise<void> {
+  return invoke("submit_stress_lifecycle", { stage, ms });
+}
+
+export async function finalizeStressBench(
+  outputPath: string,
+  durationMs: number,
+  panes: number,
+): Promise<void> {
+  return invoke("finalize_stress_bench", {
+    outputPath,
+    durationMs,
+    panes,
+  });
 }
 
 export interface FontConfig {

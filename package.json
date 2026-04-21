@@ -15,6 +15,8 @@
     "bench:xterm:verify-failure": "node ./scripts/verify-xterm-bench-failure.mjs",
     "bench:xterm:summary": "node ./scripts/summarize-xterm-bench.mjs /tmp/lastty-xterm-bench.json",
     "bench:trace": "node ./scripts/summarize-perf-trace.mjs /tmp/lastty-perf.jsonl",
+    "bench:stress": "./scripts/run-stress-bench.sh",
+    "bench:stress:summary": "node ./scripts/stress/summarize-stress.mjs /tmp/lastty-stress.json",
     "bump-version": "node ./scripts/bump-version.mjs"
   },
   "dependencies": {

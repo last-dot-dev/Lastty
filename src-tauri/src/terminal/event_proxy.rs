@@ -5,6 +5,8 @@ use alacritty_terminal::event::{Event, EventListener};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::bus::{BusEvent, EventBus};
+#[cfg(feature = "bench")]
+use crate::perf_registry::PerfRegistry;
 use crate::render_sync::RenderCoordinator;
 
 use super::session::SessionId;
@@ -42,6 +44,12 @@ impl<R: Runtime> EventListener for EventProxy<R> {
     fn send_event(&self, event: Event) {
         match event {
             Event::Wakeup => {
+                #[cfg(feature = "bench")]
+                {
+                    if let Some(perf) = self.app.try_state::<std::sync::Arc<PerfRegistry>>() {
+                        perf.record_mark(self.session_id);
+                    }
+                }
                 self.render_coordinator.mark_dirty(self.session_id);
             }
             Event::PtyWrite(text) => {

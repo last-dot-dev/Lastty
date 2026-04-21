@@ -8,7 +8,10 @@ use std::sync::Arc;
 use tauri::{Manager, TitleBarStyle};
 use tracing_subscriber::EnvFilter;
 
+#[cfg(feature = "bench")]
+use lastty::perf_registry::PerfRegistry;
 use lastty::render_sync::RenderCoordinator;
+#[cfg(feature = "bench")]
 use lastty::runtime_modes::{resolved_benchmark_mode, BenchmarkMode};
 use lastty::terminal::manager::TerminalManager;
 use lastty::terminal::render::spawn_frame_emitter;
@@ -27,16 +30,23 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
-            let benchmark_mode = resolved_benchmark_mode();
 
             #[cfg(target_os = "macos")]
             {
                 window.set_title_bar_style(TitleBarStyle::Overlay)?;
             }
 
-            if benchmark_mode == Some(BenchmarkMode::Xterm) {
-                tracing::info!("starting in benchmark mode: xterm");
-                return Ok(());
+            #[cfg(feature = "bench")]
+            {
+                let benchmark_mode = resolved_benchmark_mode();
+                if benchmark_mode == Some(BenchmarkMode::Xterm) {
+                    tracing::info!("starting in benchmark mode: xterm");
+                    return Ok(());
+                }
+                if benchmark_mode == Some(BenchmarkMode::Stress) {
+                    tracing::info!("starting in benchmark mode: stress (real app + driver hook)");
+                    app.manage(Arc::new(PerfRegistry::new()));
+                }
             }
 
             let render_coordinator = Arc::new(RenderCoordinator::new());
@@ -108,10 +118,22 @@ fn main() {
             commands::terminal_scroll,
             commands::kill_terminal,
             commands::key_input,
+            #[cfg(feature = "bench")]
             commands::write_benchmark_report,
             commands::quit_app,
             commands::get_benchmark_mode,
+            #[cfg(feature = "bench")]
             commands::get_benchmark_config,
+            #[cfg(feature = "bench")]
+            commands::get_stress_bench_config,
+            #[cfg(feature = "bench")]
+            commands::register_stress_session,
+            #[cfg(feature = "bench")]
+            commands::submit_stress_frontend_sample,
+            #[cfg(feature = "bench")]
+            commands::submit_stress_lifecycle,
+            #[cfg(feature = "bench")]
+            commands::finalize_stress_bench,
             commands::get_font_config,
             commands::get_primary_session_id,
             commands::list_sessions,

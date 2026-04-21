@@ -18,8 +18,9 @@ run_cmd() {
   fi
 }
 
-echo "Building frontend..."
-run_cmd pnpm build >/tmp/lastty-xterm-bench-build.log 2>&1
+echo "Building lastty (release, --features bench) via tauri-cli..."
+LASTTY_BENCH=1 \
+run_cmd pnpm tauri build --no-bundle --features bench >/tmp/lastty-xterm-bench-build.log 2>&1
 
 echo "Running xterm benchmark in Tauri..."
 LASTTY_BENCH_MODE=xterm \
@@ -28,7 +29,7 @@ LASTTY_BENCH_COLS="$BENCH_COLS" \
 LASTTY_BENCH_ROWS="$BENCH_ROWS" \
 LASTTY_BENCH_ITERATIONS="$BENCH_ITERATIONS" \
 LASTTY_BENCH_WARMUP="$BENCH_WARMUP" \
-run_cmd cargo run -p lastty --release --bin lastty >/tmp/lastty-xterm-bench.log 2>&1 &
+run_cmd ./target/release/lastty >/tmp/lastty-xterm-bench.log 2>&1 &
 PID=$!
 
 cleanup() {

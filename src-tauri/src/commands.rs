@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+#[cfg(feature = "bench")]
 use std::fs;
 use std::path::Path;
 
@@ -13,6 +14,7 @@ use crate::agents::{
 use crate::bus::{BusEvent, EventBus, HistoryEntry, HistorySource, RecordingInfo};
 use crate::font_config::FontConfig;
 use crate::history;
+#[cfg(feature = "bench")]
 use crate::runtime_modes;
 use crate::terminal::manager::TerminalManager;
 use crate::terminal::render::TerminalFrame;
@@ -35,6 +37,7 @@ pub struct RestoreTerminalRequest {
 pub async fn create_terminal(
     cwd: Option<String>,
     command: Option<String>,
+    args: Option<Vec<String>>,
     state: State<'_, TerminalManager>,
     event_bus: State<'_, EventBus>,
 ) -> Result<String, String> {
@@ -45,7 +48,7 @@ pub async fn create_terminal(
         .unwrap_or_else(|| std::path::PathBuf::from("/"));
     let command = command.map(|program| CommandSpec {
         program,
-        args: Vec::new(),
+        args: args.unwrap_or_default(),
     });
     let session_id = state
         .create_session(SessionConfig {
@@ -171,6 +174,7 @@ pub async fn key_input(input: KeyInput, state: State<'_, TerminalManager>) -> Re
     Ok(())
 }
 
+#[cfg(feature = "bench")]
 #[tauri::command]
 pub async fn write_benchmark_report(path: String, contents: String) -> Result<(), String> {
     fs::write(path, contents).map_err(|e| e.to_string())
@@ -182,14 +186,86 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "bench")]
 #[tauri::command]
 pub async fn get_benchmark_mode() -> Result<Option<String>, String> {
     Ok(runtime_modes::resolved_benchmark_mode().map(|mode| mode.as_str().to_string()))
 }
 
+#[cfg(not(feature = "bench"))]
+#[tauri::command]
+pub async fn get_benchmark_mode() -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+#[cfg(feature = "bench")]
 #[tauri::command]
 pub async fn get_benchmark_config() -> Result<runtime_modes::BenchmarkConfig, String> {
     Ok(runtime_modes::benchmark_config())
+}
+
+#[cfg(feature = "bench")]
+#[tauri::command]
+pub async fn get_stress_bench_config() -> Result<runtime_modes::StressBenchConfig, String> {
+    Ok(runtime_modes::stress_bench_config())
+}
+
+#[cfg(feature = "bench")]
+#[tauri::command]
+pub async fn register_stress_session(
+    session_id: String,
+    scenario: String,
+    perf: State<'_, std::sync::Arc<crate::perf_registry::PerfRegistry>>,
+) -> Result<(), String> {
+    let id = SessionId::parse(&session_id)?;
+    perf.register(id, Some(scenario));
+    Ok(())
+}
+
+#[cfg(feature = "bench")]
+#[tauri::command]
+pub async fn submit_stress_frontend_sample(
+    session_id: String,
+    write_ms: f64,
+    perf: State<'_, std::sync::Arc<crate::perf_registry::PerfRegistry>>,
+) -> Result<(), String> {
+    let id = SessionId::parse(&session_id)?;
+    perf.record_frontend_write(id, write_ms);
+    Ok(())
+}
+
+#[cfg(feature = "bench")]
+#[tauri::command]
+pub async fn submit_stress_lifecycle(
+    stage: String,
+    ms: f64,
+    perf: State<'_, std::sync::Arc<crate::perf_registry::PerfRegistry>>,
+) -> Result<(), String> {
+    perf.record_lifecycle(stage, ms);
+    Ok(())
+}
+
+#[cfg(feature = "bench")]
+#[tauri::command]
+pub async fn finalize_stress_bench(
+    output_path: String,
+    duration_ms: u64,
+    panes: u32,
+    perf: State<'_, std::sync::Arc<crate::perf_registry::PerfRegistry>>,
+) -> Result<(), String> {
+    tracing::info!(%output_path, duration_ms, panes, "stress: finalize_stress_bench");
+    let report = perf.snapshot();
+    let payload = serde_json::json!({
+        "duration_ms": duration_ms,
+        "panes": panes,
+        "lifecycle": report.lifecycle,
+        "sessions": report.sessions,
+        "aggregate": report.aggregate,
+        "hotspots": report.hotspots,
+    });
+    let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    fs::write(&output_path, json).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -546,9 +622,7 @@ pub async fn checkout_git_branch(cwd: String, name: String) -> Result<(), String
 }
 
 #[tauri::command]
-pub async fn list_worktrees(
-    cwd: String,
-) -> Result<Vec<crate::git_worktrees::Worktree>, String> {
+pub async fn list_worktrees(cwd: String) -> Result<Vec<crate::git_worktrees::Worktree>, String> {
     crate::git_worktrees::list_worktrees(Path::new(&cwd)).map_err(|e| e.to_string())
 }
 
@@ -562,8 +636,7 @@ pub async fn worktree_status(
     path: String,
     base_branch: String,
 ) -> Result<crate::git_worktrees::WorktreeStatus, String> {
-    crate::git_worktrees::worktree_status(Path::new(&path), &base_branch)
-        .map_err(|e| e.to_string())
+    crate::git_worktrees::worktree_status(Path::new(&path), &base_branch).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

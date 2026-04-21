@@ -10,16 +10,21 @@ import "./styles/agent.css";
 scheduleUpdateCheck();
 
 function Root() {
-  const [benchMode, setBenchMode] = useState<string | null | undefined>(undefined);
+  const [benchMode, setBenchMode] = useState<string | null | undefined>(
+    __LASTTY_BENCH__ ? undefined : null,
+  );
 
   useEffect(() => {
+    if (!__LASTTY_BENCH__) return;
     getBenchmarkMode()
       .then((mode) => setBenchMode(mode))
       .catch(() => setBenchMode(null));
   }, []);
 
-  if (benchMode === undefined) return null;
-  if (benchMode === "xterm") return <XtermBench />;
+  if (__LASTTY_BENCH__) {
+    if (benchMode === undefined) return null;
+    if (benchMode === "xterm") return <XtermBench />;
+  }
   return <TerminalWorkspace />;
 }
 

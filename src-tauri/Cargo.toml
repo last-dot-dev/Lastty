@@ -9,12 +9,20 @@ default-run = "lastty"
 name = "lastty"
 path = "src/lib.rs"
 
+[features]
+default = []
+# Bench-only code paths (xterm + stress benches, perf registry, simulator IPC).
+# Stripped from default release builds so production binaries don't carry any
+# benchmark instrumentation. Enable with `cargo build --features bench`.
+bench = []
+
 [[bin]]
 name = "lastty"
 path = "src/main.rs"
 
 [dependencies]
-tauri = { version = "2", features = ["test"] }
+# devtools feature: keep Inspect Element available in release for debugging.
+tauri = { version = "2", features = ["test", "devtools"] }
 tauri-build = { version = "2", features = [] }
 alacritty_terminal = "0.26"
 anyhow = "1"
@@ -41,14 +49,17 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "render_viewport"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "parse_throughput"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "frame_coalesce"
 harness = false
+required-features = ["bench"]
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
@@ -56,3 +67,4 @@ tauri-plugin-updater = "2"
 [[bin]]
 name = "bench_pipeline"
 path = "src/bin/bench_pipeline.rs"
+required-features = ["bench"]

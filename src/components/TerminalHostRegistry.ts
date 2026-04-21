@@ -7,6 +7,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import {
   getFontConfig,
   getTerminalFrame,
+  submitStressFrontendSample,
   terminalInput,
   terminalScroll,
   terminalResize,
@@ -312,14 +313,24 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
     entry.latestFrame = frame;
     const prepared = prepareXtermFrameWrite(frame, entry.frameState);
     entry.frameState = prepared.state;
+    let bytes = prepared.bytes;
     if (entry.pendingScrollbackClear) {
       entry.pendingScrollbackClear = false;
-      const merged = new Uint8Array(ERASE_SAVED_LINES.length + prepared.bytes.length);
+      const merged = new Uint8Array(ERASE_SAVED_LINES.length + bytes.length);
       merged.set(ERASE_SAVED_LINES, 0);
-      merged.set(prepared.bytes, ERASE_SAVED_LINES.length);
-      terminal.write(merged);
+      merged.set(bytes, ERASE_SAVED_LINES.length);
+      bytes = merged;
+    }
+    if (__LASTTY_BENCH__) {
+      const writeStart = performance.now();
+      terminal.write(bytes, () => {
+        void submitStressFrontendSample(
+          sessionId,
+          performance.now() - writeStart,
+        ).catch(() => {});
+      });
     } else {
-      terminal.write(prepared.bytes);
+      terminal.write(bytes);
     }
   };
 

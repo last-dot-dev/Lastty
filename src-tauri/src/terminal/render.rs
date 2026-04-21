@@ -13,6 +13,8 @@ use alacritty_terminal::term::{LineDamageBounds, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+#[cfg(feature = "bench")]
+use crate::perf_registry::PerfRegistry;
 use crate::render_sync::RenderCoordinator;
 
 use super::manager::TerminalManager;
@@ -51,10 +53,21 @@ fn emit_frame_for_session<R: Runtime>(
     let term_arc = manager.get(&session_id).map(|session| session.term.clone());
     let term_arc = term_arc?;
 
-    let frame_start = Instant::now();
+    #[cfg(feature = "bench")]
+    let perf = app_handle.try_state::<Arc<PerfRegistry>>();
+    #[cfg(feature = "bench")]
+    if let Some(perf) = perf.as_ref() {
+        perf.take_mark_to_emit(session_id);
+    }
+
+    let render_start = Instant::now();
     let mut term = term_arc.lock();
     let frame = render_viewport(&mut term);
+    drop(term);
+    let render_elapsed = render_start.elapsed();
     let ansi_bytes = frame.ansi.len();
+
+    let emit_start = Instant::now();
     app_handle
         .emit(
             "term:frame",
@@ -64,8 +77,21 @@ fn emit_frame_for_session<R: Runtime>(
             },
         )
         .ok()?;
+    let emit_elapsed = emit_start.elapsed();
+    let frame_ms = (render_elapsed + emit_elapsed).as_secs_f64() * 1000.0;
+
+    #[cfg(feature = "bench")]
+    if let Some(perf) = perf.as_ref() {
+        perf.record_emit(
+            session_id,
+            render_elapsed.as_micros().min(u64::MAX as u128) as u64,
+            emit_elapsed.as_micros().min(u64::MAX as u128) as u64,
+            ansi_bytes.min(u32::MAX as usize) as u32,
+        );
+    }
+
     Some(FrameEmitMetrics {
-        frame_ms: frame_start.elapsed().as_secs_f64() * 1000.0,
+        frame_ms,
         ansi_bytes,
     })
 }

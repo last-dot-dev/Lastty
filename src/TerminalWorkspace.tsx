@@ -95,6 +95,7 @@ import { releaseTerminalHost } from "./components/TerminalHostRegistry";
 import ViewPreview from "./components/agent/ViewPreview";
 import {
   createTerminal,
+  getBenchmarkMode,
   getPrimarySessionId,
   getWorkspaceRoot,
   gitGraph,
@@ -120,6 +121,7 @@ import {
 } from "./lib/ipc";
 import { layoutGraph } from "./lib/graphLayout";
 import type { SidebarGraph } from "./components/agent/Sidebar";
+import { useStressDriver } from "./app/stressDriver";
 
 function basenameOfPath(path: string): string {
   if (!path) return "";
@@ -205,6 +207,7 @@ export default function TerminalWorkspace() {
   const [launching, setLaunching] = useState(false);
   const [clock, setClock] = useState(Date.now());
   const [hydrated, setHydrated] = useState(false);
+  const [benchMode, setBenchMode] = useState<string | null>(null);
   const [terminalSnapshotsBySessionId, setTerminalSnapshotsBySessionId] = useState<
     Record<string, PersistedTerminalSnapshot>
   >({});
@@ -245,6 +248,15 @@ export default function TerminalWorkspace() {
       cancelled = true;
     };
   }, []);
+
+  useStressDriver({
+    workspace,
+    setWorkspace,
+    hydrated,
+    hydrateSessionInfo: (sessionId, fallbackTitle) =>
+      hydrateSessionInfo(sessionId, fallbackTitle).then(() => undefined),
+  });
+
   const [historyPanelPaneId, setHistoryPanelPaneId] = useState<string | null>(null);
   const [viewingHistoryByPaneId, setViewingHistoryByPaneId] = useState<
     Record<string, HistoryEntry>
@@ -319,6 +331,7 @@ export default function TerminalWorkspace() {
   const nonGitPromptedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!hydrated || !workspace) return;
+    if (benchMode === "stress") return;
     if (!activeProjectRoot) return;
     if (nonGitPromptedRef.current.has(activeProjectRoot)) return;
     const desktopId = workspace.activeDesktopId;
@@ -327,7 +340,7 @@ export default function TerminalWorkspace() {
       if (isRepo) return;
       void handleChangeProjectRoot(desktopId);
     });
-  }, [hydrated, workspace, activeProjectRoot]);
+  }, [hydrated, workspace, activeProjectRoot, benchMode]);
 
   useEffect(() => {
     if (!activeProjectRoot) return;
@@ -442,7 +455,9 @@ export default function TerminalWorkspace() {
 
         setAgents(loadedAgents);
 
-        const persisted = readPersistedWorkspaceState();
+        const mode = await getBenchmarkMode().catch(() => null);
+        if (!cancelled) setBenchMode(mode);
+        const persisted = mode === "stress" ? null : readPersistedWorkspaceState();
         if (persisted?.panes.length) {
           try {
             const restoredSessions = await restoreTerminalSessions(

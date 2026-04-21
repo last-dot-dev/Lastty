@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod agents;
+#[cfg(feature = "bench")]
 pub mod bench_corpus;
 pub mod bus;
 pub mod commands;
@@ -13,7 +14,10 @@ pub mod git_util;
 pub mod git_worktrees;
 pub mod history;
 pub mod input;
+#[cfg(feature = "bench")]
+pub mod perf_registry;
 pub mod protocol;
 pub mod render_sync;
+#[cfg(feature = "bench")]
 pub mod runtime_modes;
 pub mod terminal;

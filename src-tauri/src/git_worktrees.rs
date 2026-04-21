@@ -74,11 +74,7 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<Worktree>> {
             if let Some(rest) = line.strip_prefix("HEAD ") {
                 partial.head = rest.to_string();
             } else if let Some(rest) = line.strip_prefix("branch ") {
-                partial.branch = Some(
-                    rest.strip_prefix("refs/heads/")
-                        .unwrap_or(rest)
-                        .to_string(),
-                );
+                partial.branch = Some(rest.strip_prefix("refs/heads/").unwrap_or(rest).to_string());
             } else if line == "detached" {
                 partial.detached = true;
             }
@@ -141,7 +137,11 @@ fn classify_code(code: &str) -> ChangeStatus {
     }
     let index = bytes[0] as char;
     let wtree = bytes[1] as char;
-    if index == 'U' || wtree == 'U' || (index == 'A' && wtree == 'A') || (index == 'D' && wtree == 'D') {
+    if index == 'U'
+        || wtree == 'U'
+        || (index == 'A' && wtree == 'A')
+        || (index == 'D' && wtree == 'D')
+    {
         return ChangeStatus::Conflicted;
     }
     if index == '?' && wtree == '?' {
