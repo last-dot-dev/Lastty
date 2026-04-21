@@ -19,9 +19,15 @@ export function prepareXtermFrameWrite(
   };
 }
 
+// Prefer the native binary decoder (WebKit has shipped `Uint8Array.fromBase64`)
+// since it skips the atob string + charCodeAt copy loop. Fall back to atob for
+// older runtimes — still vastly cheaper than JSON-parsing a number array.
+const nativeFromBase64 = (Uint8Array as unknown as {
+  fromBase64?: (s: string) => Uint8Array;
+}).fromBase64;
+
 function decodeBase64(s: string): Uint8Array {
-  // atob is synchronous and implemented in C++; much faster than JSON-parsing
-  // an array of ~5000 number literals which is what the backend used to send.
+  if (nativeFromBase64) return nativeFromBase64(s);
   const binary = atob(s);
   const len = binary.length;
   const out = new Uint8Array(len);
