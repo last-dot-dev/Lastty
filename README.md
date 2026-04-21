@@ -2,22 +2,17 @@
 
 An agent-native tiled terminal built on Tauri v2. Coding agents like Claude Code and Codex run in PTY panes and push structured UI — status, tool calls, approvals, diffs — into the app through a custom OSC protocol.
 
-Rust owns the PTY, terminal grid, and OSC parsing. React renders the panes (via xterm.js) and the overlay UI that sits on top.
-
-## What it is
+## Features
 
 - Tiled terminal with n-ary splits, drag-to-resize, and keyboard navigation.
-- First-class agents: launch Claude Code or Codex into a pane with a prompt and optional git worktree isolation.
-- OSC 7770 protocol: agents emit semantic messages (`status`, `tool_call`, `approval`, `widget`, ...) that the app renders as overlays and sidebar panels.
+- First-class agents: agents live within a world they're able to modify and communicate with each other.
 - Worktree-centric sidebar for managing parallel agent sessions, with inline launcher and PR dialog.
-
-See [docs/plan/mvp.plan.md](docs/plan/mvp.plan.md) for the full design.
 
 ## Install
 
-macOS arm64 only for now.
+macOS only. (for now)
 
-Download the latest `Lastty.dmg` from [Releases](https://github.com/last-dot-dev/Lastty/releases), open it, and drag Lastty to Applications. The app auto-updates via the Tauri updater.
+Download the latest `Lastty.dmg` from [Releases](https://github.com/last-dot-dev/Lastty/releases). The app auto-updates.
 
 ## Use
 
