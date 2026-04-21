@@ -1783,6 +1783,7 @@ function PaneTile({
           onMouseDown={() => onFocus(pane.id)}
         >
           {renderDraftLauncher(pane.id)}
+          <EdgeSpawner onSpawn={(direction) => onSpawnAdjacent(pane.id, direction)} />
         </section>
       </div>
     );
