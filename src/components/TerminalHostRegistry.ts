@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 
 import {
@@ -38,9 +39,12 @@ function repaintAfterThemeChange(terminal: Terminal): void {
 }
 
 function focusTerminalIfActive(entry: Entry): void {
-  if (!entry.focusedRef.current || entry.blockedRef.current) return;
   try {
-    entry.terminal.focus();
+    if (entry.focusedRef.current && !entry.blockedRef.current) {
+      entry.terminal.focus();
+    } else {
+      entry.terminal.blur();
+    }
   } catch {
     // terminal may not yet be attached
   }
@@ -254,6 +258,8 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
   terminal.loadAddon(entry.fit);
   entry.serialize = new SerializeAddon();
   terminal.loadAddon(entry.serialize);
+  terminal.loadAddon(new Unicode11Addon());
+  terminal.unicode.activeVersion = "11";
   suppressQueryResponses(terminal);
 
   const scheduleSnapshot = () => {
@@ -381,6 +387,7 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
   const terminal = new Terminal({
     allowProposedApi: true,
     cursorBlink: true,
+    cursorInactiveStyle: "outline",
     fontFamily: "Menlo, NFFallback, Monaco, monospace",
     fontSize: 14,
     lineHeight: 1.2,

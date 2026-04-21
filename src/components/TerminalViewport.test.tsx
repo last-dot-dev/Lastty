@@ -29,6 +29,8 @@ const harness = vi.hoisted(() => {
     serialize = vi.fn(() => "SERIALIZED");
   }
 
+  class FakeUnicode11Addon {}
+
   class FakeTerminal {
     static instances: FakeTerminal[] = [];
 
@@ -47,6 +49,7 @@ const harness = vi.hoisted(() => {
         }
       | undefined;
     buffer: { active: SelectionBuffer } = { active: emptySelectionBuffer() };
+    unicode = { activeVersion: "6" };
     focused = false;
     disposed = false;
     host: Element | null = null;
@@ -134,6 +137,7 @@ const harness = vi.hoisted(() => {
     FakeFitAddon,
     FakeSerializeAddon,
     FakeTerminal,
+    FakeUnicode11Addon,
     FakeWebglAddon,
     emit,
     getTerminalFrameMock,
@@ -170,6 +174,10 @@ vi.mock("@xterm/addon-webgl", () => ({
 
 vi.mock("@xterm/addon-serialize", () => ({
   SerializeAddon: harness.FakeSerializeAddon,
+}));
+
+vi.mock("@xterm/addon-unicode11", () => ({
+  Unicode11Addon: harness.FakeUnicode11Addon,
 }));
 
 vi.mock("@xterm/xterm", () => ({
