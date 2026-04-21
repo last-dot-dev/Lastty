@@ -123,11 +123,10 @@ fn run(scenario: &Scenario, frame_cap: Duration) -> Report {
     let mut latencies_us: Vec<u64> = Vec::with_capacity(8 * 1024);
     let mut emits = 0u64;
     let consumer_start = Instant::now();
-    let mut rendered_generation = coordinator.current_generation();
     let mut last_emit: Option<Instant> = None;
 
     while consumer_start.elapsed() < RUN_DURATION {
-        let _dirty = coordinator.wait_for_next(rendered_generation);
+        let _dirty = coordinator.wait_for_next();
         if !frame_cap.is_zero() {
             if let Some(last) = last_emit {
                 let elapsed = last.elapsed();
@@ -136,13 +135,11 @@ fn run(scenario: &Scenario, frame_cap: Duration) -> Report {
                 }
             }
         }
-        let gen_at_render = coordinator.current_generation();
         // Take the first-pending-mark instant *before* simulated render so
         // latency measures producer→render-start, matching what the user
         // perceives as input lag.
         let mark_instant = first_pending_mark.lock().unwrap().take();
         thread::sleep(RENDER_COST);
-        rendered_generation = gen_at_render;
         last_emit = Some(Instant::now());
         emits += 1;
         if let Some(mark_instant) = mark_instant {

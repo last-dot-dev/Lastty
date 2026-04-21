@@ -183,11 +183,9 @@ fn run_workload(workload: &Workload, frame_cap: Duration, absorb: Duration) -> R
         let emits = emits.clone();
         let last_rendered = last_rendered.clone();
         thread::spawn(move || {
-            let mut rendered_generation = coordinator.current_generation();
             let mut last_emit: Option<Instant> = None;
             loop {
-                let dirty = coordinator
-                    .wait_for_next_timeout(rendered_generation, Duration::from_millis(50));
+                let dirty = coordinator.wait_for_next_timeout(Duration::from_millis(50));
                 if stop.load(Ordering::Relaxed) && dirty.is_none() {
                     break;
                 }
@@ -206,8 +204,7 @@ fn run_workload(workload: &Workload, frame_cap: Duration, absorb: Duration) -> R
                     // Soak up any marks that arrive immediately after wake;
                     // turns N adjacent marks into one render without raising
                     // the steady-state floor (frame cap still bounds rate).
-                    let _ =
-                        coordinator.wait_for_next_timeout(coordinator.current_generation(), absorb);
+                    let _ = coordinator.wait_for_next_timeout(absorb);
                 }
                 let gen_at_render = coordinator.current_generation();
                 let mark_instant = first_pending_mark.lock().unwrap().take();
@@ -217,7 +214,6 @@ fn run_workload(workload: &Workload, frame_cap: Duration, absorb: Duration) -> R
                     render_viewport(&mut term)
                 };
                 let render_elapsed = render_start.elapsed();
-                rendered_generation = gen_at_render;
                 last_emit = Some(Instant::now());
                 emits.fetch_add(1, Ordering::Relaxed);
                 last_rendered.store(gen_at_render, Ordering::Release);

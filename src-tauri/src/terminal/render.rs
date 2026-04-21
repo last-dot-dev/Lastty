@@ -95,13 +95,13 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
             frames_since_emit = 1;
             last_emit = Some(Instant::now());
         }
-        let mut rendered_generation = render_coordinator.current_generation();
 
         loop {
-            let dirty = render_coordinator.wait_for_next(rendered_generation);
+            let dirty = render_coordinator.wait_for_next();
 
             // Cap emit rate during bursts. Idle keystrokes pay no cost because
-            // last_emit will be stale; back-to-back marks get coalesced into one
+            // last_emit will be stale; back-to-back marks on the same session
+            // are deduped in the coordinator's queue and coalesced into one
             // full-viewport render of the latest state.
             if let Some(last) = last_emit {
                 let elapsed = last.elapsed();
@@ -110,9 +110,7 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
                 }
             }
 
-            let gen_at_render = render_coordinator.current_generation();
             if let Some(metrics) = emit_frame_for_session(&app_handle, dirty.session_id) {
-                rendered_generation = gen_at_render;
                 last_emit = Some(Instant::now());
                 avg_frame_ms = avg_frame_ms * 0.8 + metrics.frame_ms * 0.2;
                 avg_ansi_bytes = avg_ansi_bytes * 0.8 + metrics.ansi_bytes as f64 * 0.2;
@@ -122,7 +120,6 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
                     let total_wakeups = render_coordinator.total_wakeups();
                     let wakeups_since_emit = total_wakeups.saturating_sub(last_total_wakeups);
                     let latest_generation = render_coordinator.current_generation();
-                    let pending_updates = latest_generation.saturating_sub(rendered_generation);
                     let fps = frames_since_emit as f64 / emit_elapsed.as_secs_f64();
                     let payload = serde_json::json!({
                         "frame_ms": avg_frame_ms,
@@ -130,7 +127,6 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
                         "ansi_bytes": avg_ansi_bytes,
                         "wakeups": wakeups_since_emit,
                         "generation": latest_generation,
-                        "pending_updates": pending_updates,
                     });
                     app_handle.emit("perf:stats", payload.clone()).ok();
                     if let Some(file) = perf_trace.as_mut() {
@@ -144,7 +140,6 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
                                 "ansi_bytes": avg_ansi_bytes,
                                 "wakeups": wakeups_since_emit,
                                 "generation": latest_generation,
-                                "pending_updates": pending_updates,
                             })
                         );
                     }
