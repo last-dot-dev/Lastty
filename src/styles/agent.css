@@ -581,8 +581,8 @@
 .agent-worktree-row__action {
   appearance: none;
   background: transparent;
-  border: 0.5px solid var(--color-border-tertiary);
-  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-secondary);
+  color: var(--color-text-primary);
   font-family: inherit;
   font-size: 10px;
   padding: 2px 8px;
@@ -601,30 +601,29 @@
 }
 
 .agent-worktree-row__attach-menu {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 0;
+  position: fixed;
   z-index: 20;
   display: flex;
   flex-direction: column;
-  min-width: 110px;
+  min-width: 140px;
   padding: 2px;
-  background: var(--color-surface-elevated, var(--color-background-secondary));
-  border: 0.5px solid var(--color-border-secondary);
+  background: var(--color-background-primary);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--elev-shadow);
 }
 
 .agent-worktree-row__attach-menu button {
   appearance: none;
   background: transparent;
   border: none;
-  padding: 4px 8px;
+  padding: 6px 10px;
   text-align: left;
   font: inherit;
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   cursor: pointer;
   border-radius: 2px;
+  white-space: nowrap;
 }
 
 .agent-worktree-row__attach-menu button:hover {

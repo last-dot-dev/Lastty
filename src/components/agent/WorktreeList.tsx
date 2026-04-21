@@ -79,17 +79,28 @@ function WorktreeRowView({
   onMerge: (worktreePath: string) => void;
 }) {
   const [attachOpen, setAttachOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
   const ref = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!attachOpen) return;
+    const close = () => setAttachOpen(false);
     const handler = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        setAttachOpen(false);
-      }
+      const target = event.target as Node;
+      const insideRow = ref.current?.contains(target);
+      const insideMenu = menuRef.current?.contains(target);
+      if (!insideRow && !insideMenu) close();
     };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
   }, [attachOpen]);
 
   const live = row.liveSessions > 0;
@@ -160,18 +171,32 @@ function WorktreeRowView({
       <div className="agent-worktree-row__actions">
         <div className="agent-worktree-row__attach-wrap">
           <button
+            ref={buttonRef}
             type="button"
             className="agent-worktree-row__action"
             onClick={(event) => {
               event.stopPropagation();
-              setAttachOpen((prev) => !prev);
+              if (attachOpen) {
+                setAttachOpen(false);
+                return;
+              }
+              const rect = buttonRef.current?.getBoundingClientRect();
+              if (rect) {
+                setMenuPos({ left: rect.left, top: rect.bottom + 4 });
+              }
+              setAttachOpen(true);
             }}
             title="attach a new pane to this worktree"
           >
             attach ▾
           </button>
-          {attachOpen && (
-            <div className="agent-worktree-row__attach-menu" role="menu">
+          {attachOpen && menuPos && (
+            <div
+              ref={menuRef}
+              className="agent-worktree-row__attach-menu"
+              role="menu"
+              style={{ left: menuPos.left, top: menuPos.top }}
+            >
               <button
                 type="button"
                 role="menuitem"
