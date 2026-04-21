@@ -50,6 +50,7 @@ import type { DesktopEntry } from "./components/agent/DesktopStrip";
 import type { BlockedSessionRef } from "./components/agent/AlertBar";
 import { useThemeOverride } from "./hooks/useThemeOverride";
 import { useKeyboardMode } from "./hooks/useKeyboardMode";
+import { useLastAgent } from "./hooks/useLastAgent";
 import {
   activeDesktop,
   attachPaneToDesktop,
@@ -436,6 +437,11 @@ export default function TerminalWorkspace() {
 
   const theme = useThemeOverride();
   const keyboardMode = useKeyboardMode();
+  const { lastAgentId, setLastAgentId } = useLastAgent();
+  const resolvedLastAgentId =
+    lastAgentId === "shell" || agents.some((a) => a.id === lastAgentId)
+      ? lastAgentId
+      : null;
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 1_000);
@@ -818,6 +824,7 @@ export default function TerminalWorkspace() {
     },
   ) {
     if (!workspace || !config.agentId) return;
+    setLastAgentId(config.agentId);
     const desktop = activeDesktop(workspace);
     setLaunching(true);
     try {
@@ -1525,7 +1532,10 @@ export default function TerminalWorkspace() {
                                 basenameOfPath(activeProjectRoot || "") || "project"
                               }
                               initialAgentId={
-                                draftSeedByPaneId[paneId] ?? agents[0]?.id ?? ""
+                                draftSeedByPaneId[paneId]
+                                ?? resolvedLastAgentId
+                                ?? agents[0]?.id
+                                ?? ""
                               }
                               onClose={() => cancelDraftPane(paneId)}
                               onLaunch={(config) => handleLaunchAgent(paneId, config)}

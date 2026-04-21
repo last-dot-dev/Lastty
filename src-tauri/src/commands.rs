@@ -170,6 +170,9 @@ pub async fn key_input(input: KeyInput, state: State<'_, TerminalManager>) -> Re
         mode,
     ) {
         session.write(&bytes)?;
+        session.term.lock().scroll_display(Scroll::Bottom);
+        drop(session);
+        state.mark_dirty(session_id);
     }
     Ok(())
 }
@@ -407,6 +410,9 @@ pub async fn terminal_input(
     let id = SessionId::parse(&session_id)?;
     let session = state.get(&id).ok_or("session not found")?;
     session.write(&bytes)?;
+    session.term.lock().scroll_display(Scroll::Bottom);
+    drop(session);
+    state.mark_dirty(id);
     event_bus.publish(BusEvent::PtyInput { session_id, bytes });
     Ok(())
 }
