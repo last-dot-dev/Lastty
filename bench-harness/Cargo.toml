@@ -1,0 +1,18 @@
+[package]
+name = "bench-harness"
+version = "0.1.4"
+edition = "2021"
+publish = false
+
+# Kept in its own workspace member so the Tauri bundler never sees this bin —
+# otherwise `tauri build` tries to copy it out of `target/release/` and fails
+# when the `bench` feature isn't enabled.
+[[bin]]
+name = "bench_pipeline"
+path = "src/main.rs"
+
+[dependencies]
+lastty = { path = "../src-tauri", features = ["bench"] }
+alacritty_terminal = "0.26"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
