@@ -1162,11 +1162,11 @@ export default function TerminalWorkspace() {
     );
   }
 
-  function handleNewShellInActiveDesktop() {
+  function handleNewTerminalInActiveDesktop() {
     if (!workspace) return;
     const desktop = activeDesktop(workspace);
     if (desktop.layout) return;
-    createDraftPane({ kind: "root", desktopId: workspace.activeDesktopId }, "shell");
+    createDraftPane({ kind: "root", desktopId: workspace.activeDesktopId });
   }
 
   function handleSwitchDesktop(desktopId: string) {
@@ -1544,7 +1544,7 @@ export default function TerminalWorkspace() {
                         }}
                       />
                     ) : (
-                      <EmptyDesktop onNewShell={() => void handleNewShellInActiveDesktop()} />
+                      <EmptyDesktop onNewTerminal={() => void handleNewTerminalInActiveDesktop()} />
                     )}
                   </div>
                 );
@@ -2057,7 +2057,7 @@ function PaneDropOverlay({
   );
 }
 
-function EmptyDesktop({ onNewShell }: { onNewShell: () => void }) {
+function EmptyDesktop({ onNewTerminal }: { onNewTerminal: () => void }) {
   return (
     <div
       style={{
@@ -2073,7 +2073,7 @@ function EmptyDesktop({ onNewShell }: { onNewShell: () => void }) {
       <div style={{ fontSize: 12 }}>This desktop has no panes.</div>
       <button
         type="button"
-        onClick={onNewShell}
+        onClick={onNewTerminal}
         style={{
           borderRadius: "var(--border-radius-md)",
           border: "0.5px solid var(--color-border-secondary)",
@@ -2085,7 +2085,7 @@ function EmptyDesktop({ onNewShell }: { onNewShell: () => void }) {
           fontSize: 12,
         }}
       >
-        New shell
+        New terminal
       </button>
     </div>
   );
@@ -2331,6 +2331,18 @@ function LaunchAgentModal({
     return opt?.label ?? "worktree";
   })();
 
+  const canLaunch = Boolean(selectedAgentId) && !launching;
+  const submitLaunch = () => {
+    if (!canLaunch) return;
+    onLaunch({
+      agentId: selectedAgentId,
+      prompt,
+      worktreeChoice: effectiveChoice,
+      launchCount,
+      branchName,
+    });
+  };
+
   return (
     <div className="agent-launcher agent-launcher--inline">
       <div className="agent-launcher__header">
@@ -2352,6 +2364,12 @@ function LaunchAgentModal({
             rows={5}
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                submitLaunch();
+              }
+            }}
             autoFocus
           />
         )}
@@ -2406,18 +2424,11 @@ function LaunchAgentModal({
           <button
             type="button"
             className="agent-launcher__launch"
-            disabled={!selectedAgentId || launching}
-            onClick={() =>
-              onLaunch({
-                agentId: selectedAgentId,
-                prompt,
-                worktreeChoice: effectiveChoice,
-                launchCount,
-                branchName,
-              })
-            }
+            disabled={!canLaunch}
+            onClick={submitLaunch}
+            title="Launch (⌘↵)"
           >
-            {launching ? "launching…" : "launch ↵"}
+            {launching ? "launching…" : "launch ⌘↵"}
           </button>
         </div>
     </div>

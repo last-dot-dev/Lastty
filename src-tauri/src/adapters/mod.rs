@@ -65,14 +65,6 @@ pub trait AgentAdapter: Send + 'static {
 /// Builds a fresh adapter for a given agent id from `agents.toml`. Returns
 /// `None` if the id does not have a registered adapter — caller should fall
 /// back to the raw-PTY launch path.
-pub fn adapter_for(agent_id: &str, prompt: Option<&str>) -> Option<Box<dyn AgentAdapter>> {
-    match agent_id {
-        "claude" => Some(Box::new(claude_code::ClaudeCodeAdapter::new(
-            prompt.map(|s| s.to_string()),
-        ))),
-        "codex" => Some(Box::new(codex::CodexAdapter::new(
-            prompt.map(|s| s.to_string()),
-        ))),
-        _ => None,
-    }
+pub fn adapter_for(_agent_id: &str, _prompt: Option<&str>) -> Option<Box<dyn AgentAdapter>> {
+    None
 }

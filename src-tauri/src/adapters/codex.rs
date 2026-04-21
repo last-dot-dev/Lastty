@@ -13,13 +13,13 @@ use crate::terminal::session::CommandSpec;
 use super::{AdapterYield, AgentAdapter};
 
 pub struct CodexAdapter {
-    prompt: Option<String>,
+    prompt: String,
     finished_emitted: bool,
     last_message: Option<String>,
 }
 
 impl CodexAdapter {
-    pub fn new(prompt: Option<String>) -> Self {
+    pub fn new(prompt: String) -> Self {
         Self {
             prompt,
             finished_emitted: false,
@@ -30,13 +30,13 @@ impl CodexAdapter {
 
 impl AgentAdapter for CodexAdapter {
     fn command(&self) -> CommandSpec {
-        let mut args = vec!["exec".to_string(), "--json".to_string()];
-        if let Some(prompt) = self.prompt.as_ref() {
-            args.push(prompt.clone());
-        }
         CommandSpec {
             program: "codex".to_string(),
-            args,
+            args: vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                self.prompt.clone(),
+            ],
         }
     }
 
@@ -300,7 +300,7 @@ mod tests {
     use super::*;
 
     fn run_stream(lines: &[&str]) -> Vec<AgentUiMessage> {
-        let mut adapter = CodexAdapter::new(Some("prompt".into()));
+        let mut adapter = CodexAdapter::new("prompt".into());
         let mut out = Vec::new();
         for line in lines {
             let yielded = adapter.on_stdout_line(line.as_bytes());

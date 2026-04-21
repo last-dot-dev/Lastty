@@ -14,12 +14,12 @@ use crate::terminal::session::CommandSpec;
 use super::{AdapterYield, AgentAdapter};
 
 pub struct ClaudeCodeAdapter {
-    prompt: Option<String>,
+    prompt: String,
     finished_emitted: bool,
 }
 
 impl ClaudeCodeAdapter {
-    pub fn new(prompt: Option<String>) -> Self {
+    pub fn new(prompt: String) -> Self {
         Self {
             prompt,
             finished_emitted: false,
@@ -29,18 +29,15 @@ impl ClaudeCodeAdapter {
 
 impl AgentAdapter for ClaudeCodeAdapter {
     fn command(&self) -> CommandSpec {
-        let mut args = vec![
-            "-p".to_string(),
-            "--output-format".to_string(),
-            "stream-json".to_string(),
-            "--verbose".to_string(),
-        ];
-        if let Some(prompt) = self.prompt.as_ref() {
-            args.push(prompt.clone());
-        }
         CommandSpec {
             program: "claude".to_string(),
-            args,
+            args: vec![
+                "-p".to_string(),
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+                "--verbose".to_string(),
+                self.prompt.clone(),
+            ],
         }
     }
 
@@ -336,7 +333,7 @@ mod tests {
     use serde_json::json;
 
     fn run_stream(lines: &[&str]) -> Vec<AgentUiMessage> {
-        let mut adapter = ClaudeCodeAdapter::new(Some("prompt".into()));
+        let mut adapter = ClaudeCodeAdapter::new("prompt".into());
         let mut out = Vec::new();
         for line in lines {
             let yielded = adapter.on_stdout_line(line.as_bytes());
