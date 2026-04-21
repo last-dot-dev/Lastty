@@ -17,7 +17,7 @@ See [docs/plan/mvp.plan.md](docs/plan/mvp.plan.md) for the full design.
 
 macOS arm64 only for now.
 
-Download the latest `Lastty.dmg` from [Releases](https://github.com/ForeverAnApple/lastty/releases), open it, and drag Lastty to Applications. The app auto-updates via the Tauri updater.
+Download the latest `Lastty.dmg` from [Releases](https://github.com/last-dot-dev/Lastty/releases), open it, and drag Lastty to Applications. The app auto-updates via the Tauri updater.
 
 ## Use
 
