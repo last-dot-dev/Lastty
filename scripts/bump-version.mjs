@@ -49,6 +49,7 @@ const changes = [
   { file: "src-tauri/Cargo.toml", from: bumpCargoToml("src-tauri/Cargo.toml") },
   { file: "src-tauri/tauri.conf.json", from: bumpJson("src-tauri/tauri.conf.json", "version") },
   { file: "pane-protocol/Cargo.toml", from: bumpCargoToml("pane-protocol/Cargo.toml") },
+  { file: "bench-harness/Cargo.toml", from: bumpCargoToml("bench-harness/Cargo.toml") },
 ];
 
 for (const { file, from } of changes) {
@@ -58,7 +59,7 @@ for (const { file, from } of changes) {
 console.log("\nRefreshing Cargo.lock...");
 const cargo = spawnSync(
   "cargo",
-  ["update", "-p", "lastty", "-p", "pane-protocol"],
+  ["update", "-p", "lastty", "-p", "pane-protocol", "-p", "bench-harness"],
   { cwd: repoRoot, stdio: "inherit" },
 );
 if (cargo.status !== 0) {
