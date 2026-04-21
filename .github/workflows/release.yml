@@ -116,7 +116,7 @@ jobs:
           gh release download "$TAG" --pattern '*.app.tar.gz.sig' --dir /tmp/sigs
           sig_file=$(ls /tmp/sigs/*.app.tar.gz.sig | head -n1)
           signature=$(cat "$sig_file")
-          bundle_name="Lastty_${VERSION}_aarch64.app.tar.gz"
+          bundle_name="Lastty_aarch64.app.tar.gz"
           pub_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           jq -n \
             --arg version "$VERSION" \
