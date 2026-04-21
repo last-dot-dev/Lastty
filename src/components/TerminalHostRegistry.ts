@@ -415,6 +415,23 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     theme: xtermThemeFor(props.theme),
   });
 
+  // xterm.js sends plain CR for Shift+Enter, which agent TUIs treat as submit.
+  // Map it to ESC+CR (the Alt+Enter sequence they interpret as newline). Both
+  // keydown and keypress must be suppressed so xterm's _keyPress fallback
+  // doesn't follow up with its own CR.
+  terminal.attachCustomKeyEventHandler((event) => {
+    const isShiftEnter =
+      event.key === "Enter" &&
+      event.shiftKey &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey;
+    if (!isShiftEnter) return true;
+    event.preventDefault();
+    if (event.type === "keydown") sendTerminalInput(sessionId, "\x1b\r");
+    return false;
+  });
+
   const entry: Entry = {
     sessionId,
     host,

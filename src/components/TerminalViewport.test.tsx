@@ -79,6 +79,8 @@ const harness = vi.hoisted(() => {
       };
     }
 
+    attachCustomKeyEventHandler(_handler: (event: KeyboardEvent) => boolean) {}
+
     focus() {
       if (!this.host) return;
       this.focused = true;
