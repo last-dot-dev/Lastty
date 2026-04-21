@@ -38,7 +38,11 @@ describe("prepareXtermFrameWrite", () => {
 
 function makeFrame(alternateScreen: boolean, ansi: string): TerminalFrame {
   return {
-    ansi: Array.from(new TextEncoder().encode(ansi)),
+    ansi: btoa(
+      Array.from(new TextEncoder().encode(ansi))
+        .map((b) => String.fromCharCode(b))
+        .join(""),
+    ),
     cursor_x: 0,
     cursor_y: 0,
     cursor_visible: true,

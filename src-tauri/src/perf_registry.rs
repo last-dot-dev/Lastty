@@ -245,7 +245,8 @@ fn aggregate_report(sessions: &[SessionReport]) -> AggregateReport {
 
 /// Ranks stages by total wall time spent (p95 × emits, converted to ms).
 fn compute_hotspots(sessions: &[SessionReport]) -> Vec<Hotspot> {
-    const STAGES: &[(&str, fn(&SessionReport) -> &StageStats, f64)] = &[
+    type StageRow = (&'static str, fn(&SessionReport) -> &StageStats, f64);
+    const STAGES: &[StageRow] = &[
         ("render_us", |s| &s.render_us, 1_000.0),
         ("emit_us", |s| &s.emit_us, 1_000.0),
         ("mark_to_emit_us", |s| &s.mark_to_emit_us, 1_000.0),

@@ -11,12 +11,24 @@ export function prepareXtermFrameWrite(
   frame: TerminalFrame,
   previousState: XtermFrameState | null,
 ): { bytes: Uint8Array; state: XtermFrameState } {
-  const body = Uint8Array.from(frame.ansi);
+  const body = decodeBase64(frame.ansi);
   const modePrefix = selectAltScreenPrefix(frame.alternate_screen, previousState);
   return {
     bytes: modePrefix ? concatBytes(modePrefix, body) : body,
     state: { alternateScreen: frame.alternate_screen },
   };
+}
+
+function decodeBase64(s: string): Uint8Array {
+  // atob is synchronous and implemented in C++; much faster than JSON-parsing
+  // an array of ~5000 number literals which is what the backend used to send.
+  const binary = atob(s);
+  const len = binary.length;
+  const out = new Uint8Array(len);
+  for (let i = 0; i < len; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
 }
 
 function selectAltScreenPrefix(

@@ -25,7 +25,11 @@ const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(4);
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct TerminalFrame {
-    pub ansi: Vec<u8>,
+    /// Base64-encoded ANSI bytes. serde_json renders a raw `Vec<u8>` as an
+    /// array of number literals (roughly 3x the byte size on the wire); base64
+    /// is both more compact and cheaper for the webview to decode with
+    /// `atob` than parsing thousands of numbers through JSON.parse.
+    pub ansi: String,
     pub cursor_x: usize,
     pub cursor_y: usize,
     pub cursor_visible: bool,
@@ -244,8 +248,9 @@ fn finalize_frame<T: EventListener>(term: &Term<T>, mut out: String) -> Terminal
         out.push_str("\x1b[?25l");
     }
 
+    use base64::Engine as _;
     TerminalFrame {
-        ansi: out.into_bytes(),
+        ansi: base64::engine::general_purpose::STANDARD.encode(out.as_bytes()),
         cursor_x: cursor.point.column.0,
         cursor_y: {
             let line = cursor.point.line.0 + display_offset as i32;
@@ -545,6 +550,14 @@ mod tests {
         out
     }
 
+    fn decode_ansi_for_tests(ansi: &str) -> String {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(ansi)
+            .expect("frame ansi should be valid base64");
+        String::from_utf8(bytes).expect("frame ansi should be valid utf-8")
+    }
+
     fn visible_text(term: &Term<VoidListener>) -> String {
         viewport_text(term)
             .split("\r\n")
@@ -559,7 +572,7 @@ mod tests {
         apply_escape_sequence(&mut term, b"\x1b[?25l");
 
         let frame = render_viewport(&mut term).expect("render_viewport produced no frame");
-        let ansi = String::from_utf8(frame.ansi).expect("frame ansi should be valid utf-8");
+        let ansi = decode_ansi_for_tests(&frame.ansi);
 
         assert!(!frame.cursor_visible);
         assert!(ansi.contains("\x1b[?25l"));
@@ -584,7 +597,7 @@ mod tests {
 
         let frame = render_viewport(&mut term).expect("render_viewport produced no frame");
         let visible = visible_text(&term);
-        let ansi = String::from_utf8(frame.ansi).expect("frame ansi should be valid utf-8");
+        let ansi = decode_ansi_for_tests(&frame.ansi);
 
         assert_eq!(frame.display_offset, 2);
         assert!(frame.total_lines >= 5);
