@@ -22,6 +22,7 @@ function sessionInfo(overrides: Partial<SessionInfo> = {}): SessionInfo {
     prompt_summary: null,
     worktree_path: null,
     control_connected: false,
+    control_mode: "shell",
     started_at_ms: 0,
     started_at_unix_ms: 0,
     ...overrides,

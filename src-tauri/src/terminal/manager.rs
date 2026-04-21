@@ -8,7 +8,9 @@ use tauri::{AppHandle, Runtime};
 use crate::adapters::AgentAdapter;
 use crate::render_sync::RenderCoordinator;
 
-use super::session::{self, CommandSpec, SessionId, SessionInfo, TerminalSession};
+use super::session::{
+    self, CommandSpec, SessionControlMode, SessionId, SessionInfo, TerminalSession,
+};
 
 /// Registry of active terminal sessions.
 pub struct TerminalManager<R: Runtime = tauri::Wry> {
@@ -37,6 +39,7 @@ impl<R: Runtime> TerminalManager<R> {
         prompt_summary: Option<String>,
         prompt: Option<String>,
         worktree_path: Option<String>,
+        control_mode: SessionControlMode,
     ) -> anyhow::Result<SessionId> {
         self.create_session_with_adapter(
             command,
@@ -48,6 +51,7 @@ impl<R: Runtime> TerminalManager<R> {
             prompt_summary,
             prompt,
             worktree_path,
+            control_mode,
             None,
         )
     }
@@ -63,6 +67,7 @@ impl<R: Runtime> TerminalManager<R> {
         prompt_summary: Option<String>,
         prompt: Option<String>,
         worktree_path: Option<String>,
+        control_mode: SessionControlMode,
         adapter: Option<Box<dyn AgentAdapter>>,
     ) -> anyhow::Result<SessionId> {
         let session = session::create_session(
@@ -77,6 +82,7 @@ impl<R: Runtime> TerminalManager<R> {
             prompt_summary,
             prompt,
             worktree_path,
+            control_mode,
             adapter,
         )?;
         let session_id = session.id;

@@ -1,13 +1,17 @@
 export interface TrafficLightActions {
   onClose: () => void;
   onMaximize: () => void;
+  onInterrupt?: () => void;
   maximized: boolean;
+  interruptDisabled?: boolean;
 }
 
 export default function TrafficLights({
   onClose,
   onMaximize,
+  onInterrupt,
   maximized,
+  interruptDisabled = false,
 }: TrafficLightActions) {
   const stopPropagation = (e: { stopPropagation: () => void }) => e.stopPropagation();
   return (
@@ -28,6 +32,21 @@ export default function TrafficLights({
         aria-label="close"
       >
         ✕
+      </button>
+      <button
+        type="button"
+        className="wd is-amber"
+        onMouseDown={stopPropagation}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (interruptDisabled || !onInterrupt) return;
+          onInterrupt();
+        }}
+        title="Interrupt current turn"
+        aria-label="interrupt"
+        disabled={!onInterrupt || interruptDisabled}
+      >
+        ‖
       </button>
       <button
         type="button"

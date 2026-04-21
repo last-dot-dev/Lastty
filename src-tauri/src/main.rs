@@ -8,9 +8,11 @@ use std::sync::Arc;
 use tauri::{Manager, TitleBarStyle};
 use tracing_subscriber::EnvFilter;
 
+use lastty::agent_runtime::AgentRuntimeManager;
 use lastty::render_sync::RenderCoordinator;
 use lastty::runtime_modes::{resolved_benchmark_mode, BenchmarkMode};
 use lastty::terminal::manager::TerminalManager;
+use lastty::terminal::session::SessionControlMode;
 use lastty::terminal::render::spawn_frame_emitter;
 use lastty::substrate::commands::SubstrateState;
 use lastty::{bus, commands};
@@ -26,6 +28,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .manage(AgentRuntimeManager::<tauri::Wry>::new())
         .manage(SubstrateState::new())
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
@@ -64,7 +67,18 @@ fn main() {
             env.insert("LASTTY".to_string(), "1".to_string());
 
             let session_id = manager
-                .create_session(None, &cwd, &env, 80, 24, None, None, None, None)
+                .create_session(
+                    None,
+                    &cwd,
+                    &env,
+                    80,
+                    24,
+                    None,
+                    None,
+                    None,
+                    None,
+                    SessionControlMode::Shell,
+                )
                 .expect("failed to create initial terminal session");
             app.handle()
                 .state::<bus::EventBus>()
@@ -115,6 +129,8 @@ fn main() {
             commands::list_agents,
             commands::list_rules,
             commands::launch_agent,
+            commands::send_agent_input,
+            commands::interrupt_agent,
             commands::respond_to_approval,
             commands::list_recordings,
             commands::read_recording,

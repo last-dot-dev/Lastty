@@ -56,7 +56,10 @@ describe("agent ui reducer", () => {
       type: "Approval",
       data: { id: "approval-1", message: "Delete files?", options: ["Allow", "Deny"] },
     });
-    state = resolveApproval(state, "approval-1");
+    state = reduceAgentMessage(state, {
+      type: "ApprovalResolved",
+      data: { id: "approval-1" },
+    });
 
     expect(state.pendingApprovals).toHaveLength(0);
   });

@@ -272,6 +272,7 @@ function makeSessionInfo(session_id: string, cwd: string, title: string): Sessio
     prompt_summary: null,
     worktree_path: null,
     control_connected: false,
+    control_mode: "shell",
     started_at_ms: 0,
     started_at_unix_ms: 0,
   };

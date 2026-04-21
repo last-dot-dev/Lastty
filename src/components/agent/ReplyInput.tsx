@@ -1,19 +1,22 @@
 import { useState, type FormEvent } from "react";
 
-export interface PendingApproval {
-  id: string;
+export interface PromptInputModel {
   message: string;
-  options: string[];
+  options?: string[];
+  placeholder?: string;
+  submitLabel?: string;
+  autoFocus?: boolean;
 }
 
 export default function ReplyInput({
-  approval,
+  model,
   onSubmit,
 }: {
-  approval: PendingApproval;
+  model: PromptInputModel;
   onSubmit: (choice: string) => void;
 }) {
   const [value, setValue] = useState("");
+  const options = model.options ?? [];
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -29,11 +32,11 @@ export default function ReplyInput({
         ›
       </span>
       <div className="agent-reply-input__main">
-        <div className="agent-reply-input__message">{approval.message}</div>
+        <div className="agent-reply-input__message">{model.message}</div>
         <div className="agent-reply-input__row">
-          {approval.options.length > 0 && (
+          {options.length > 0 && (
             <div className="agent-reply-input__options">
-              {approval.options.map((option) => (
+              {options.map((option) => (
                 <button
                   type="button"
                   key={option}
@@ -47,8 +50,8 @@ export default function ReplyInput({
           )}
           <input
             className="agent-reply-input__field"
-            autoFocus
-            placeholder="reply to agent…"
+            autoFocus={model.autoFocus}
+            placeholder={model.placeholder ?? "reply to agent…"}
             value={value}
             onChange={(e) => setValue(e.target.value)}
           />
@@ -57,7 +60,7 @@ export default function ReplyInput({
             className="agent-reply-input__send"
             disabled={!value.trim()}
           >
-            send
+            {model.submitLabel ?? "send"}
           </button>
         </div>
       </div>

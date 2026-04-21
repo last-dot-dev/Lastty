@@ -4,11 +4,12 @@ use std::path::Path;
 
 use alacritty_terminal::grid::Scroll;
 use serde::Deserialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
+use crate::agent_runtime::AgentRuntimeManager;
 use crate::agents::{
-    self, load_agent_registry, resume_command_spec, AgentDefinition, LaunchAgentRequest,
-    LaunchAgentResult, RuleDefinition,
+    self, load_agent_registry, resume_command_spec, AgentDefinition, AgentRuntimeKind,
+    LaunchAgentRequest, LaunchAgentResult, RuleDefinition,
 };
 use crate::bus::{BusEvent, EventBus, HistoryEntry, HistorySource, RecordingInfo};
 use crate::font_config::FontConfig;
@@ -17,7 +18,7 @@ use crate::runtime_modes;
 use crate::terminal::manager::TerminalManager;
 use crate::terminal::render::TerminalFrame;
 use crate::terminal::session::CommandSpec;
-use crate::terminal::session::{SessionId, SessionInfo};
+use crate::terminal::session::{SessionControlMode, SessionId, SessionInfo};
 
 fn build_pane_env() -> HashMap<String, String> {
     let mut env = HashMap::new();
@@ -59,6 +60,7 @@ pub async fn create_terminal(
             None,
             None,
             None,
+            SessionControlMode::Shell,
         )
         .map_err(|e| e.to_string())?;
     event_bus.publish(BusEvent::SessionCreated {
@@ -129,8 +131,10 @@ async fn terminal_scroll_for_runtime<R: tauri::Runtime>(
 pub async fn kill_terminal(
     session_id: String,
     state: State<'_, TerminalManager>,
+    runtime_manager: State<'_, AgentRuntimeManager>,
 ) -> Result<(), String> {
     let id = SessionId::parse(&session_id)?;
+    let _ = runtime_manager.close(&session_id).await;
     state.remove(&id).ok_or("session not found".to_string())?;
     Ok(())
 }
@@ -243,6 +247,7 @@ async fn restore_terminal_sessions_for_runtime<R: tauri::Runtime>(
                 None,
                 None,
                 None,
+                SessionControlMode::Shell,
             )
             .map_err(|error| error.to_string())?;
         event_bus.publish(BusEvent::SessionCreated {
@@ -274,19 +279,9 @@ pub async fn list_rules() -> Result<Vec<RuleDefinition>, String> {
 #[tauri::command]
 pub async fn launch_agent(
     request: LaunchAgentRequest,
-    state: State<'_, TerminalManager>,
-    event_bus: State<'_, EventBus>,
+    app: AppHandle,
 ) -> Result<LaunchAgentResult, String> {
-    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
-    let result = agents::launch_agent(&state, &cwd, request).map_err(|error| error.to_string())?;
-    let agent_id = state
-        .get(&SessionId::parse(&result.session_id)?)
-        .and_then(|session| session.agent_id.clone());
-    event_bus.publish(BusEvent::SessionCreated {
-        session_id: result.session_id.clone(),
-        agent_id,
-    });
-    Ok(result)
+    launch_agent_for_app(app, request).await
 }
 
 #[tauri::command]
@@ -296,7 +291,20 @@ pub async fn respond_to_approval(
     choice: String,
     state: State<'_, TerminalManager>,
     event_bus: State<'_, EventBus>,
+    runtime_manager: State<'_, AgentRuntimeManager>,
 ) -> Result<(), String> {
+    if runtime_manager.is_managed(&session_id) {
+        runtime_manager
+            .respond(&session_id, &approval_id, choice.clone())
+            .await?;
+        event_bus.publish(BusEvent::UserApproval {
+            session_id,
+            approval_id,
+            choice,
+        });
+        return Ok(());
+    }
+
     let id = SessionId::parse(&session_id)?;
     let session = state.get(&id).ok_or("session not found")?;
     let payload = serde_json::json!({
@@ -310,6 +318,23 @@ pub async fn respond_to_approval(
         choice,
     });
     Ok(())
+}
+
+#[tauri::command]
+pub async fn send_agent_input(
+    session_id: String,
+    text: String,
+    runtime_manager: State<'_, AgentRuntimeManager>,
+) -> Result<(), String> {
+    runtime_manager.send_input(&session_id, text).await
+}
+
+#[tauri::command]
+pub async fn interrupt_agent(
+    session_id: String,
+    runtime_manager: State<'_, AgentRuntimeManager>,
+) -> Result<(), String> {
+    runtime_manager.interrupt(&session_id).await
 }
 
 #[tauri::command]
@@ -441,14 +466,16 @@ pub struct ResumeHistoryEntryResult {
 #[tauri::command]
 pub async fn resume_history_entry(
     session_id: String,
+    app: AppHandle,
     state: State<'_, TerminalManager>,
     event_bus: State<'_, EventBus>,
 ) -> Result<ResumeHistoryEntryResult, String> {
-    resume_history_entry_for_runtime(session_id, state, event_bus).await
+    resume_history_entry_for_runtime(session_id, app, state, event_bus).await
 }
 
 async fn resume_history_entry_for_runtime<R: tauri::Runtime>(
     session_id: String,
+    app: AppHandle<R>,
     state: State<'_, TerminalManager<R>>,
     event_bus: State<'_, EventBus<R>>,
 ) -> Result<ResumeHistoryEntryResult, String> {
@@ -469,24 +496,35 @@ async fn resume_history_entry_for_runtime<R: tauri::Runtime>(
 
     let workspace_root = std::env::current_dir().map_err(|e| e.to_string())?;
     let agents = load_agent_registry(&workspace_root).map_err(|e| e.to_string())?;
+    let agent = entry
+        .agent_id
+        .as_deref()
+        .and_then(|agent_id| agents.into_iter().find(|candidate| candidate.id == agent_id));
 
-    let (command, resumed) = match (entry.agent_id.as_deref(), entry.agent_session_id.as_deref()) {
-        (Some(agent_id), Some(agent_session_id)) => {
-            let agent = agents
-                .into_iter()
-                .find(|candidate| candidate.id == agent_id);
-            match agent
-                .as_ref()
-                .and_then(|a| resume_command_spec(a, agent_session_id))
-            {
-                Some(spec) => (Some(spec), true),
-                None => (None, false),
-            }
-        }
-        _ => (None, false),
+    let (command, resumed, managed_thread_id) = match (
+        agent.as_ref().map(|candidate| candidate.runtime),
+        entry.agent_session_id.as_deref(),
+    ) {
+        (Some(AgentRuntimeKind::CodexAppServer), Some(agent_session_id)) => (
+            Some(crate::terminal::session::keepalive_command_spec()),
+            true,
+            Some(agent_session_id.to_string()),
+        ),
+        (_, Some(agent_session_id)) => match agent
+            .as_ref()
+            .and_then(|candidate| resume_command_spec(candidate, agent_session_id))
+        {
+            Some(spec) => (Some(spec), true, None),
+            None => (None, false, None),
+        },
+        _ => (None, false, None),
     };
 
     let env = build_pane_env();
+    let control_mode = agent
+        .as_ref()
+        .map(|candidate| candidate.runtime.control_mode(entry.agent_id.is_some()))
+        .unwrap_or(SessionControlMode::Shell);
     let new_session_id = state
         .create_session(
             command,
@@ -498,8 +536,25 @@ async fn resume_history_entry_for_runtime<R: tauri::Runtime>(
             entry.prompt_summary.clone(),
             None,
             None,
+            control_mode,
         )
         .map_err(|error| error.to_string())?;
+
+    if let Some(thread_id) = managed_thread_id {
+        let runtime_manager = app.state::<AgentRuntimeManager<R>>();
+        if let Err(error) = runtime_manager
+            .resume_codex(
+                app.clone(),
+                new_session_id.to_string(),
+                cwd_path.display().to_string(),
+                thread_id,
+            )
+            .await
+        {
+            let _ = state.remove(&new_session_id);
+            return Err(error);
+        }
+    }
 
     event_bus.publish(BusEvent::SessionCreated {
         session_id: new_session_id.to_string(),
@@ -517,6 +572,51 @@ async fn resume_history_entry_for_runtime<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn get_git_info(cwd: String) -> Option<crate::git_info::GitInfo> {
     crate::git_info::detect(Path::new(&cwd))
+}
+
+pub(crate) async fn launch_agent_for_app<R: Runtime>(
+    app: AppHandle<R>,
+    request: LaunchAgentRequest,
+) -> Result<LaunchAgentResult, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let agents = agents::load_agent_registry(&cwd).map_err(|error| error.to_string())?;
+    let agent = agents
+        .into_iter()
+        .find(|candidate| candidate.id == request.agent_id)
+        .ok_or_else(|| format!("agent not found: {}", request.agent_id))?;
+
+    let manager = app.state::<TerminalManager<R>>();
+    let event_bus = app.state::<EventBus<R>>();
+    let runtime_manager = app.state::<AgentRuntimeManager<R>>();
+
+    let result = agents::launch_agent(&manager, &cwd, request.clone()).map_err(|error| error.to_string())?;
+
+    if agent.runtime == AgentRuntimeKind::CodexAppServer {
+        if let Err(error) = runtime_manager
+            .launch_codex(
+                app.clone(),
+                result.session_id.clone(),
+                result.cwd.clone(),
+                request.prompt.clone(),
+            )
+            .await
+        {
+            if let Ok(session_id) = SessionId::parse(&result.session_id) {
+                let _ = manager.remove(&session_id);
+            }
+            return Err(error);
+        }
+    }
+
+    let agent_id = manager
+        .get(&SessionId::parse(&result.session_id)?)
+        .and_then(|session| session.agent_id.clone());
+    event_bus.publish(BusEvent::SessionCreated {
+        session_id: result.session_id.clone(),
+        agent_id,
+    });
+
+    Ok(result)
 }
 
 #[tauri::command]
@@ -589,11 +689,12 @@ mod tests {
     use super::{
         restore_terminal_sessions_for_runtime, terminal_resize_for_runtime, RestoreTerminalRequest,
     };
+    use crate::agent_runtime::AgentRuntimeManager;
     use crate::bus::EventBus;
     use crate::render_sync::RenderCoordinator;
     use crate::terminal::manager::TerminalManager;
     use crate::terminal::render::{spawn_frame_emitter, TerminalFrameEvent};
-    use crate::terminal::session::{CommandSpec, SessionId};
+    use crate::terminal::session::{CommandSpec, SessionControlMode, SessionId};
     use tauri::test::MockRuntime;
     use tauri::Listener;
     use tauri::Manager;
@@ -606,6 +707,7 @@ mod tests {
         let render_coordinator = Arc::new(RenderCoordinator::new());
 
         assert!(app.manage(EventBus::new(app.handle().clone(), recordings_dir)));
+        assert!(app.manage(AgentRuntimeManager::<MockRuntime>::new()));
         assert!(app.manage(TerminalManager::new(
             app.handle().clone(),
             render_coordinator.clone()
@@ -634,6 +736,7 @@ mod tests {
                 None,
                 None,
                 None,
+                SessionControlMode::Shell,
             )
             .expect("should create test session");
         drop(manager);
@@ -679,6 +782,7 @@ mod tests {
         let render_coordinator = Arc::new(RenderCoordinator::new());
 
         assert!(app.manage(EventBus::new(app.handle().clone(), recordings_dir)));
+        assert!(app.manage(AgentRuntimeManager::<MockRuntime>::new()));
         assert!(app.manage(TerminalManager::new(
             app.handle().clone(),
             render_coordinator
@@ -696,6 +800,7 @@ mod tests {
                 None,
                 None,
                 None,
+                SessionControlMode::Shell,
             )
             .expect("should create initial session");
         drop(manager);

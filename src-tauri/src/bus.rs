@@ -639,20 +639,20 @@ impl RuleEngine {
 
 fn run_rule_action<R: Runtime + 'static>(
     app: AppHandle<R>,
-    workspace_root: PathBuf,
+    _workspace_root: PathBuf,
     action: PreparedRuleAction,
 ) {
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn(async move {
         let manager = app.state::<TerminalManager<R>>();
-        let event_bus = app.state::<EventBus<R>>();
-
         let mut request = action.request.clone();
         if request.cwd.is_none() {
             request.cwd = inherited_cwd(&manager, action.source_session_id.as_deref());
         }
 
-        match agents::launch_agent(&manager, &workspace_root, request.clone()) {
+        let launch_result = crate::commands::launch_agent_for_app(app.clone(), request.clone()).await;
+        match launch_result {
             Ok(result) => {
+                let event_bus = app.state::<EventBus<R>>();
                 let launched_agent_id = SessionId::parse(&result.session_id)
                     .ok()
                     .and_then(|session_id| {
@@ -848,10 +848,11 @@ mod tests {
         migrate_legacy_recordings, normalized_event_name, render_template, wildcard_matches,
         BusEvent, EventBus, RuleEngine,
     };
+    use crate::agent_runtime::AgentRuntimeManager;
     use crate::agents::{RuleAction, RuleDefinition, RuleFilter, RuleTrigger};
     use crate::render_sync::RenderCoordinator;
     use crate::terminal::manager::TerminalManager;
-    use crate::terminal::session::CommandSpec;
+    use crate::terminal::session::{CommandSpec, SessionControlMode};
     use tauri::test::MockRuntime;
     use tauri::Manager;
 
@@ -954,6 +955,7 @@ mod tests {
         let recordings_dir = workspace_root.join("recordings");
         let render_coordinator = Arc::new(RenderCoordinator::new());
         assert!(app.manage(EventBus::new(app.handle().clone(), recordings_dir.clone())));
+        assert!(app.manage(AgentRuntimeManager::<MockRuntime>::new()));
         assert!(app.manage(TerminalManager::new(
             app.handle().clone(),
             render_coordinator
@@ -975,6 +977,7 @@ mod tests {
                 Some("source".to_string()),
                 None,
                 None,
+                SessionControlMode::Attached,
             )
             .unwrap();
         drop(manager);
@@ -1063,6 +1066,7 @@ mod tests {
         let recordings_dir = workspace_root.join("recordings");
         let render_coordinator = Arc::new(RenderCoordinator::new());
         assert!(app.manage(EventBus::new(app.handle().clone(), recordings_dir.clone())));
+        assert!(app.manage(AgentRuntimeManager::<MockRuntime>::new()));
         assert!(app.manage(TerminalManager::new(
             app.handle().clone(),
             render_coordinator
@@ -1083,6 +1087,7 @@ mod tests {
                 Some("source".to_string()),
                 None,
                 None,
+                SessionControlMode::Attached,
             )
             .unwrap();
         drop(manager);
@@ -1255,6 +1260,7 @@ mod tests {
         let recordings_dir = workspace_root.join("recordings");
         let render_coordinator = Arc::new(RenderCoordinator::new());
         assert!(app.manage(EventBus::new(app.handle().clone(), recordings_dir.clone())));
+        assert!(app.manage(AgentRuntimeManager::<MockRuntime>::new()));
         assert!(app.manage(TerminalManager::new(
             app.handle().clone(),
             render_coordinator
@@ -1275,6 +1281,7 @@ mod tests {
                 Some("fix things".to_string()),
                 None,
                 None,
+                SessionControlMode::Attached,
             )
             .unwrap();
         drop(manager);
@@ -1315,6 +1322,7 @@ mod tests {
         let recordings_dir = workspace_root.join("recordings");
         let render_coordinator = Arc::new(RenderCoordinator::new());
         assert!(app.manage(EventBus::new(app.handle().clone(), recordings_dir.clone())));
+        assert!(app.manage(AgentRuntimeManager::<MockRuntime>::new()));
         assert!(app.manage(TerminalManager::new(
             app.handle().clone(),
             render_coordinator
@@ -1335,6 +1343,7 @@ mod tests {
                 None,
                 None,
                 None,
+                SessionControlMode::Shell,
             )
             .unwrap();
         drop(manager);

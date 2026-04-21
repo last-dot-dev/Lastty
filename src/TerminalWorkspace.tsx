@@ -88,6 +88,7 @@ import {
   getPrimarySessionId,
   getWorkspaceRoot,
   gitGraph,
+  interruptAgent,
   killTerminal,
   launchAgent,
   listAgents,
@@ -95,6 +96,7 @@ import {
   listSessions,
   respondToApproval,
   restoreTerminalSessions,
+  sendAgentInput,
   type AgentDefinition,
   type AgentUiEvent,
   type GitBranch,
@@ -466,6 +468,7 @@ export default function TerminalWorkspace() {
               prompt_summary: null,
               worktree_path: null,
               control_connected: false,
+              control_mode: "shell",
               started_at_ms: 0,
               started_at_unix_ms: 0,
             }),
@@ -645,6 +648,32 @@ export default function TerminalWorkspace() {
     setHistoryPanelPaneId((current) => (current === paneId ? null : paneId));
   }
 
+  async function handleSendAgentInput(sessionId: string, text: string) {
+    try {
+      await sendAgentInput(sessionId, text);
+      setAgentUiBySession((current) => ({
+        ...current,
+        [sessionId]: {
+          ...(current[sessionId] ?? emptyAgentSessionState()),
+          finished: null,
+          status: { phase: "running", detail: "sending follow-up to codex" },
+        },
+      }));
+    } catch (error) {
+      console.error("failed to send agent input", error);
+      window.alert(`Couldn't send that message:\n\n${String(error)}`);
+    }
+  }
+
+  async function handleInterruptAgent(sessionId: string) {
+    try {
+      await interruptAgent(sessionId);
+    } catch (error) {
+      console.error("failed to interrupt agent", error);
+      window.alert(`Couldn't interrupt that turn:\n\n${String(error)}`);
+    }
+  }
+
   function handleCloseHistoryPanel() {
     setHistoryPanelPaneId(null);
   }
@@ -669,6 +698,7 @@ export default function TerminalWorkspace() {
       prompt_summary: null,
       worktree_path: null,
       control_connected: false,
+      control_mode: "shell",
       started_at_ms: 0,
       started_at_unix_ms: 0,
     };
@@ -950,6 +980,7 @@ export default function TerminalWorkspace() {
       prompt_summary: agentPrompt || null,
       worktree_path: result.worktree_path ?? null,
       control_connected: false,
+      control_mode: result.control_mode,
       started_at_ms: 0,
       started_at_unix_ms: 0,
     });
@@ -1142,6 +1173,12 @@ export default function TerminalWorkspace() {
                           }));
                         });
                       },
+                      onSendInput: (sessionId, text) => {
+                        void handleSendAgentInput(sessionId, text);
+                      },
+                      onInterrupt: (sessionId) => {
+                        void handleInterruptAgent(sessionId);
+                      },
                       onSpawnAdjacent: (paneId, direction) =>
                         void handleSplit(
                           paneId,
@@ -1219,6 +1256,8 @@ interface RenderLayoutCtx {
   onCheckoutBranch: (cwd: string, name: string) => void;
   onSnapshot: (sessionId: string, snapshot: PersistedTerminalSnapshot) => void;
   onApproval: (sessionId: string, approvalId: string, choice: string) => void;
+  onSendInput: (sessionId: string, text: string) => void;
+  onInterrupt: (sessionId: string) => void;
   onSpawnAdjacent: (paneId: string, direction: SpawnDirection) => void;
   draggingPaneId: string | null;
   onDragStartPane: (paneId: string) => void;
@@ -1253,6 +1292,8 @@ function renderLayout(
     onCheckoutBranch,
     onSnapshot,
     onApproval,
+    onSendInput,
+    onInterrupt,
     onSpawnAdjacent,
     draggingPaneId,
     onDragStartPane,
@@ -1293,6 +1334,8 @@ function renderLayout(
       toolCounts.total > 0 ||
       agent.fileEdits.length > 0 ||
       agent.widgets.length > 0;
+    const isManaged = session?.control_mode === "managed";
+    const canInterrupt = isManaged && agent.finished === null;
 
     return (
       <section
@@ -1310,7 +1353,9 @@ function renderLayout(
           controls={{
             onClose: () => void onCloseChrome(pane.id),
             onMaximize: () => onToggleMaximize(pane.id),
+            onInterrupt: isManaged ? () => onInterrupt(pane.sessionId) : undefined,
             maximized: maximizedPaneId === pane.id,
+            interruptDisabled: !canInterrupt,
           }}
           draggable
           onDragStart={(event) => {
@@ -1367,10 +1412,24 @@ function renderLayout(
         </div>
         {blocked ? (
           <ReplyInput
-            approval={agent.pendingApprovals[0]!}
+            model={{
+              message: agent.pendingApprovals[0]!.message,
+              options: agent.pendingApprovals[0]!.options,
+              placeholder: "reply to agent…",
+              autoFocus: true,
+            }}
             onSubmit={(choice) =>
               onApproval(pane.sessionId, agent.pendingApprovals[0]!.id, choice)
             }
+          />
+        ) : isManaged ? (
+          <ReplyInput
+            model={{
+              message: agent.status?.detail ?? "send a follow-up to codex",
+              placeholder: "message agent…",
+              submitLabel: "send",
+            }}
+            onSubmit={(text) => onSendInput(pane.sessionId, text)}
           />
         ) : (
           <PaneFooter

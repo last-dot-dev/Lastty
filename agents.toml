@@ -2,6 +2,7 @@
 id = "codex"
 name = "Codex CLI"
 command = "codex"
+runtime = "codex_app_server"
 default_args = []
 prompt_transport = "argv"
 resume_command = "codex"
@@ -11,6 +12,7 @@ resume_args = ["resume", "{{agent_session_id}}"]
 id = "claude"
 name = "Claude Code"
 command = "claude"
+runtime = "attached"
 default_args = []
 prompt_transport = "argv"
 resume_command = "claude"

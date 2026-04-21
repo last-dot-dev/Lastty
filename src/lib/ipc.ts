@@ -145,6 +145,7 @@ export interface SessionInfo {
   prompt_summary: string | null;
   worktree_path: string | null;
   control_connected: boolean;
+  control_mode: "shell" | "attached" | "managed";
   started_at_ms: number;
   started_at_unix_ms: number;
 }
@@ -246,6 +247,7 @@ export interface LaunchAgentResult {
   pane_title: string;
   cwd: string;
   worktree_path?: string | null;
+  control_mode: "shell" | "attached" | "managed";
 }
 
 export interface RuleFilter {
@@ -349,6 +351,17 @@ export async function launchAgent(
   return invoke("launch_agent", { request });
 }
 
+export async function sendAgentInput(
+  sessionId: string,
+  text: string,
+): Promise<void> {
+  return invoke("send_agent_input", { sessionId, text });
+}
+
+export async function interruptAgent(sessionId: string): Promise<void> {
+  return invoke("interrupt_agent", { sessionId });
+}
+
 export async function respondToApproval(
   sessionId: string,
   approvalId: string,
@@ -397,4 +410,3 @@ export async function getTerminalFrame(
 ): Promise<TerminalFrame> {
   return invoke("get_terminal_frame", { sessionId });
 }
-

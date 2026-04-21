@@ -25,6 +25,7 @@ export type AgentUiMessage =
   | { type: "FileCreate"; data: { path: string } }
   | { type: "FileDelete"; data: { path: string } }
   | { type: "Approval"; data: { id: string; message: string; options: string[] } }
+  | { type: "ApprovalResolved"; data: { id: string } }
   | { type: "Notification"; data: { level: string; message: string } }
   | { type: "Widget"; data: { widget_type: string; props: unknown } };
 
@@ -164,6 +165,8 @@ export function reduceAgentMessage(
         ...state,
         pendingApprovals: [...state.pendingApprovals, message.data].slice(-10),
       };
+    case "ApprovalResolved":
+      return resolveApproval(state, message.data.id);
     case "Notification":
       return {
         ...state,

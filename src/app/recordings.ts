@@ -432,6 +432,14 @@ function mapAgentMessageToTimelineEntry(
         detail: `${message.data.message} · ${message.data.options.join(", ") || "no options"}`,
         tone: "warning",
       };
+    case "ApprovalResolved":
+      return {
+        tsMs,
+        kind: "approval",
+        title: "Approval resolved",
+        detail: message.data.id,
+        tone: "success",
+      };
     case "Notification":
       return {
         tsMs,

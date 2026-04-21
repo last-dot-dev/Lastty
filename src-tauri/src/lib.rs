@@ -1,3 +1,4 @@
+pub mod agent_runtime;
 pub mod adapters;
 pub mod agents;
 pub mod bench_corpus;

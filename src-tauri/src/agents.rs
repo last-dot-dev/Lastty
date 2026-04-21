@@ -7,7 +7,7 @@ use tauri::Runtime;
 
 use crate::adapters::adapter_for;
 use crate::terminal::manager::TerminalManager;
-use crate::terminal::session::CommandSpec;
+use crate::terminal::session::{keepalive_command_spec, CommandSpec, SessionControlMode};
 
 const AGENTS_CONFIG_PATH: &str = "agents.toml";
 
@@ -26,9 +26,34 @@ pub struct AgentDefinition {
     pub env: HashMap<String, String>,
     pub icon: Option<String>,
     #[serde(default)]
+    pub runtime: AgentRuntimeKind,
+    #[serde(default)]
     pub resume_command: Option<String>,
     #[serde(default)]
     pub resume_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRuntimeKind {
+    #[default]
+    Attached,
+    CodexAppServer,
+}
+
+impl AgentRuntimeKind {
+    pub fn control_mode(self, has_agent: bool) -> SessionControlMode {
+        match self {
+            AgentRuntimeKind::Attached => {
+                if has_agent {
+                    SessionControlMode::Attached
+                } else {
+                    SessionControlMode::Shell
+                }
+            }
+            AgentRuntimeKind::CodexAppServer => SessionControlMode::Managed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +92,7 @@ pub struct LaunchAgentResult {
     pub pane_title: String,
     pub cwd: String,
     pub worktree_path: Option<String>,
+    pub control_mode: SessionControlMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -242,6 +268,7 @@ pub fn launch_agent<R: Runtime>(
             prompt_summary.clone(),
             request.prompt.clone(),
             worktree_path.clone(),
+            agent.runtime.control_mode(true),
             adapter,
         )?
     } else {
@@ -256,9 +283,12 @@ pub fn launch_agent<R: Runtime>(
             prompt_summary.clone(),
             request.prompt.clone(),
             worktree_path.clone(),
+            agent.runtime.control_mode(true),
         )?;
 
-        if matches!(agent.prompt_transport.kind(), "stdin") {
+        if agent.runtime == AgentRuntimeKind::Attached
+            && matches!(agent.prompt_transport.kind(), "stdin")
+        {
             if let Some(prompt) = request.prompt.as_ref() {
                 if let Some(session) = manager.get(&session_id) {
                     let mut payload = prompt.clone();
@@ -281,6 +311,7 @@ pub fn launch_agent<R: Runtime>(
         pane_title: agent.name,
         cwd: cwd.to_string_lossy().to_string(),
         worktree_path,
+        control_mode: agent.runtime.control_mode(true),
     })
 }
 
@@ -298,6 +329,10 @@ fn build_command_spec(
     agent: &AgentDefinition,
     prompt: Option<&str>,
 ) -> anyhow::Result<CommandSpec> {
+    if agent.runtime == AgentRuntimeKind::CodexAppServer {
+        return Ok(keepalive_command_spec());
+    }
+
     let mut args = agent.default_args.clone();
     match agent.prompt_transport.kind() {
         "argv" => {
@@ -383,6 +418,7 @@ fn default_agents() -> Vec<AgentDefinition> {
             shell: false,
             env: HashMap::new(),
             icon: Some("◎".to_string()),
+            runtime: AgentRuntimeKind::CodexAppServer,
             resume_command: Some("codex".to_string()),
             resume_args: vec!["resume".to_string(), "{{agent_session_id}}".to_string()],
         },
@@ -395,6 +431,7 @@ fn default_agents() -> Vec<AgentDefinition> {
             shell: false,
             env: HashMap::new(),
             icon: Some("◌".to_string()),
+            runtime: AgentRuntimeKind::Attached,
             resume_command: Some("claude".to_string()),
             resume_args: vec!["--resume".to_string(), "{{agent_session_id}}".to_string()],
         },
@@ -404,7 +441,7 @@ fn default_agents() -> Vec<AgentDefinition> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_command_spec, load_rules, AgentDefinition, PromptTransport, RuleAction,
+        build_command_spec, load_rules, AgentDefinition, AgentRuntimeKind, PromptTransport, RuleAction,
         RuleDefinition, RuleFilter, RuleTrigger,
     };
     use std::collections::HashMap;
@@ -422,6 +459,7 @@ mod tests {
             shell: false,
             env: HashMap::new(),
             icon: None,
+            runtime: AgentRuntimeKind::Attached,
             resume_command: None,
             resume_args: Vec::new(),
         };

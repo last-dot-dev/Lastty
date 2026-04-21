@@ -58,6 +58,14 @@ pub enum SessionStatus {
     Exited(i32),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionControlMode {
+    Shell,
+    Attached,
+    Managed,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionInfo {
     pub session_id: String,
@@ -68,6 +76,7 @@ pub struct SessionInfo {
     pub prompt_summary: Option<String>,
     pub worktree_path: Option<String>,
     pub control_connected: bool,
+    pub control_mode: SessionControlMode,
     pub started_at_ms: u128,
     pub started_at_unix_ms: u128,
 }
@@ -115,6 +124,7 @@ pub struct TerminalSession<R: Runtime = tauri::Wry> {
     pub prompt: Option<String>,
     pub prompt_summary: Option<String>,
     pub worktree_path: Option<String>,
+    control_mode: SessionControlMode,
     control_socket_path: Option<std::path::PathBuf>,
     control_connected: Arc<AtomicBool>,
     #[cfg(unix)]
@@ -136,6 +146,7 @@ pub fn create_session<R: Runtime>(
     prompt_summary: Option<String>,
     prompt: Option<String>,
     worktree_path: Option<String>,
+    control_mode: SessionControlMode,
     adapter: Option<Box<dyn AgentAdapter>>,
 ) -> anyhow::Result<TerminalSession<R>> {
     let id = SessionId::new();
@@ -175,13 +186,11 @@ pub fn create_session<R: Runtime>(
     // 2. Configure and open PTY
     let shell = if adapter_active {
         // Adapter mode: run a keepalive child that disables terminal echo
-        // and cats its stdin to stdout. The adapter writes synthesized
-        // OSC 7770 bytes into the PTY master, cat relays them to the
-        // slave's stdout, and `ProtocolReader` parses them back out.
-        Some(tty::Shell::new(
-            "/bin/sh".to_string(),
-            vec!["-c".to_string(), "stty -echo; exec cat".to_string()],
-        ))
+        // and relays stdin to stdout. Adapters write synthesized OSC 7770
+        // bytes into the PTY master, the child echoes them to the slave's
+        // stdout, and `ProtocolReader` parses them back out.
+        let keepalive = keepalive_command_spec();
+        Some(tty::Shell::new(keepalive.program, keepalive.args))
     } else {
         command.map(|c| tty::Shell::new(c.program.clone(), c.args.clone()))
     };
@@ -286,6 +295,7 @@ pub fn create_session<R: Runtime>(
         prompt,
         prompt_summary,
         worktree_path,
+        control_mode,
         control_socket_path,
         control_connected,
         #[cfg(unix)]
@@ -358,8 +368,33 @@ impl<R: Runtime> TerminalSession<R> {
             prompt_summary: self.prompt_summary.clone(),
             worktree_path: self.worktree_path.clone(),
             control_connected: self.control_connected.load(Ordering::Relaxed),
+            control_mode: self.control_mode,
             started_at_ms: self.started_at.elapsed().as_millis(),
             started_at_unix_ms: self.started_at_unix_ms,
+        }
+    }
+}
+
+pub fn keepalive_command_spec() -> CommandSpec {
+    #[cfg(unix)]
+    {
+        CommandSpec {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "stty -echo; exec cat".to_string()],
+        }
+    }
+    #[cfg(windows)]
+    {
+        CommandSpec {
+            program: "cmd".to_string(),
+            args: vec!["/C".to_string(), "more".to_string()],
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        CommandSpec {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), "exec cat".to_string()],
         }
     }
 }

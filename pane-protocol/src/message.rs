@@ -60,6 +60,9 @@ pub enum AgentUiMessage {
         message: String,
         options: Vec<String>,
     },
+    ApprovalResolved {
+        id: String,
+    },
     Notification {
         level: String,
         message: String,
