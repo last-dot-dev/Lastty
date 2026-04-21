@@ -27,6 +27,8 @@ export default function AgentShell({
   onDropPaneOnDesktop,
   canAcceptPaneDrop,
   renderDesktopPreview,
+  exposeMode,
+  onToggleExpose,
   sidebarFooterExtras,
   sidebarGraph,
   nowMs,
@@ -52,6 +54,8 @@ export default function AgentShell({
   onDropPaneOnDesktop?: (desktopId: string) => void;
   canAcceptPaneDrop?: boolean;
   renderDesktopPreview?: (desktopId: string) => ReactNode;
+  exposeMode: boolean;
+  onToggleExpose: () => void;
   sidebarFooterExtras?: ReactNode;
   sidebarGraph: SidebarGraph;
   nowMs: number;
@@ -70,6 +74,8 @@ export default function AgentShell({
         onDropPaneOnDesktop={onDropPaneOnDesktop}
         canAcceptPaneDrop={canAcceptPaneDrop}
         renderPreview={renderDesktopPreview}
+        exposeMode={exposeMode}
+        onToggleExpose={onToggleExpose}
       />
       <div className="agent-body">
         <Sidebar

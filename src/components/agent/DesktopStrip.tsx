@@ -20,6 +20,8 @@ export default function DesktopStrip({
   onDropPaneOnDesktop,
   canAcceptPaneDrop,
   renderPreview,
+  exposeMode,
+  onToggleExpose,
 }: {
   desktops: DesktopEntry[];
   activeDesktopId: string;
@@ -30,6 +32,8 @@ export default function DesktopStrip({
   onDropPaneOnDesktop?: (desktopId: string) => void;
   canAcceptPaneDrop?: boolean;
   renderPreview?: (desktopId: string) => ReactNode;
+  exposeMode: boolean;
+  onToggleExpose: () => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
@@ -193,6 +197,22 @@ export default function DesktopStrip({
         aria-label="new view"
       >
         +
+      </button>
+      <div className="agent-desktop-strip__spacer" data-tauri-drag-region />
+      <button
+        type="button"
+        className={`agent-desktop-strip__overview ${exposeMode ? "is-active" : ""}`}
+        onClick={onToggleExpose}
+        title="Overview (\\)"
+        aria-label="Toggle overview"
+        aria-pressed={exposeMode}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden>
+          <rect x="1" y="1" width="4" height="4" />
+          <rect x="7" y="1" width="4" height="4" />
+          <rect x="1" y="7" width="4" height="4" />
+          <rect x="7" y="7" width="4" height="4" />
+        </svg>
       </button>
       {hoveredId && hoverAnchor && renderPreview && (
         <div

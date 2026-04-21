@@ -508,6 +508,71 @@ export function orderedPaneIds(node: LayoutNode): string[] {
   return node.children.flatMap(orderedPaneIds);
 }
 
+export interface SplitHandleInfo {
+  path: LayoutPath;
+  handleIndex: number;
+  direction: SplitDirection;
+  position: number;
+  start: number;
+  end: number;
+  parentExtent: number;
+  weights: number[];
+}
+
+export function collectSplitHandles(
+  node: LayoutNode,
+  rect: { left: number; top: number; right: number; bottom: number } = {
+    left: 0,
+    top: 0,
+    right: 1,
+    bottom: 1,
+  },
+  path: LayoutPath = [],
+): SplitHandleInfo[] {
+  if (node.type === "leaf") return [];
+
+  const handles: SplitHandleInfo[] = [];
+  const totalWeight = node.weights.reduce((sum, weight) => sum + weight, 0);
+  if (totalWeight <= 0) return handles;
+
+  const horizontal = node.direction === "horizontal";
+  const spanStart = horizontal ? rect.left : rect.top;
+  const spanEnd = horizontal ? rect.right : rect.bottom;
+  const perpStart = horizontal ? rect.top : rect.left;
+  const perpEnd = horizontal ? rect.bottom : rect.right;
+  const parentExtent = spanEnd - spanStart;
+
+  let cursor = spanStart;
+  node.children.forEach((child, index) => {
+    const weight = node.weights[index] ?? 0;
+    const ratio = weight / totalWeight;
+    const childSpan = parentExtent * ratio;
+    const childStart = cursor;
+    const childEnd = cursor + childSpan;
+
+    if (index < node.children.length - 1) {
+      handles.push({
+        path,
+        handleIndex: index,
+        direction: node.direction,
+        position: childEnd,
+        start: perpStart,
+        end: perpEnd,
+        parentExtent,
+        weights: node.weights,
+      });
+    }
+
+    const childRect = horizontal
+      ? { left: childStart, top: rect.top, right: childEnd, bottom: rect.bottom }
+      : { left: rect.left, top: childStart, right: rect.right, bottom: childEnd };
+    handles.push(...collectSplitHandles(child, childRect, [...path, index]));
+    cursor = childEnd;
+  });
+
+  return handles;
+}
+
 export function findAdjacentPaneId(
   node: LayoutNode,
   paneId: string,
@@ -630,14 +695,14 @@ function roundWeight(value: number): number {
   return Math.round(value * 1_000) / 1_000;
 }
 
-interface PaneRect {
+export interface PaneRect {
   left: number;
   top: number;
   right: number;
   bottom: number;
 }
 
-function collectPaneRects(
+export function collectPaneRects(
   node: LayoutNode,
   rect: PaneRect = { left: 0, top: 0, right: 1, bottom: 1 },
 ): Record<string, PaneRect> {

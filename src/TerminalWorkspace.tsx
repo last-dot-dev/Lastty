@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -72,10 +73,13 @@ import {
   swapPanes,
   switchDesktop,
   toggleMaximize,
+  collectPaneRects,
+  collectSplitHandles,
   type DesktopState,
   type LayoutPath,
-  type LayoutNode,
+  type PaneRect,
   type SplitDirection,
+  type SplitHandleInfo,
   type SplitSide,
   type WorkspaceState,
 } from "./app/layout";
@@ -129,6 +133,34 @@ function pathsEqual(a: string | null | undefined, b: string | null | undefined):
   return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
 }
 
+interface DesktopCell {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+function computeDesktopCells(n: number): DesktopCell[] {
+  if (n <= 0) return [];
+  if (n === 1) return [{ left: 0.09, top: 0.09, width: 0.82, height: 0.82 }];
+  const cols = n === 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : n <= 9 ? 3 : Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const padding = 0.04;
+  const gap = 0.02;
+  const cellW = (1 - 2 * padding - (cols - 1) * gap) / cols;
+  const cellH = (1 - 2 * padding - (rows - 1) * gap) / rows;
+  return Array.from({ length: n }, (_, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    return {
+      left: padding + col * (cellW + gap),
+      top: padding + row * (cellH + gap),
+      width: cellW,
+      height: cellH,
+    };
+  });
+}
+
 function SettingsIcon() {
   return (
     <svg
@@ -167,6 +199,7 @@ export default function TerminalWorkspace() {
   const [draftSeedByPaneId, setDraftSeedByPaneId] = useState<Record<string, string>>({});
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [exposeMode, setExposeMode] = useState(false);
   const platform = useMemo(() => detectPlatform(), []);
   const pendingBindingRef = useRef<PendingBinding[]>([]);
   const [launching, setLaunching] = useState(false);
@@ -573,6 +606,29 @@ export default function TerminalWorkspace() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (helpOpen || settingsOpen) return;
+
+      const target = event.target as Element | null;
+      const typingInField =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+
+      if (!typingInField) {
+        const meta = event.metaKey || event.ctrlKey;
+        if (event.key === "\\" || (meta && event.key === "/")) {
+          event.preventDefault();
+          event.stopPropagation();
+          setExposeMode((open) => !open);
+          return;
+        }
+        if (event.key === "Escape" && exposeMode) {
+          event.preventDefault();
+          event.stopPropagation();
+          setExposeMode(false);
+          return;
+        }
+      }
+
       const resolution = matchBinding(
         event,
         platform,
@@ -644,7 +700,7 @@ export default function TerminalWorkspace() {
 
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [workspace, platform, keyboardMode.mode, helpOpen, settingsOpen]);
+  }, [workspace, platform, keyboardMode.mode, helpOpen, settingsOpen, exposeMode]);
 
   useEffect(() => {
     const clearPending = () => {
@@ -1335,6 +1391,8 @@ export default function TerminalWorkspace() {
             />
           );
         }}
+        exposeMode={exposeMode}
+        onToggleExpose={() => setExposeMode((value) => !value)}
         sidebarFooterExtras={
           <button
             type="button"
@@ -1350,7 +1408,7 @@ export default function TerminalWorkspace() {
         sidebarGraph={sidebarGraph}
         nowMs={clock}
       >
-        <div className="agent-grid">
+        <div className={`agent-grid ${exposeMode ? "agent-expose-active" : ""}`}>
           <div
             style={{
               flex: 1,
@@ -1359,103 +1417,119 @@ export default function TerminalWorkspace() {
               position: "relative",
             }}
           >
-            {workspace.desktops.map((desktop) => {
-              const active = desktop.id === workspace.activeDesktopId;
-              return (
-                <div
-                  key={desktop.id}
-                  className="agent-desktop-layer"
-                  aria-hidden={!active}
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    visibility: active ? "visible" : "hidden",
-                    pointerEvents: active ? "auto" : "none",
-                  }}
-                >
-                  {desktop.layout ? (
-                    renderLayout(desktop.layout, {
-                      desktop,
-                      workspace,
-                      sessionInfoById,
-                      agentUiBySession,
-                      restoredSnapshotsBySessionId,
-                      onCloseChrome: (paneId) => handleClose(paneId),
-                      onToggleMaximize: handleToggleMaximizePane,
-                      onResize: (path, handleIndex, delta, baseWeights) =>
-                        setWorkspace((current) =>
-                          current
-                            ? resizeSplit(
-                                current,
-                                path,
-                                handleIndex,
-                                delta,
-                                baseWeights,
-                                desktop.id,
-                              )
-                            : current,
-                        ),
-                      onFocus: (paneId) =>
-                        setWorkspace((current) =>
-                          current ? focusPane(current, paneId, desktop.id) : current,
-                        ),
-                      onSnapshot: handleTerminalSnapshot,
-                      onApproval: (sessionId, approvalId, choice) => {
-                        void respondToApproval(sessionId, approvalId, choice).then(() => {
-                          setAgentUiBySession((current) => ({
-                            ...current,
-                            [sessionId]: resolveApproval(
-                              current[sessionId] ?? emptyAgentSessionState(),
-                              approvalId,
+            {(() => {
+              const cells = computeDesktopCells(workspace.desktops.length);
+              return workspace.desktops.map((desktop, index) => {
+                const active = desktop.id === workspace.activeDesktopId;
+                const cell = cells[index];
+                let scaledTransform = "none";
+                if (cell) {
+                  const scale = Math.min(cell.width, cell.height);
+                  const offsetX = (cell.width - scale) / 2;
+                  const offsetY = (cell.height - scale) / 2;
+                  scaledTransform = `translate(${(cell.left + offsetX) * 100}%, ${(cell.top + offsetY) * 100}%) scale(${scale})`;
+                }
+                const transform = exposeMode ? scaledTransform : "none";
+                const hidden = !exposeMode && !active;
+                return (
+                  <div
+                    key={desktop.id}
+                    className={`agent-desktop-layer ${hidden ? "is-hidden" : ""}`}
+                    aria-hidden={hidden}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      transform,
+                    }}
+                  >
+                    {desktop.layout ? (
+                      <DesktopStage
+                        exposeMode={exposeMode}
+                        onExitExpose={() => setExposeMode(false)}
+                        ctx={{
+                          desktop,
+                          workspace,
+                          sessionInfoById,
+                          agentUiBySession,
+                          restoredSnapshotsBySessionId,
+                          onCloseChrome: (paneId) => handleClose(paneId),
+                          onToggleMaximize: handleToggleMaximizePane,
+                          onResize: (path, handleIndex, delta, baseWeights) =>
+                            setWorkspace((current) =>
+                              current
+                                ? resizeSplit(
+                                    current,
+                                    path,
+                                    handleIndex,
+                                    delta,
+                                    baseWeights,
+                                    desktop.id,
+                                  )
+                                : current,
                             ),
-                          }));
-                        });
-                      },
-                      onSpawnAdjacent: (paneId, direction) =>
-                        createDraftPane({
-                          kind: "split",
-                          paneId,
-                          direction:
-                            direction === "right" ? "horizontal" : "vertical",
-                        }),
-                      draggingPaneId,
-                      onDragStartPane: (paneId) => setDraggingPaneId(paneId),
-                      onDragEndPane: () => setDraggingPaneId(null),
-                      onDropPaneOnEdge: handleDropPaneOnEdge,
-                      onDropPaneOnBody: handleDropPaneOnBody,
-                      historyPanelPaneId,
-                      viewingHistoryByPaneId,
-                      onToggleHistoryPanel: handleToggleHistoryPanel,
-                      onCloseHistoryPanel: handleCloseHistoryPanel,
-                      onResumeHistoryEntry: handleResumeHistoryEntry,
-                      onViewHistoryTranscript: handleViewHistoryTranscript,
-                      onCloseHistoryView: handleCloseHistoryView,
-                      draftPaneIds,
-                      renderDraftLauncher: (paneId) => (
-                        <LaunchAgentModal
-                          key={paneId}
-                          agents={agents}
-                          worktrees={worktreeRows}
-                          launching={launching}
-                          projectLabel={
-                            basenameOfPath(activeProjectRoot || "") || "project"
-                          }
-                          initialAgentId={
-                            draftSeedByPaneId[paneId] ?? agents[0]?.id ?? ""
-                          }
-                          onClose={() => cancelDraftPane(paneId)}
-                          onLaunch={(config) => handleLaunchAgent(paneId, config)}
-                        />
-                      ),
-                    })
-                  ) : (
-                    <EmptyDesktop onNewShell={() => void handleNewShellInActiveDesktop()} />
-                  )}
-                </div>
-              );
-            })}
+                          onFocus: (paneId) => handleFocusPaneAnywhere(paneId),
+                          onSnapshot: handleTerminalSnapshot,
+                          onApproval: (sessionId, approvalId, choice) => {
+                            void respondToApproval(sessionId, approvalId, choice).then(() => {
+                              setAgentUiBySession((current) => ({
+                                ...current,
+                                [sessionId]: resolveApproval(
+                                  current[sessionId] ?? emptyAgentSessionState(),
+                                  approvalId,
+                                ),
+                              }));
+                            });
+                          },
+                          onSpawnAdjacent: (paneId, direction) =>
+                            createDraftPane({
+                              kind: "split",
+                              paneId,
+                              direction:
+                                direction === "right" ? "horizontal" : "vertical",
+                            }),
+                          draggingPaneId,
+                          onDragStartPane: (paneId) => setDraggingPaneId(paneId),
+                          onDragEndPane: () => setDraggingPaneId(null),
+                          onDropPaneOnEdge: handleDropPaneOnEdge,
+                          onDropPaneOnBody: handleDropPaneOnBody,
+                          historyPanelPaneId,
+                          viewingHistoryByPaneId,
+                          onToggleHistoryPanel: handleToggleHistoryPanel,
+                          onCloseHistoryPanel: handleCloseHistoryPanel,
+                          onResumeHistoryEntry: handleResumeHistoryEntry,
+                          onViewHistoryTranscript: handleViewHistoryTranscript,
+                          onCloseHistoryView: handleCloseHistoryView,
+                          draftPaneIds,
+                          renderDraftLauncher: (paneId) => (
+                            <LaunchAgentModal
+                              key={paneId}
+                              agents={agents}
+                              worktrees={worktreeRows}
+                              launching={launching}
+                              projectLabel={
+                                basenameOfPath(activeProjectRoot || "") || "project"
+                              }
+                              initialAgentId={
+                                draftSeedByPaneId[paneId] ?? agents[0]?.id ?? ""
+                              }
+                              onClose={() => cancelDraftPane(paneId)}
+                              onLaunch={(config) => handleLaunchAgent(paneId, config)}
+                            />
+                          ),
+                        }}
+                      />
+                    ) : (
+                      <EmptyDesktop onNewShell={() => void handleNewShellInActiveDesktop()} />
+                    )}
+                  </div>
+                );
+              });
+            })()}
+            {exposeMode && (
+              <div className="agent-expose-hint no-select" aria-hidden>
+                Overview — press <kbd>\</kbd> or <kbd>Esc</kbd> to return
+              </div>
+            )}
           </div>
         </div>
       </AgentShell>
@@ -1535,11 +1609,90 @@ interface RenderLayoutCtx {
   renderDraftLauncher: (paneId: string) => ReactNode;
 }
 
-function renderLayout(
-  node: LayoutNode,
-  ctx: RenderLayoutCtx,
-  path: LayoutPath = [],
-): ReactNode {
+function DesktopStage({
+  ctx,
+  exposeMode,
+  onExitExpose,
+}: {
+  ctx: RenderLayoutCtx;
+  exposeMode: boolean;
+  onExitExpose: () => void;
+}) {
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stageSize, setStageSize] = useState({ w: 0, h: 0 });
+
+  useLayoutEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      setStageSize({ w: el.clientWidth, h: el.clientHeight });
+    });
+    observer.observe(el);
+    setStageSize({ w: el.clientWidth, h: el.clientHeight });
+    return () => observer.disconnect();
+  }, []);
+
+  const { desktop } = ctx;
+  const layout = desktop.layout;
+  if (!layout) return null;
+
+  const rects = collectPaneRects(layout);
+  const maximizedId = desktop.maximizedPaneId;
+  const handles = exposeMode || maximizedId ? [] : collectSplitHandles(layout);
+
+  return (
+    <div ref={stageRef} className="agent-stage">
+      <div className="agent-stage__inner">
+        {Object.entries(rects).map(([paneId, rect]) => {
+          const effectiveRect =
+            maximizedId && maximizedId === paneId
+              ? { left: 0, top: 0, right: 1, bottom: 1 }
+              : rect;
+          return (
+            <PaneTile
+              key={paneId}
+              paneId={paneId}
+              rect={effectiveRect}
+              ctx={ctx}
+              zoomed={maximizedId === paneId}
+              dimmed={Boolean(maximizedId) && maximizedId !== paneId}
+              exposeMode={exposeMode}
+              onExitExpose={onExitExpose}
+            />
+          );
+        })}
+        {handles.map((handle, index) => (
+          <SplitHandle
+            key={`handle-${handle.path.join("-")}-${handle.handleIndex}-${index}`}
+            handle={handle}
+            stageSize={stageSize}
+            onResize={ctx.onResize}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const TILE_GAP_PX = 1;
+
+function PaneTile({
+  paneId,
+  rect,
+  ctx,
+  zoomed,
+  dimmed,
+  exposeMode,
+  onExitExpose,
+}: {
+  paneId: string;
+  rect: PaneRect;
+  ctx: RenderLayoutCtx;
+  zoomed: boolean;
+  dimmed: boolean;
+  exposeMode: boolean;
+  onExitExpose: () => void;
+}) {
   const {
     desktop,
     workspace,
@@ -1548,7 +1701,6 @@ function renderLayout(
     restoredSnapshotsBySessionId,
     onCloseChrome,
     onToggleMaximize,
-    onResize,
     onFocus,
     onSnapshot,
     onApproval,
@@ -1569,48 +1721,70 @@ function renderLayout(
     renderDraftLauncher,
   } = ctx;
 
-  const maximizedPaneId = desktop.maximizedPaneId;
+  const pane = workspace.panes[paneId];
+  if (!pane) return null;
 
-  if (node.type === "leaf") {
-    const pane = workspace.panes[node.paneId];
-    if (!pane) return null;
-    if (maximizedPaneId && maximizedPaneId !== pane.id) return null;
+  const focused = desktop.focusedPaneId === pane.id;
+  const widthPct = (rect.right - rect.left) * 100;
+  const heightPct = (rect.bottom - rect.top) * 100;
+  const leftPct = rect.left * 100;
+  const topPct = rect.top * 100;
 
-    if (draftPaneIds.has(pane.id)) {
-      const focused = desktop.focusedPaneId === pane.id;
-      return (
+  const tileStyle: CSSProperties = {
+    left: `calc(${leftPct}% + ${TILE_GAP_PX / 2}px)`,
+    top: `calc(${topPct}% + ${TILE_GAP_PX / 2}px)`,
+    width: `calc(${widthPct}% - ${TILE_GAP_PX}px)`,
+    height: `calc(${heightPct}% - ${TILE_GAP_PX}px)`,
+    zIndex: zoomed ? 3 : focused ? 2 : 1,
+  };
+
+  const handleTileClick = () => {
+    if (exposeMode) {
+      onFocus(pane.id);
+      onExitExpose();
+    }
+  };
+
+  if (draftPaneIds.has(pane.id)) {
+    return (
+      <div
+        className={`agent-pane-tile ${dimmed ? "is-dimmed" : ""}`}
+        style={tileStyle}
+        onClick={handleTileClick}
+      >
         <section
-          key={pane.id}
           className={`agent-window-shell is-draft ${focused ? "is-focused" : ""}`}
           onMouseDown={() => onFocus(pane.id)}
         >
           {renderDraftLauncher(pane.id)}
         </section>
-      );
-    }
+      </div>
+    );
+  }
 
-    const session = sessionInfoById[pane.sessionId];
-    const agent = agentUiBySession[pane.sessionId] ?? emptyAgentSessionState();
-    const blocked = agent.pendingApprovals.length > 0;
-    const focused = desktop.focusedPaneId === pane.id;
-    const status: AgentStatus = deriveAgentStatus(agent, Boolean(agent.finished));
-    const taskName = deriveTaskName(session);
-    const agentType = deriveAgentType(session);
-    const worktreeLabel = session?.worktree_path
-      ? basenameOfPath(session.worktree_path)
-      : session?.cwd
-        ? basenameOfPath(session.cwd)
-        : null;
-    const progressPct = deriveProgressPct(agent);
-    const toolCounts = toolCallCount(agent);
-    const showInspector =
-      toolCounts.total > 0 ||
-      agent.fileEdits.length > 0 ||
-      agent.widgets.length > 0;
+  const session = sessionInfoById[pane.sessionId];
+  const agent = agentUiBySession[pane.sessionId] ?? emptyAgentSessionState();
+  const blocked = agent.pendingApprovals.length > 0;
+  const status: AgentStatus = deriveAgentStatus(agent, Boolean(agent.finished));
+  const taskName = deriveTaskName(session);
+  const agentType = deriveAgentType(session);
+  const worktreeLabel = session?.worktree_path
+    ? basenameOfPath(session.worktree_path)
+    : session?.cwd
+      ? basenameOfPath(session.cwd)
+      : null;
+  const progressPct = deriveProgressPct(agent);
+  const toolCounts = toolCallCount(agent);
+  const showInspector =
+    toolCounts.total > 0 || agent.fileEdits.length > 0 || agent.widgets.length > 0;
 
-    return (
+  return (
+    <div
+      className={`agent-pane-tile ${dimmed ? "is-dimmed" : ""}`}
+      style={tileStyle}
+      onClick={handleTileClick}
+    >
       <section
-        key={pane.id}
         className={`agent-window-shell ${focused ? "is-focused" : ""} ${
           status === "needs_help" ? "is-needs-help" : ""
         }`}
@@ -1624,7 +1798,7 @@ function renderLayout(
           controls={{
             onClose: () => void onCloseChrome(pane.id),
             onMaximize: () => onToggleMaximize(pane.id),
-            maximized: maximizedPaneId === pane.id,
+            maximized: zoomed,
           }}
           draggable
           onDragStart={(event) => {
@@ -1694,141 +1868,95 @@ function renderLayout(
         )}
         <EdgeSpawner onSpawn={(direction) => onSpawnAdjacent(pane.id, direction)} />
       </section>
-    );
-  }
-
-  const visibleChildren = node.children
-    .map((child, index) => ({ child, index }))
-    .filter(({ child }) => !isLayoutNodeFullyHidden(child, ctx));
-
-  if (visibleChildren.length === 0) return null;
-
-  if (visibleChildren.length === 1) {
-    return renderLayout(visibleChildren[0]!.child, ctx, [
-      ...path,
-      visibleChildren[0]!.index,
-    ]);
-  }
-
-  const weights = visibleChildren.map(({ index }) => node.weights[index] ?? 1);
-  const handleSizePx = 6;
-  const template =
-    node.direction === "horizontal"
-      ? { gridTemplateColumns: buildSplitTemplate(weights, handleSizePx) }
-      : { gridTemplateRows: buildSplitTemplate(weights, handleSizePx) };
-  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-
-  return (
-    <div
-      style={{
-        minHeight: 0,
-        height: "100%",
-        display: "grid",
-        ...template,
-      }}
-    >
-      {visibleChildren.flatMap(({ child, index }, visibleIndex) => {
-        const childNode = (
-          <div
-            key={`${path.join("-") || "root"}-child-${index}`}
-            style={{
-              minHeight: 0,
-              minWidth: 0,
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            {renderLayout(child, ctx, [...path, index])}
-          </div>
-        );
-
-        if (visibleIndex === visibleChildren.length - 1) {
-          return [childNode];
-        }
-
-        return [
-          childNode,
-          <ResizeHandle
-            key={`${path.join("-") || "root"}-handle-${index}`}
-            direction={node.direction}
-            onResize={(delta) => onResize(path, index, delta, node.weights)}
-            totalWeight={totalWeight}
-          />,
-        ];
-      })}
+      {exposeMode && (
+        <div className="agent-expose-hover-badge" aria-hidden>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
+            <path d="M2 2 h4 M2 2 v4" strokeLinecap="round" />
+            <path d="M14 2 h-4 M14 2 v4" strokeLinecap="round" />
+            <path d="M2 14 h4 M2 14 v-4" strokeLinecap="round" />
+            <path d="M14 14 h-4 M14 14 v-4" strokeLinecap="round" />
+          </svg>
+          <span>Jump</span>
+        </div>
+      )}
     </div>
   );
 }
 
-function isLayoutNodeFullyHidden(node: LayoutNode, ctx: RenderLayoutCtx): boolean {
-  if (node.type === "leaf") {
-    if (ctx.desktop.maximizedPaneId && ctx.desktop.maximizedPaneId !== node.paneId) {
-      return true;
-    }
-    return false;
-  }
-  return node.children.every((child) => isLayoutNodeFullyHidden(child, ctx));
-}
-
-function buildSplitTemplate(weights: number[], handleSizePx: number): string {
-  return weights
-    .map((weight, index) =>
-      index < weights.length - 1 ? `${weight}fr ${handleSizePx}px` : `${weight}fr`,
-    )
-    .join(" ");
-}
-
-function ResizeHandle({
-  direction,
+function SplitHandle({
+  handle,
+  stageSize,
   onResize,
-  totalWeight,
 }: {
-  direction: SplitDirection;
-  onResize: (delta: number) => void;
-  totalWeight: number;
+  handle: SplitHandleInfo;
+  stageSize: { w: number; h: number };
+  onResize: (
+    path: LayoutPath,
+    handleIndex: number,
+    delta: number,
+    baseWeights: number[],
+  ) => void;
 }) {
   const [dragging, setDragging] = useState(false);
+  const horizontal = handle.direction === "horizontal";
+  const hoverSize = 8;
+  const style: CSSProperties = horizontal
+    ? {
+        left: `calc(${handle.position * 100}% - ${hoverSize / 2}px)`,
+        top: `${handle.start * 100}%`,
+        width: hoverSize,
+        height: `${(handle.end - handle.start) * 100}%`,
+      }
+    : {
+        left: `${handle.start * 100}%`,
+        top: `calc(${handle.position * 100}% - ${hoverSize / 2}px)`,
+        width: `${(handle.end - handle.start) * 100}%`,
+        height: hoverSize,
+      };
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const totalWeight = handle.weights.reduce((sum, weight) => sum + weight, 0);
+    const extentPx =
+      (horizontal ? stageSize.w : stageSize.h) * handle.parentExtent;
+    if (extentPx <= 0 || totalWeight <= 0) return;
+
+    const startPosition = horizontal ? event.clientX : event.clientY;
+    const baseWeights = handle.weights;
+    const handleEl = event.currentTarget;
+    const pointerId = event.pointerId;
+    handleEl.setPointerCapture(pointerId);
+    setDragging(true);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const nextPosition = horizontal ? moveEvent.clientX : moveEvent.clientY;
+      const pixelDelta = nextPosition - startPosition;
+      const weightDelta = (pixelDelta / extentPx) * totalWeight;
+      onResize(handle.path, handle.handleIndex, weightDelta, baseWeights);
+    };
+    const cleanup = () => {
+      handleEl.removeEventListener("pointermove", onMove as EventListener);
+      handleEl.removeEventListener("pointerup", cleanup);
+      handleEl.removeEventListener("pointercancel", cleanup);
+      if (handleEl.hasPointerCapture(pointerId)) {
+        handleEl.releasePointerCapture(pointerId);
+      }
+      setDragging(false);
+    };
+
+    handleEl.addEventListener("pointermove", onMove as EventListener);
+    handleEl.addEventListener("pointerup", cleanup);
+    handleEl.addEventListener("pointercancel", cleanup);
+  };
 
   return (
     <div
-      aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
       role="separator"
-      className={`agent-split-handle is-${direction}${dragging ? " is-dragging" : ""}`}
-      onPointerDown={(event) => {
-        const handleElement = event.currentTarget;
-        const container = handleElement.parentElement;
-        if (!container) return;
-
-        event.preventDefault();
-        const startPosition =
-          direction === "horizontal" ? event.clientX : event.clientY;
-        const extent =
-          direction === "horizontal" ? container.clientWidth : container.clientHeight;
-        if (extent <= 0 || totalWeight <= 0) return;
-
-        const pointerId = event.pointerId;
-        handleElement.setPointerCapture(pointerId);
-        setDragging(true);
-
-        const handleMove = (moveEvent: PointerEvent) => {
-          const nextPosition =
-            direction === "horizontal" ? moveEvent.clientX : moveEvent.clientY;
-          onResize(((nextPosition - startPosition) / extent) * totalWeight);
-        };
-        const cleanup = () => {
-          handleElement.removeEventListener("pointermove", handleMove as EventListener);
-          handleElement.removeEventListener("pointerup", cleanup);
-          handleElement.removeEventListener("pointercancel", cleanup);
-          if (handleElement.hasPointerCapture(pointerId)) {
-            handleElement.releasePointerCapture(pointerId);
-          }
-          setDragging(false);
-        };
-
-        handleElement.addEventListener("pointermove", handleMove as EventListener);
-        handleElement.addEventListener("pointerup", cleanup);
-        handleElement.addEventListener("pointercancel", cleanup);
-      }}
+      aria-orientation={horizontal ? "vertical" : "horizontal"}
+      className={`agent-split-handle is-${handle.direction}${dragging ? " is-dragging" : ""}`}
+      style={style}
+      onPointerDown={onPointerDown}
     />
   );
 }

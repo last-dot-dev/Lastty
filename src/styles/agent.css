@@ -199,6 +199,39 @@
   color: var(--color-text-primary);
 }
 
+.agent-desktop-strip__spacer {
+  flex: 1;
+  align-self: stretch;
+  min-width: 8px;
+}
+
+.agent-desktop-strip__overview {
+  align-self: center;
+  margin-right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 20px;
+  border: 1px solid var(--color-border-tertiary);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+
+.agent-desktop-strip__overview:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-secondary);
+}
+
+.agent-desktop-strip__overview.is-active {
+  background: var(--color-text-primary);
+  color: var(--color-background-primary);
+  border-color: var(--color-text-primary);
+}
+
 /* ---------------- Body + sidebar ---------------- */
 
 .agent-body {
@@ -1108,6 +1141,16 @@
   color: var(--color-text-primary);
 }
 
+.agent-settings-toggle.is-active {
+  background: var(--color-text-primary);
+  color: var(--color-background-primary);
+}
+
+.agent-settings-toggle.is-active:hover {
+  background: var(--color-text-primary);
+  color: var(--color-background-primary);
+}
+
 /* ---------------- Terminal launch buttons ---------------- */
 
 .terminal-launch-row {
@@ -1164,18 +1207,155 @@
   min-width: 0;
   min-height: 0;
   background: var(--color-border-tertiary);
-  gap: 1px;
+  gap: 0;
   padding: 0;
   overflow: hidden;
+}
+
+/* ---------------- Stage (absolute-tiled panes) ---------------- */
+
+.agent-stage {
+  position: absolute;
+  inset: 0;
+  background: var(--color-border-tertiary);
+  overflow: hidden;
+}
+
+.agent-desktop-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+  transition:
+    transform 340ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 340ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.agent-desktop-layer.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.agent-stage__inner {
+  position: absolute;
+  inset: 0;
+}
+
+.agent-pane-tile {
+  position: absolute;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  transition:
+    left 340ms cubic-bezier(0.22, 1, 0.36, 1),
+    top 340ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 340ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 340ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 220ms ease,
+    opacity 220ms ease;
+}
+
+.agent-pane-tile > .agent-window-shell {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+}
+
+.agent-pane-tile.is-dimmed {
+  pointer-events: none;
+}
+
+.agent-expose-active .agent-pane-tile {
+  cursor: pointer;
+}
+
+.agent-expose-active .agent-edge-spawner,
+.agent-expose-active .agent-traffic-lights,
+.agent-expose-active .agent-window-header__history {
+  display: none !important;
+}
+
+.agent-expose-active .agent-pane-tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 2px solid transparent;
+  pointer-events: none;
+  transition: background 160ms ease, border-color 160ms ease;
+  z-index: 5;
+}
+
+.agent-expose-active .agent-pane-tile:hover::after {
+  background: color-mix(in oklab, var(--color-accent, #2a7fff) 14%, transparent);
+  border-color: var(--color-accent, #2a7fff);
+}
+
+.agent-expose-active .agent-pane-tile .agent-expose-hover-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.9);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--color-background-primary);
+  border: 1px solid var(--color-accent, #2a7fff);
+  color: var(--color-accent, #2a7fff);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease, transform 160ms ease;
+  z-index: 6;
+  white-space: nowrap;
+}
+
+.agent-expose-active .agent-pane-tile:hover .agent-expose-hover-badge {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.agent-expose-hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-background-secondary);
+  border: 1px solid var(--color-border-secondary);
+  padding: 6px 12px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  pointer-events: none;
+  z-index: 50;
+}
+
+.agent-expose-hint kbd {
+  font-family: inherit;
+  border: 1px solid var(--color-border-secondary);
+  padding: 1px 5px;
+  margin: 0 2px;
+  font-size: 10px;
+  background: var(--color-background-tertiary, var(--color-background-primary));
 }
 
 /* ---------------- Split resize handle ---------------- */
 
 .agent-split-handle {
-  position: relative;
+  position: absolute;
   background: transparent;
   touch-action: none;
   user-select: none;
+  z-index: 20;
 }
 
 .agent-split-handle.is-horizontal { cursor: col-resize; }
