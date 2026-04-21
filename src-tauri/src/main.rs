@@ -18,6 +18,9 @@ use lastty::terminal::render::spawn_frame_emitter;
 use lastty::{bus, commands};
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    fix_path_from_login_shell();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::from_default_env().add_directive("lastty=debug".parse().unwrap()),
@@ -165,4 +168,27 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error running lastty");
+}
+
+#[cfg(target_os = "macos")]
+fn fix_path_from_login_shell() {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let Ok(output) = std::process::Command::new(&shell)
+        .args(["-l", "-c", "printf %s \"$PATH\""])
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let Ok(path) = std::str::from_utf8(&output.stdout) else {
+        return;
+    };
+    let path = path.trim();
+    if path.is_empty() {
+        return;
+    }
+    // SAFETY: runs as the first line of main(), before any threads are spawned.
+    unsafe { std::env::set_var("PATH", path) };
 }

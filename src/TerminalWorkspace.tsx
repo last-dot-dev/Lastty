@@ -903,6 +903,7 @@ export default function TerminalWorkspace() {
       reloadWorktrees();
     } catch (error) {
       console.error("failed to launch agent", error);
+      window.alert(`Failed to launch agent: ${error}`);
     } finally {
       setLaunching(false);
     }
