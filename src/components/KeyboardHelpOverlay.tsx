@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 
 import {
-  BINDINGS,
-  formatKey,
+  bindingsForMode,
+  describeKeyboardMode,
+  formatShortcut,
   type Binding,
   type Category,
+  type KeyboardMode,
   type Platform,
 } from "../app/keybindings";
 
@@ -12,12 +14,14 @@ const CATEGORY_ORDER: Category[] = ["Navigation", "Panes", "Desktops", "Help"];
 
 export interface KeyboardHelpOverlayProps {
   open: boolean;
+  mode: KeyboardMode;
   platform: Platform;
   onClose: () => void;
 }
 
 export default function KeyboardHelpOverlay({
   open,
+  mode,
   platform,
   onClose,
 }: KeyboardHelpOverlayProps) {
@@ -46,7 +50,7 @@ export default function KeyboardHelpOverlay({
 
   if (!open) return null;
 
-  const grouped = groupByCategory(BINDINGS);
+  const grouped = groupByCategory(bindingsForMode(mode));
 
   return (
     <div
@@ -65,7 +69,7 @@ export default function KeyboardHelpOverlay({
           <div>
             <div className="keyboard-help-eyebrow">Keyboard Shortcuts</div>
             <div className="keyboard-help-subtitle" id="keyboard-help-title">
-              {platform === "mac" ? "⌘⌃ + key" : "Ctrl+Shift + key"}
+              {describeKeyboardMode(mode, platform)}
             </div>
           </div>
           <button
@@ -90,14 +94,21 @@ export default function KeyboardHelpOverlay({
                     <li className="keyboard-help-row" key={rowKey(binding)}>
                       <span className="keyboard-help-label">{binding.label}</span>
                       <span className="keyboard-help-keys">
-                        {binding.keys.map((spec, index) => (
+                        {binding.shortcuts.map((shortcut, index) => (
                           <span className="keyboard-help-keys-group" key={index}>
                             {index > 0 && (
                               <span className="keyboard-help-or">or</span>
                             )}
-                            <kbd className="keyboard-help-kbd">
-                              {formatKey(spec, platform)}
-                            </kbd>
+                            {formatShortcut(shortcut, platform).map((part, partIndex) => (
+                              <span className="keyboard-help-sequence" key={`${index}-${partIndex}`}>
+                                {partIndex > 0 && (
+                                  <span className="keyboard-help-then">then</span>
+                                )}
+                                <kbd className="keyboard-help-kbd">
+                                  {part}
+                                </kbd>
+                              </span>
+                            ))}
                           </span>
                         ))}
                       </span>

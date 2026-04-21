@@ -36,6 +36,15 @@ function repaintAfterThemeChange(terminal: Terminal): void {
   }
 }
 
+function focusTerminalIfActive(entry: Entry): void {
+  if (!entry.focusedRef.current || entry.blockedRef.current) return;
+  try {
+    entry.terminal.focus();
+  } catch {
+    // terminal may not yet be attached
+  }
+}
+
 export interface SessionHostProps {
   blocked: boolean;
   focused: boolean;
@@ -282,6 +291,7 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
 
   console.log(`[resume] initEntry terminal.open ${sessionId}`);
   terminal.open(host);
+  focusTerminalIfActive(entry);
   bindWheelScroll(entry);
   entry.resizeObserver = new ResizeObserver(() => {
     if (entry.disposed) return;
@@ -433,13 +443,7 @@ export function attachTerminalHost(
     repaintAfterThemeChange(entry.terminal);
   }
 
-  if (props.focused && !props.blocked) {
-    try {
-      entry.terminal.focus();
-    } catch {
-      // terminal may not yet be attached
-    }
-  }
+  focusTerminalIfActive(entry);
 }
 
 export function detachTerminalHost(sessionId: string): void {
@@ -469,13 +473,7 @@ export function updateTerminalHostProps(
     entry.terminal.options.theme = xtermThemeFor(props.theme);
     repaintAfterThemeChange(entry.terminal);
   }
-  if (props.focused && !entry.blockedRef.current) {
-    try {
-      entry.terminal.focus();
-    } catch {
-      // ignore
-    }
-  }
+  focusTerminalIfActive(entry);
 }
 
 export function subscribeTerminalHostStatus(

@@ -195,6 +195,26 @@ describe("layout state", () => {
     expect(findAdjacentPaneId(layout, "pane-session-a", "right")).toBe("pane-session-b");
     expect(findAdjacentPaneId(layout, "pane-session-a", "left")).toBeNull();
   });
+
+  it("prefers the spatially aligned pane instead of pane id order when moving horizontally", () => {
+    const topLeft = createPaneRecord("session-z", "top-left");
+    const initial = createWorkspace(topLeft, "/proj");
+    const withRight = splitPane(
+      initial,
+      topLeft.id,
+      "horizontal",
+      createPaneRecord("session-m", "right"),
+    );
+    const withBottomLeft = splitPane(
+      withRight,
+      topLeft.id,
+      "vertical",
+      createPaneRecord("session-a", "bottom-left"),
+    );
+    const layout = activeDesktop(withBottomLeft).layout!;
+
+    expect(findAdjacentPaneId(layout, "pane-session-m", "left")).toBe("pane-session-z");
+  });
 });
 
 describe("desktop management", () => {

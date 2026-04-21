@@ -76,6 +76,7 @@ const harness = vi.hoisted(() => {
     }
 
     focus() {
+      if (!this.host) return;
       this.focused = true;
     }
 
@@ -245,6 +246,14 @@ describe("TerminalViewport", () => {
       "\u001b[?1049h\u001b[?25lALT",
       "\u001b[?1049l\u001b[?25hMAIN",
     ]);
+  });
+
+  it("focuses the terminal after mount once xterm has been opened", async () => {
+    await renderViewport({ focused: true });
+
+    const terminal = lastTerminal();
+    expect(terminal.host).not.toBeNull();
+    expect(terminal.focused).toBe(true);
   });
 
   it("copies reversed wide-char selections from scrollback through the host copy listener", async () => {

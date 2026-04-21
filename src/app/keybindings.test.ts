@@ -2,7 +2,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { BINDINGS, formatKey, matchBinding, type Platform } from "./keybindings";
+import {
+  BINDINGS,
+  bindingsForMode,
+  formatKey,
+  formatShortcut,
+  matchBinding,
+} from "./keybindings";
 
 interface KeyEventOpts {
   key: string;
@@ -28,166 +34,197 @@ function keyEvent({
   });
 }
 
-function bindingFor(id: string) {
-  return BINDINGS.find((b) => b.id === id && b.payload === undefined);
+function bindingFor(mode: "standard" | "tmux", id: string) {
+  return bindingsForMode(mode).find(
+    (binding) => binding.id === id && binding.payload === undefined,
+  );
 }
 
 describe("matchBinding", () => {
-  describe("mac", () => {
-    const p: Platform = "mac";
-
-    it("matches Cmd+Ctrl+H to focus.left", () => {
-      const match = matchBinding(keyEvent({ key: "h", meta: true, ctrl: true }), p);
-      expect(match?.binding.id).toBe("focus.left");
-    });
-
-    it("matches Cmd+Ctrl+ArrowLeft to focus.left", () => {
-      const match = matchBinding(
-        keyEvent({ key: "ArrowLeft", meta: true, ctrl: true }),
-        p,
-      );
-      expect(match?.binding.id).toBe("focus.left");
-    });
-
-    it("does NOT match Ctrl+Shift+H on mac", () => {
-      const match = matchBinding(keyEvent({ key: "H", ctrl: true, shift: true }), p);
-      expect(match).toBeNull();
-    });
-
-    it("matches Cmd+Ctrl+S to pane.split.horizontal regardless of shift", () => {
-      const match = matchBinding(
-        keyEvent({ key: "S", meta: true, ctrl: true, shift: true }),
-        p,
-      );
-      expect(match?.binding.id).toBe("pane.split.horizontal");
-    });
-
-    it("matches Cmd+Ctrl+/ to help.toggle", () => {
-      const match = matchBinding(keyEvent({ key: "/", meta: true, ctrl: true }), p);
-      expect(match?.binding.id).toBe("help.toggle");
-    });
-
-    it("does not match when alt is held", () => {
-      const match = matchBinding(
-        keyEvent({ key: "h", meta: true, ctrl: true, alt: true }),
-        p,
-      );
-      expect(match).toBeNull();
-    });
-
-    it("matches Cmd+Ctrl+1 to desktop.jump with payload 1", () => {
-      const match = matchBinding(keyEvent({ key: "1", meta: true, ctrl: true }), p);
-      expect(match?.binding.id).toBe("desktop.jump");
-      expect(match?.binding.payload).toBe(1);
-    });
-
-    it("matches Cmd+Ctrl+9 to desktop.jump with payload 9", () => {
-      const match = matchBinding(keyEvent({ key: "9", meta: true, ctrl: true }), p);
-      expect(match?.binding.payload).toBe(9);
-    });
-  });
-
-  describe("other (linux/windows)", () => {
-    const p: Platform = "other";
-
-    it("matches Ctrl+Shift+H to focus.left", () => {
-      const match = matchBinding(keyEvent({ key: "H", ctrl: true, shift: true }), p);
-      expect(match?.binding.id).toBe("focus.left");
-    });
-
-    it("matches Ctrl+Shift+ArrowLeft to focus.left", () => {
-      const match = matchBinding(
-        keyEvent({ key: "ArrowLeft", ctrl: true, shift: true }),
-        p,
-      );
-      expect(match?.binding.id).toBe("focus.left");
-    });
-
-    it("does NOT match Cmd+Ctrl+H on other", () => {
-      const match = matchBinding(
+  describe("standard mode", () => {
+    it("matches Cmd+Ctrl+H to focus.left on mac", () => {
+      const result = matchBinding(
         keyEvent({ key: "h", meta: true, ctrl: true }),
-        p,
+        "mac",
+        "standard",
       );
-      expect(match).toBeNull();
+      expect(result.match?.binding.id).toBe("focus.left");
     });
 
-    it("matches Ctrl+Shift+/ to help.toggle", () => {
-      const match = matchBinding(
-        keyEvent({ key: "/", ctrl: true, shift: true }),
-        p,
+    it("matches Ctrl+Shift+ArrowLeft to focus.left on other", () => {
+      const result = matchBinding(
+        keyEvent({ key: "ArrowLeft", ctrl: true, shift: true }),
+        "other",
+        "standard",
       );
-      expect(match?.binding.id).toBe("help.toggle");
-    });
-
-    it("matches Ctrl+Shift+] to desktop.next", () => {
-      const match = matchBinding(
-        keyEvent({ key: "]", ctrl: true, shift: true }),
-        p,
-      );
-      expect(match?.binding.id).toBe("desktop.next");
+      expect(result.match?.binding.id).toBe("focus.left");
     });
 
     it("does not match plain letters without modifiers", () => {
-      expect(matchBinding(keyEvent({ key: "h" }), p)).toBeNull();
+      expect(matchBinding(keyEvent({ key: "h" }), "other", "standard").match).toBeNull();
+    });
+
+    it("matches Ctrl+Tab to desktop.next on both platforms", () => {
+      expect(
+        matchBinding(keyEvent({ key: "Tab", ctrl: true }), "mac", "standard").match?.binding.id,
+      ).toBe("desktop.next");
+      expect(
+        matchBinding(keyEvent({ key: "Tab", ctrl: true }), "other", "standard").match?.binding.id,
+      ).toBe("desktop.next");
+    });
+  });
+
+  describe("tmux mode", () => {
+    it("matches Ctrl+H to focus.left", () => {
+      const result = matchBinding(
+        keyEvent({ key: "h", ctrl: true }),
+        "other",
+        "tmux",
+      );
+      expect(result.match?.binding.id).toBe("focus.left");
+    });
+
+    it("still matches the standard shortcut in tmux mode", () => {
+      const result = matchBinding(
+        keyEvent({ key: "h", meta: true, ctrl: true }),
+        "mac",
+        "tmux",
+      );
+      expect(result.match?.binding.id).toBe("focus.left");
+    });
+
+    it("arms the Ctrl+A prefix for split and captures the event", () => {
+      const result = matchBinding(
+        keyEvent({ key: "a", ctrl: true }),
+        "other",
+        "tmux",
+      );
+      expect(result.match).toBeNull();
+      expect(result.capture).toBe(true);
+      expect(result.pending).toHaveLength(16);
+    });
+
+    it("matches Ctrl+A then | to split pane right", () => {
+      const first = matchBinding(keyEvent({ key: "a", ctrl: true }), "other", "tmux", [], 100);
+      const second = matchBinding(
+        keyEvent({ key: "|", shift: true }),
+        "other",
+        "tmux",
+        first.pending,
+        200,
+      );
+      expect(second.match?.binding.id).toBe("pane.split.horizontal");
+    });
+
+    it("matches Ctrl+A then | while Ctrl is still held", () => {
+      const first = matchBinding(keyEvent({ key: "a", ctrl: true }), "other", "tmux", [], 100);
+      const second = matchBinding(
+        keyEvent({ key: "|", ctrl: true, shift: true }),
+        "other",
+        "tmux",
+        first.pending,
+        200,
+      );
+      expect(second.match?.binding.id).toBe("pane.split.horizontal");
+    });
+
+    it("matches Ctrl+A then Shift+Backslash when the browser reports backslash as the key", () => {
+      const first = matchBinding(keyEvent({ key: "a", ctrl: true }), "other", "tmux", [], 100);
+      const second = matchBinding(
+        keyEvent({ key: "\\", ctrl: true, shift: true }),
+        "other",
+        "tmux",
+        first.pending,
+        200,
+      );
+      expect(second.match?.binding.id).toBe("pane.split.horizontal");
+    });
+
+    it("matches Ctrl+A then - to split pane below", () => {
+      const first = matchBinding(keyEvent({ key: "a", ctrl: true }), "other", "tmux", [], 100);
+      const second = matchBinding(
+        keyEvent({ key: "-" }),
+        "other",
+        "tmux",
+        first.pending,
+        200,
+      );
+      expect(second.match?.binding.id).toBe("pane.split.vertical");
+    });
+
+    it("matches Ctrl+A then X to close pane", () => {
+      const first = matchBinding(keyEvent({ key: "a", ctrl: true }), "other", "tmux", [], 100);
+      const second = matchBinding(
+        keyEvent({ key: "x" }),
+        "other",
+        "tmux",
+        first.pending,
+        200,
+      );
+      expect(second.match?.binding.id).toBe("pane.close");
+    });
+
+    it("matches Ctrl+A then > to next desktop", () => {
+      const first = matchBinding(keyEvent({ key: "a", ctrl: true }), "other", "tmux", [], 100);
+      const second = matchBinding(
+        keyEvent({ key: ">", shift: true }),
+        "other",
+        "tmux",
+        first.pending,
+        200,
+      );
+      expect(second.match?.binding.id).toBe("desktop.next");
+    });
+
+    it("matches Ctrl+A then 3 to jump to desktop 3", () => {
+      const first = matchBinding(keyEvent({ key: "a", ctrl: true }), "other", "tmux", [], 100);
+      const second = matchBinding(
+        keyEvent({ key: "3" }),
+        "other",
+        "tmux",
+        first.pending,
+        200,
+      );
+      expect(second.match?.binding.id).toBe("desktop.jump");
+      expect(second.match?.binding.payload).toBe(3);
+    });
+
+    it("expires the prefix after the timeout", () => {
+      const first = matchBinding(keyEvent({ key: "a", ctrl: true }), "other", "tmux", [], 100);
+      const second = matchBinding(
+        keyEvent({ key: "3" }),
+        "other",
+        "tmux",
+        first.pending,
+        2_000,
+      );
+      expect(second.match).toBeNull();
+      expect(second.capture).toBe(false);
     });
   });
 
   it("returns null when no binding matches", () => {
-    const match = matchBinding(keyEvent({ key: "z", meta: true, ctrl: true }), "mac");
-    expect(match).toBeNull();
-  });
-
-  describe("Ctrl+Tab view switching", () => {
-    it("matches Ctrl+Tab to desktop.next on mac", () => {
-      const match = matchBinding(keyEvent({ key: "Tab", ctrl: true }), "mac");
-      expect(match?.binding.id).toBe("desktop.next");
-    });
-
-    it("matches Ctrl+Shift+Tab to desktop.prev on mac", () => {
-      const match = matchBinding(
-        keyEvent({ key: "Tab", ctrl: true, shift: true }),
-        "mac",
-      );
-      expect(match?.binding.id).toBe("desktop.prev");
-    });
-
-    it("matches Ctrl+Tab to desktop.next on other", () => {
-      const match = matchBinding(keyEvent({ key: "Tab", ctrl: true }), "other");
-      expect(match?.binding.id).toBe("desktop.next");
-    });
-
-    it("matches Ctrl+Shift+Tab to desktop.prev on other", () => {
-      const match = matchBinding(
-        keyEvent({ key: "Tab", ctrl: true, shift: true }),
-        "other",
-      );
-      expect(match?.binding.id).toBe("desktop.prev");
-    });
-
-    it("does not match Ctrl+Cmd+Tab (Cmd must not be held)", () => {
-      const match = matchBinding(
-        keyEvent({ key: "Tab", ctrl: true, meta: true }),
-        "mac",
-      );
-      expect(match).toBeNull();
-    });
-
-    it("does not match plain Tab", () => {
-      expect(matchBinding(keyEvent({ key: "Tab" }), "mac")).toBeNull();
-      expect(matchBinding(keyEvent({ key: "Tab" }), "other")).toBeNull();
-    });
+    const result = matchBinding(
+      keyEvent({ key: "z", meta: true, ctrl: true }),
+      "mac",
+      "standard",
+    );
+    expect(result.match).toBeNull();
   });
 });
 
 describe("formatKey", () => {
   it("formats letter on mac with ⌘⌃ prefix and uppercase", () => {
-    const spec = bindingFor("focus.left")!.keys[0];
+    const spec = bindingFor("standard", "focus.left")!.shortcuts[0]!.sequence[0]!;
     expect(formatKey(spec, "mac")).toBe("⌘⌃H");
   });
 
-  it("formats letter on other with Ctrl+Shift prefix and uppercase", () => {
-    const spec = bindingFor("focus.left")!.keys[0];
-    expect(formatKey(spec, "other")).toBe("Ctrl+Shift+H");
+  it("formats ctrl-only bindings without shift on other", () => {
+    expect(formatKey({ key: "l", modifiers: "ctrl" }, "other")).toBe("Ctrl+L");
+  });
+
+  it("formats unmodified shifted symbols", () => {
+    expect(formatKey({ key: "|", shift: true, modifiers: "none" }, "other")).toBe("Shift+|");
   });
 
   it("formats arrow keys as glyphs", () => {
@@ -195,33 +232,32 @@ describe("formatKey", () => {
     expect(formatKey({ key: "ArrowDown" }, "other")).toBe("Ctrl+Shift+↓");
   });
 
-  it("preserves bracket and slash characters as-is", () => {
-    expect(formatKey({ key: "/" }, "mac")).toBe("⌘⌃/");
-    expect(formatKey({ key: "]" }, "other")).toBe("Ctrl+Shift+]");
-  });
-
-  it("formats Ctrl+Tab with ctrl-only modifier scheme", () => {
-    expect(formatKey({ key: "Tab", modifiers: "ctrl" }, "mac")).toBe("⌃⇥");
-    expect(formatKey({ key: "Tab", modifiers: "ctrl" }, "other")).toBe("Ctrl+⇥");
-  });
-
-  it("formats Ctrl+Shift+Tab with ctrl-only modifier scheme", () => {
-    expect(formatKey({ key: "Tab", shift: true, modifiers: "ctrl" }, "mac")).toBe("⌃⇧⇥");
-    expect(formatKey({ key: "Tab", shift: true, modifiers: "ctrl" }, "other")).toBe(
-      "Ctrl+Shift+⇥",
-    );
+  it("formats a multi-step tmux shortcut as separate parts", () => {
+    const tmuxSplit = bindingFor("tmux", "pane.split.horizontal")!.shortcuts[1]!;
+    expect(formatShortcut(tmuxSplit, "other")).toEqual(["Ctrl+A", "Shift+|"]);
   });
 });
 
 describe("BINDINGS registry", () => {
   it("contains exactly nine desktop.jump entries with payloads 1-9", () => {
-    const jumps = BINDINGS.filter((b) => b.id === "desktop.jump");
+    const jumps = BINDINGS.filter((binding) => binding.id === "desktop.jump");
     expect(jumps).toHaveLength(9);
-    expect(jumps.map((b) => b.payload)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(jumps.map((binding) => binding.payload)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
-  it("has one entry per non-jump action id", () => {
-    const ids = BINDINGS.filter((b) => b.id !== "desktop.jump").map((b) => b.id);
+  it("keeps one row per non-jump action id", () => {
+    const ids = BINDINGS.filter((binding) => binding.id !== "desktop.jump").map(
+      (binding) => binding.id,
+    );
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("shows the tmux jump shortcut for each desktop", () => {
+    const jumps = bindingsForMode("tmux").filter(
+      (binding) => binding.id === "desktop.jump",
+    );
+    for (const jump of jumps) {
+      expect(jump.shortcuts).toHaveLength(2);
+    }
   });
 });

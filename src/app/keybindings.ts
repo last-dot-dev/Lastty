@@ -1,11 +1,20 @@
 export type Platform = "mac" | "other";
 
-export type ModifierScheme = "platform" | "ctrl";
+export type KeyboardMode = "standard" | "tmux";
+
+export type ModifierScheme = "platform" | "ctrl" | "none";
 
 export interface KeySpec {
   key: string;
+  matchKeys?: string[];
   shift?: boolean;
   modifiers?: ModifierScheme;
+  allowCtrl?: boolean;
+}
+
+export interface Shortcut {
+  sequence: KeySpec[];
+  modes?: KeyboardMode[];
 }
 
 export type ActionId =
@@ -27,7 +36,7 @@ export type Category = "Navigation" | "Panes" | "Desktops" | "Help";
 
 export interface Binding {
   id: ActionId;
-  keys: KeySpec[];
+  shortcuts: Shortcut[];
   category: Category;
   label: string;
   payload?: number;
@@ -35,86 +44,222 @@ export interface Binding {
 
 export interface BindingMatch {
   binding: Binding;
-  spec: KeySpec;
+  shortcut: Shortcut;
 }
+
+export interface PendingBinding {
+  binding: Binding;
+  shortcut: Shortcut;
+  nextIndex: number;
+  expiresAtMs: number;
+}
+
+export interface BindingResolution {
+  match: BindingMatch | null;
+  pending: PendingBinding[];
+  capture: boolean;
+}
+
+const ALL_MODES: KeyboardMode[] = ["standard", "tmux"];
+const TMUX_ONLY: KeyboardMode[] = ["tmux"];
+const PREFIX_TIMEOUT_MS = 1_500;
+
+export const DEFAULT_KEYBOARD_MODE: KeyboardMode = "standard";
 
 export const BINDINGS: Binding[] = [
   {
     id: "focus.left",
-    keys: [{ key: "h" }, { key: "ArrowLeft" }],
+    shortcuts: [
+      { sequence: [{ key: "h" }], modes: ALL_MODES },
+      { sequence: [{ key: "ArrowLeft" }], modes: ALL_MODES },
+      { sequence: [{ key: "h", modifiers: "ctrl" }], modes: TMUX_ONLY },
+    ],
     category: "Navigation",
     label: "Focus pane left",
   },
   {
     id: "focus.down",
-    keys: [{ key: "j" }, { key: "ArrowDown" }],
+    shortcuts: [
+      { sequence: [{ key: "j" }], modes: ALL_MODES },
+      { sequence: [{ key: "ArrowDown" }], modes: ALL_MODES },
+      { sequence: [{ key: "j", modifiers: "ctrl" }], modes: TMUX_ONLY },
+    ],
     category: "Navigation",
     label: "Focus pane down",
   },
   {
     id: "focus.up",
-    keys: [{ key: "k" }, { key: "ArrowUp" }],
+    shortcuts: [
+      { sequence: [{ key: "k" }], modes: ALL_MODES },
+      { sequence: [{ key: "ArrowUp" }], modes: ALL_MODES },
+      { sequence: [{ key: "k", modifiers: "ctrl" }], modes: TMUX_ONLY },
+    ],
     category: "Navigation",
     label: "Focus pane up",
   },
   {
     id: "focus.right",
-    keys: [{ key: "l" }, { key: "ArrowRight" }],
+    shortcuts: [
+      { sequence: [{ key: "l" }], modes: ALL_MODES },
+      { sequence: [{ key: "ArrowRight" }], modes: ALL_MODES },
+      { sequence: [{ key: "l", modifiers: "ctrl" }], modes: TMUX_ONLY },
+    ],
     category: "Navigation",
     label: "Focus pane right",
   },
   {
     id: "pane.split.horizontal",
-    keys: [{ key: "s" }],
+    shortcuts: [
+      { sequence: [{ key: "s" }], modes: ALL_MODES },
+      {
+        sequence: [
+          { key: "a", modifiers: "ctrl" },
+          {
+            key: "|",
+            matchKeys: ["|", "\\"],
+            shift: true,
+            modifiers: "none",
+            allowCtrl: true,
+          },
+        ],
+        modes: TMUX_ONLY,
+      },
+    ],
     category: "Panes",
-    label: "Split pane (stacked)",
+    label: "Split pane right",
   },
   {
     id: "pane.split.vertical",
-    keys: [{ key: "v" }],
+    shortcuts: [
+      { sequence: [{ key: "v" }], modes: ALL_MODES },
+      {
+        sequence: [
+          { key: "a", modifiers: "ctrl" },
+          { key: "-", modifiers: "none", allowCtrl: true },
+        ],
+        modes: TMUX_ONLY,
+      },
+    ],
     category: "Panes",
-    label: "Split pane (side by side)",
+    label: "Split pane below",
   },
   {
     id: "pane.close",
-    keys: [{ key: "c" }],
+    shortcuts: [
+      { sequence: [{ key: "c" }], modes: ALL_MODES },
+      {
+        sequence: [
+          { key: "a", modifiers: "ctrl" },
+          { key: "x", modifiers: "none", allowCtrl: true },
+        ],
+        modes: TMUX_ONLY,
+      },
+    ],
     category: "Panes",
     label: "Close focused pane",
   },
   {
     id: "agent.launch",
-    keys: [{ key: "a" }],
+    shortcuts: [{ sequence: [{ key: "a" }], modes: ALL_MODES }],
     category: "Panes",
     label: "Launch agent",
   },
   {
     id: "desktop.new",
-    keys: [{ key: "t" }],
+    shortcuts: [
+      { sequence: [{ key: "t" }], modes: ALL_MODES },
+      {
+        sequence: [
+          { key: "a", modifiers: "ctrl" },
+          { key: "c", modifiers: "none", allowCtrl: true },
+        ],
+        modes: TMUX_ONLY,
+      },
+    ],
     category: "Desktops",
     label: "New desktop",
   },
   {
     id: "desktop.next",
-    keys: [{ key: "]" }, { key: "Tab", modifiers: "ctrl" }],
+    shortcuts: [
+      { sequence: [{ key: "]" }], modes: ALL_MODES },
+      { sequence: [{ key: "Tab", modifiers: "ctrl" }], modes: ALL_MODES },
+      {
+        sequence: [
+          { key: "a", modifiers: "ctrl" },
+          {
+            key: ">",
+            matchKeys: [">", "."],
+            shift: true,
+            modifiers: "none",
+            allowCtrl: true,
+          },
+        ],
+        modes: TMUX_ONLY,
+      },
+    ],
     category: "Desktops",
     label: "Next desktop",
   },
   {
     id: "desktop.prev",
-    keys: [{ key: "[" }, { key: "Tab", shift: true, modifiers: "ctrl" }],
+    shortcuts: [
+      { sequence: [{ key: "[" }], modes: ALL_MODES },
+      {
+        sequence: [{ key: "Tab", shift: true, modifiers: "ctrl" }],
+        modes: ALL_MODES,
+      },
+      {
+        sequence: [
+          { key: "a", modifiers: "ctrl" },
+          {
+            key: "<",
+            matchKeys: ["<", ","],
+            shift: true,
+            modifiers: "none",
+            allowCtrl: true,
+          },
+        ],
+        modes: TMUX_ONLY,
+      },
+    ],
     category: "Desktops",
     label: "Previous desktop",
   },
   ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map<Binding>((n) => ({
     id: "desktop.jump",
-    keys: [{ key: String(n) }],
+    shortcuts: [
+      { sequence: [{ key: String(n) }], modes: ALL_MODES },
+      {
+        sequence: [
+          { key: "a", modifiers: "ctrl" },
+          { key: String(n), modifiers: "none", allowCtrl: true },
+        ],
+        modes: TMUX_ONLY,
+      },
+    ],
     category: "Desktops",
     label: `Jump to desktop ${n}`,
     payload: n,
   })),
   {
     id: "help.toggle",
-    keys: [{ key: "/" }],
+    shortcuts: [
+      { sequence: [{ key: "/" }], modes: ALL_MODES },
+      {
+        sequence: [
+          { key: "a", modifiers: "ctrl" },
+          {
+            key: "?",
+            matchKeys: ["?", "/"],
+            shift: true,
+            modifiers: "none",
+            allowCtrl: true,
+          },
+        ],
+        modes: TMUX_ONLY,
+      },
+    ],
     category: "Help",
     label: "Show keyboard shortcuts",
   },
@@ -126,6 +271,90 @@ export function detectPlatform(): Platform {
   return /Mac|iPhone|iPad|iPod/i.test(haystack) ? "mac" : "other";
 }
 
+export function bindingsForMode(mode: KeyboardMode): Binding[] {
+  return BINDINGS.flatMap((binding) => {
+    const shortcuts = binding.shortcuts.filter((shortcut) => shortcutSupportsMode(shortcut, mode));
+    if (shortcuts.length === 0) return [];
+    return [{ ...binding, shortcuts }];
+  });
+}
+
+export function describeKeyboardMode(mode: KeyboardMode, platform: Platform): string {
+  if (mode === "tmux") {
+    return "Standard shortcuts plus tmux-style prefix sequences and Ctrl+H/J/K/L pane focus";
+  }
+  return platform === "mac" ? "⌘⌃ + key" : "Ctrl+Shift + key";
+}
+
+export function matchBinding(
+  event: KeyboardEvent,
+  platform: Platform,
+  mode: KeyboardMode,
+  pending: PendingBinding[] = [],
+  now = Date.now(),
+): BindingResolution {
+  const activePending = pending.filter((entry) => entry.expiresAtMs > now);
+  for (const entry of activePending) {
+    const nextSpec = entry.shortcut.sequence[entry.nextIndex];
+    if (!nextSpec || !keySpecMatches(event, platform, nextSpec)) continue;
+    if (entry.nextIndex >= entry.shortcut.sequence.length - 1) {
+      return {
+        match: { binding: entry.binding, shortcut: entry.shortcut },
+        pending: [],
+        capture: true,
+      };
+    }
+  }
+
+  const nextPending: PendingBinding[] = [];
+  for (const binding of bindingsForMode(mode)) {
+    for (const shortcut of binding.shortcuts) {
+      const [firstStep] = shortcut.sequence;
+      if (!firstStep || !keySpecMatches(event, platform, firstStep)) continue;
+      if (shortcut.sequence.length === 1) {
+        return {
+          match: { binding, shortcut },
+          pending: [],
+          capture: true,
+        };
+      }
+      nextPending.push({
+        binding,
+        shortcut,
+        nextIndex: 1,
+        expiresAtMs: now + PREFIX_TIMEOUT_MS,
+      });
+    }
+  }
+
+  if (nextPending.length > 0) {
+    return { match: null, pending: nextPending, capture: true };
+  }
+  return { match: null, pending: [], capture: false };
+}
+
+export function formatShortcut(shortcut: Shortcut, platform: Platform): string[] {
+  return shortcut.sequence.map((spec) => formatKey(spec, platform));
+}
+
+export function formatKey(spec: KeySpec, platform: Platform): string {
+  const keyLabel = formatKeyLabel(spec.key);
+  if (spec.modifiers === "none") {
+    if (!spec.shift) return keyLabel;
+    return platform === "mac" ? `⇧${keyLabel}` : `Shift+${keyLabel}`;
+  }
+  if (spec.modifiers === "ctrl") {
+    if (platform === "mac") return spec.shift ? `⌃⇧${keyLabel}` : `⌃${keyLabel}`;
+    return spec.shift ? `Ctrl+Shift+${keyLabel}` : `Ctrl+${keyLabel}`;
+  }
+  if (platform === "mac") return `⌘⌃${keyLabel}`;
+  return `Ctrl+Shift+${keyLabel}`;
+}
+
+function shortcutSupportsMode(shortcut: Shortcut, mode: KeyboardMode): boolean {
+  return shortcut.modes ? shortcut.modes.includes(mode) : true;
+}
+
 function keyMatches(eventKey: string, specKey: string): boolean {
   if (specKey.length === 1) {
     return eventKey.toLowerCase() === specKey.toLowerCase();
@@ -133,7 +362,21 @@ function keyMatches(eventKey: string, specKey: string): boolean {
   return eventKey === specKey;
 }
 
+function keySpecMatches(event: KeyboardEvent, platform: Platform, spec: KeySpec): boolean {
+  const candidateKeys = spec.matchKeys ?? [spec.key];
+  if (!candidateKeys.some((key) => keyMatches(event.key, key))) return false;
+  return specModifiersMatch(event, platform, spec);
+}
+
 function specModifiersMatch(event: KeyboardEvent, platform: Platform, spec: KeySpec): boolean {
+  if (spec.modifiers === "none") {
+    return (
+      (spec.allowCtrl === true || event.ctrlKey === false) &&
+      event.metaKey === false &&
+      event.altKey === false &&
+      event.shiftKey === (spec.shift === true)
+    );
+  }
   if (spec.modifiers === "ctrl") {
     if (!event.ctrlKey || event.metaKey || event.altKey) return false;
     return event.shiftKey === (spec.shift === true);
@@ -142,27 +385,6 @@ function specModifiersMatch(event: KeyboardEvent, platform: Platform, spec: KeyS
     return event.metaKey === true && event.ctrlKey === true && event.altKey === false;
   }
   return event.ctrlKey === true && event.shiftKey === true && event.altKey === false && event.metaKey === false;
-}
-
-export function matchBinding(event: KeyboardEvent, platform: Platform): BindingMatch | null {
-  for (const binding of BINDINGS) {
-    for (const spec of binding.keys) {
-      if (!keyMatches(event.key, spec.key)) continue;
-      if (!specModifiersMatch(event, platform, spec)) continue;
-      return { binding, spec };
-    }
-  }
-  return null;
-}
-
-export function formatKey(spec: KeySpec, platform: Platform): string {
-  const keyLabel = formatKeyLabel(spec.key);
-  if (spec.modifiers === "ctrl") {
-    if (platform === "mac") return spec.shift ? `⌃⇧${keyLabel}` : `⌃${keyLabel}`;
-    return spec.shift ? `Ctrl+Shift+${keyLabel}` : `Ctrl+${keyLabel}`;
-  }
-  if (platform === "mac") return `⌘⌃${keyLabel}`;
-  return `Ctrl+Shift+${keyLabel}`;
 }
 
 function formatKeyLabel(key: string): string {

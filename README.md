@@ -20,10 +20,13 @@ Launch the app. You get a terminal pane running your default shell.
 
 Common shortcuts:
 
-- `Ctrl+Shift+H` / `Ctrl+Shift+V` — split horizontal / vertical
+- `Ctrl+Shift+S` / `Ctrl+Shift+V` — split below / split right
 - `Ctrl+Shift+W` — close pane
 - `Ctrl+Shift+Arrow` — move focus
 - `Ctrl+Shift+N` — new terminal
+- Settings > Keyboard can enable tmux-like bindings, including `Ctrl+A |` to
+  split right, `Ctrl+A -` to split below, `Ctrl+A x`, `Ctrl+A <` / `>`,
+  `Ctrl+A 1..9`, and `Ctrl+H/J/K/L` focus movement.
 
 Agents are defined in [`agents.toml`](agents.toml). `claude` and `codex` ship by default; add more by appending `[[agent]]` blocks. Launch one from the palette, give it a prompt, and the agent's status and tool calls render alongside its pane.
 

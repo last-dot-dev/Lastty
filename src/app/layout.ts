@@ -519,7 +519,7 @@ export function findAdjacentPaneId(
     return null;
   }
 
-  let best: { paneId: string; score: [number, number, number, string] } | null = null;
+  let best: { paneId: string; score: [number, number, number, number, string] } | null = null;
 
   for (const [candidatePaneId, candidateRect] of Object.entries(rects)) {
     if (candidatePaneId === paneId) continue;
@@ -682,7 +682,7 @@ function scoreAdjacentRect(
   candidate: PaneRect,
   candidatePaneId: string,
   direction: FocusDirection,
-): [number, number, number, string] | null {
+): [number, number, number, number, string] | null {
   const epsilon = 1e-6;
   const currentCenterX = (current.left + current.right) / 2;
   const currentCenterY = (current.top + current.bottom) / 2;
@@ -697,6 +697,7 @@ function scoreAdjacentRect(
       roundMetric(current.left - candidate.right),
       roundMetric(Math.abs(candidateCenterY - currentCenterY)),
       roundMetric(-overlap),
+      roundMetric(Math.abs(candidate.top - current.top)),
       candidatePaneId,
     ];
   }
@@ -709,6 +710,7 @@ function scoreAdjacentRect(
       roundMetric(candidate.left - current.right),
       roundMetric(Math.abs(candidateCenterY - currentCenterY)),
       roundMetric(-overlap),
+      roundMetric(Math.abs(candidate.top - current.top)),
       candidatePaneId,
     ];
   }
@@ -721,6 +723,7 @@ function scoreAdjacentRect(
       roundMetric(current.top - candidate.bottom),
       roundMetric(Math.abs(candidateCenterX - currentCenterX)),
       roundMetric(-overlap),
+      roundMetric(Math.abs(candidate.left - current.left)),
       candidatePaneId,
     ];
   }
@@ -732,6 +735,7 @@ function scoreAdjacentRect(
     roundMetric(candidate.top - current.bottom),
     roundMetric(Math.abs(candidateCenterX - currentCenterX)),
     roundMetric(-overlap),
+    roundMetric(Math.abs(candidate.left - current.left)),
     candidatePaneId,
   ];
 }
@@ -741,8 +745,8 @@ function overlapLength(startA: number, endA: number, startB: number, endB: numbe
 }
 
 function compareScore(
-  left: [number, number, number, string],
-  right: [number, number, number, string],
+  left: [number, number, number, number, string],
+  right: [number, number, number, number, string],
 ): number {
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] < right[index]) return -1;

@@ -10,8 +10,13 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 
 import KeyboardHelpOverlay from "./components/KeyboardHelpOverlay";
+import SettingsPanel from "./components/SettingsPanel";
 import UpdateBadge from "./components/UpdateBadge";
-import { detectPlatform, matchBinding } from "./app/keybindings";
+import {
+  detectPlatform,
+  matchBinding,
+  type PendingBinding,
+} from "./app/keybindings";
 
 import {
   emptyAgentSessionState,
@@ -44,6 +49,7 @@ import MergeDialog from "./components/agent/MergeDialog";
 import type { DesktopEntry } from "./components/agent/DesktopStrip";
 import type { BlockedSessionRef } from "./components/agent/AlertBar";
 import { useThemeOverride } from "./hooks/useThemeOverride";
+import { useKeyboardMode } from "./hooks/useKeyboardMode";
 import {
   activeDesktop,
   attachPaneToDesktop,
@@ -135,7 +141,9 @@ export default function TerminalWorkspace() {
   const [draftPaneIds, setDraftPaneIds] = useState<Set<string>>(() => new Set());
   const [draftSeedByPaneId, setDraftSeedByPaneId] = useState<Record<string, string>>({});
   const [helpOpen, setHelpOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const platform = useMemo(() => detectPlatform(), []);
+  const pendingBindingRef = useRef<PendingBinding[]>([]);
   const [launching, setLaunching] = useState(false);
   const [clock, setClock] = useState(Date.now());
   const [hydrated, setHydrated] = useState(false);
@@ -356,6 +364,7 @@ export default function TerminalWorkspace() {
   }, [activeProjectRoot, graphByCwd]);
 
   const theme = useThemeOverride();
+  const keyboardMode = useKeyboardMode();
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 1_000);
@@ -538,38 +547,45 @@ export default function TerminalWorkspace() {
     if (!workspace) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      const match = matchBinding(event, platform);
-      if (!match) return;
-      const { binding } = match;
+      if (helpOpen || settingsOpen) return;
+      const resolution = matchBinding(
+        event,
+        platform,
+        keyboardMode.mode,
+        pendingBindingRef.current,
+      );
+      pendingBindingRef.current = resolution.pending;
+      if (resolution.capture) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      if (!resolution.match) {
+        return;
+      }
+      const { binding } = resolution.match;
       const activePaneId = activeDesktop(workspace).focusedPaneId;
 
       switch (binding.id) {
         case "help.toggle":
-          event.preventDefault();
           setHelpOpen((open) => !open);
           return;
         case "desktop.new":
-          event.preventDefault();
           void handleNewDesktop();
           return;
         case "desktop.next":
-          event.preventDefault();
           handleCycleDesktop(1);
           return;
         case "desktop.prev":
-          event.preventDefault();
           handleCycleDesktop(-1);
           return;
         case "desktop.jump":
           if (binding.payload === undefined) return;
-          event.preventDefault();
           handleJumpToDesktopIndex(binding.payload - 1);
           return;
         case "focus.left":
         case "focus.down":
         case "focus.up":
         case "focus.right": {
-          event.preventDefault();
           const direction =
             binding.id === "focus.left"
               ? "left"
@@ -585,21 +601,17 @@ export default function TerminalWorkspace() {
         }
         case "pane.split.horizontal":
           if (!activePaneId) return;
-          event.preventDefault();
           void handleSplit(activePaneId, "horizontal");
           return;
         case "pane.split.vertical":
           if (!activePaneId) return;
-          event.preventDefault();
           void handleSplit(activePaneId, "vertical");
           return;
         case "pane.close":
           if (!activePaneId) return;
-          event.preventDefault();
           void handleClose(activePaneId);
           return;
         case "agent.launch":
-          event.preventDefault();
           createDraftPane({ kind: "focused" });
           return;
       }
@@ -607,7 +619,19 @@ export default function TerminalWorkspace() {
 
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [workspace, platform]);
+  }, [workspace, platform, keyboardMode.mode, helpOpen, settingsOpen]);
+
+  useEffect(() => {
+    const clearPending = () => {
+      pendingBindingRef.current = [];
+    };
+    window.addEventListener("blur", clearPending);
+    return () => window.removeEventListener("blur", clearPending);
+  }, []);
+
+  useEffect(() => {
+    pendingBindingRef.current = [];
+  }, [helpOpen, settingsOpen, keyboardMode.mode]);
 
   async function handleSplit(paneId: string, direction: SplitDirection) {
     const desktop = workspace ? findDesktopForPane(workspace, paneId) : null;
@@ -1287,7 +1311,18 @@ export default function TerminalWorkspace() {
           );
         }}
         sidebarFooterExtras={
-          <ThemeToggle override={theme.override} onCycle={theme.cycle} />
+          <>
+            <button
+              type="button"
+              className="agent-settings-toggle"
+              onClick={() => setSettingsOpen(true)}
+              title="Settings"
+              aria-label="Open settings"
+            >
+              settings
+            </button>
+            <ThemeToggle override={theme.override} onCycle={theme.cycle} />
+          </>
         }
         sidebarGraph={sidebarGraph}
         nowMs={clock}
@@ -1427,7 +1462,16 @@ export default function TerminalWorkspace() {
       <KeyboardHelpOverlay
         onClose={() => setHelpOpen(false)}
         open={helpOpen}
+        mode={keyboardMode.mode}
         platform={platform}
+      />
+      <SettingsPanel
+        open={settingsOpen}
+        keyboardMode={keyboardMode.mode}
+        themeOverride={theme.override}
+        onKeyboardModeChange={keyboardMode.setMode}
+        onThemeOverrideChange={theme.setOverride}
+        onClose={() => setSettingsOpen(false)}
       />
       <ToastStack notifications={toastNotifications} sessionInfoById={sessionInfoById} />
     </div>
@@ -2355,4 +2399,3 @@ const widgetBodyStyle: CSSProperties = {
   fontSize: 12,
   color: "var(--color-text-primary)",
 };
-

@@ -144,60 +144,45 @@ function TerminalViewportInner({
       onMouseDown={onActivate}
     >
       {!hasSelection && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "4px 8px",
-            borderBottom: "0.5px solid var(--color-border-tertiary)",
-          }}
-        >
+        <div className="terminal-launch-row">
           <div
             data-testid="terminal-status"
-            style={{
-              flex: 1,
-              minWidth: 0,
-              color: "var(--color-text-tertiary)",
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
+            className="terminal-launch-status"
           >
             {status}
           </div>
-          <button
-            type="button"
-            className="terminal-launch-btn"
-            title={
-              claudeAvailable
-                ? "Start Claude Code in this terminal"
-                : "Install and start Claude Code (runs `npm i -g @anthropic-ai/claude-code`)"
-            }
-            aria-label="Start Claude Code in this terminal"
-            onClick={() =>
-              launchCli("claude", "@anthropic-ai/claude-code", claudeAvailable)
-            }
-          >
-            <ClaudeLogo />
-          </button>
-          <button
-            type="button"
-            className="terminal-launch-btn"
-            title={
-              codexAvailable
-                ? "Start Codex CLI in this terminal"
-                : "Install and start Codex CLI (runs `npm i -g @openai/codex`)"
-            }
-            aria-label="Start Codex CLI in this terminal"
-            onClick={() =>
-              launchCli("codex", "@openai/codex", codexAvailable)
-            }
-          >
-            <CodexLogo />
-          </button>
+          <div className="terminal-launch-actions">
+            <button
+              type="button"
+              className="terminal-launch-btn"
+              title={
+                claudeAvailable
+                  ? "Start Claude Code in this terminal"
+                  : "Install and start Claude Code (runs `npm i -g @anthropic-ai/claude-code`)"
+              }
+              aria-label="Start Claude Code in this terminal"
+              onClick={() =>
+                launchCli("claude", "@anthropic-ai/claude-code", claudeAvailable)
+              }
+            >
+              <ClaudeLogo />
+            </button>
+            <button
+              type="button"
+              className="terminal-launch-btn"
+              title={
+                codexAvailable
+                  ? "Start Codex CLI in this terminal"
+                  : "Install and start Codex CLI (runs `npm i -g @openai/codex`)"
+              }
+              aria-label="Start Codex CLI in this terminal"
+              onClick={() =>
+                launchCli("codex", "@openai/codex", codexAvailable)
+              }
+            >
+              <CodexLogo />
+            </button>
+          </div>
         </div>
       )}
       <div
