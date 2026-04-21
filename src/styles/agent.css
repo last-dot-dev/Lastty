@@ -342,6 +342,7 @@
 }
 
 .agent-sidebar__graph-body {
+  position: relative;
   flex: 1;
   overflow-y: auto;
   min-height: 0;
@@ -351,13 +352,34 @@
   line-height: 1.5;
 }
 
+.agent-sidebar__graph-body::after {
+  content: "";
+  position: sticky;
+  display: block;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 18px;
+  margin-top: -18px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--color-background-secondary) 45%, transparent) 55%,
+    var(--color-background-secondary) 100%
+  );
+  pointer-events: none;
+}
+
 .agent-sidebar__footer {
   padding: 9px;
-  border-top: 0.5px solid var(--color-border-tertiary);
   flex-shrink: 0;
-  display: flex;
+  display: grid;
   gap: 6px;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.agent-sidebar__footer-row {
+  min-width: 0;
 }
 
 /* ---------------- Worktree list ---------------- */
@@ -986,7 +1008,6 @@
 /* ---------------- Merge button ---------------- */
 
 .agent-merge-button {
-  flex: 1;
   padding: 7px 10px;
   font-size: 12px;
   font-weight: 500;
@@ -998,8 +1019,17 @@
   font-family: inherit;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 7px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.agent-merge-button > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-merge-button:hover:not(:disabled) {
@@ -1048,22 +1078,33 @@
 }
 
 .agent-settings-toggle {
+  width: 100%;
   padding: 6px 8px;
   font-size: 11px;
   border-radius: var(--border-radius-md);
-  border: 0.5px solid var(--color-border-secondary);
+  border: none;
   background: transparent;
   color: var(--color-text-secondary);
   font-family: inherit;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 7px;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 120ms ease, background-color 120ms ease;
 }
 
 .agent-settings-toggle:hover,
 .agent-theme-toggle:hover {
-  background: var(--color-background-primary);
+  background: color-mix(
+    in srgb,
+    var(--color-background-primary) 72%,
+    transparent
+  );
   color: var(--color-text-primary);
 }
 
@@ -1470,9 +1511,9 @@
 }
 
 .agent-edge-spawner__button {
-  pointer-events: auto;
-  opacity: 0.45;
-  transition: opacity 0.15s;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1490,7 +1531,9 @@
   padding: 0;
 }
 
-.agent-window-shell:hover .agent-edge-spawner__button {
+.agent-window-shell:hover .agent-edge-spawner__button,
+.agent-window-shell:focus-within .agent-edge-spawner__button {
+  pointer-events: auto;
   opacity: 0.8;
 }
 

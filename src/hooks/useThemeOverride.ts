@@ -97,9 +97,7 @@ export function useThemeOverride() {
   }, []);
 
   const cycle = useCallback(() => {
-    setOverrideState((current) =>
-      current === "system" ? "light" : current === "light" ? "dark" : "system",
-    );
+    setOverrideState((current) => (resolveEffective(current) === "light" ? "dark" : "light"));
   }, []);
 
   return { override, effective, setOverride, cycle };

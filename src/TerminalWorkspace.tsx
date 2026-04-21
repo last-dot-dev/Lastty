@@ -43,7 +43,6 @@ import PaneFooter from "./components/agent/PaneFooter";
 import ProgressBar from "./components/agent/ProgressBar";
 import ReplyInput from "./components/agent/ReplyInput";
 import EdgeSpawner, { type SpawnDirection } from "./components/agent/EdgeSpawner";
-import ThemeToggle from "./components/agent/ThemeToggle";
 import type { WorktreeRow } from "./components/agent/WorktreeList";
 import MergeDialog from "./components/agent/MergeDialog";
 import type { DesktopEntry } from "./components/agent/DesktopStrip";
@@ -128,6 +127,32 @@ function basenameOfPath(path: string): string {
 function pathsEqual(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a || !b) return false;
   return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+}
+
+function SettingsIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M12 2.8v2.1" />
+      <path d="M12 19.1v2.1" />
+      <path d="m4.8 4.8 1.5 1.5" />
+      <path d="m17.7 17.7 1.5 1.5" />
+      <path d="M2.8 12h2.1" />
+      <path d="M19.1 12h2.1" />
+      <path d="m4.8 19.2 1.5-1.5" />
+      <path d="m17.7 6.3 1.5-1.5" />
+    </svg>
+  );
 }
 
 export default function TerminalWorkspace() {
@@ -1311,18 +1336,16 @@ export default function TerminalWorkspace() {
           );
         }}
         sidebarFooterExtras={
-          <>
-            <button
-              type="button"
-              className="agent-settings-toggle"
-              onClick={() => setSettingsOpen(true)}
-              title="Settings"
-              aria-label="Open settings"
-            >
-              settings
-            </button>
-            <ThemeToggle override={theme.override} onCycle={theme.cycle} />
-          </>
+          <button
+            type="button"
+            className="agent-settings-toggle"
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+            aria-label="Open settings"
+          >
+            <SettingsIcon />
+            <span>Settings</span>
+          </button>
         }
         sidebarGraph={sidebarGraph}
         nowMs={clock}

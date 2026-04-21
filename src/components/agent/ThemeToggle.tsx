@@ -1,28 +1,29 @@
 import type { ThemeOverride } from "../../hooks/useThemeOverride";
 
-const LABELS: Record<ThemeOverride, { icon: string; title: string }> = {
-  system: { icon: "◐", title: "Theme: follow system (click to pick light)" },
-  light: { icon: "☀", title: "Theme: light (click to pick dark)" },
-  dark: { icon: "☾", title: "Theme: dark (click to follow system)" },
-};
-
 export default function ThemeToggle({
   override,
+  effective,
   onCycle,
 }: {
   override: ThemeOverride;
+  effective: "light" | "dark";
   onCycle: () => void;
 }) {
-  const label = LABELS[override];
+  const icon = override === "system" ? "◐" : effective === "light" ? "☀" : "☾";
+  const next = effective === "light" ? "dark" : "light";
+  const title =
+    override === "system"
+      ? `Theme: follow system (currently ${effective}, click to switch to ${next})`
+      : `Theme: ${effective} (click to switch to ${next})`;
   return (
     <button
       type="button"
       className="agent-theme-toggle"
       onClick={onCycle}
-      title={label.title}
-      aria-label={label.title}
+      title={title}
+      aria-label={title}
     >
-      {label.icon}
+      {icon}
     </button>
   );
 }

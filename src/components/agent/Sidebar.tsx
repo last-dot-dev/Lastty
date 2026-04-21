@@ -168,12 +168,18 @@ export default function Sidebar({
         </div>
       </div>
       <div className="agent-sidebar__footer">
-        <MergeButton
-          count={mergeable}
-          disabled={mergeable === 0}
-          onClick={onOpenMergeDialog}
-        />
-        {footerExtras}
+        {mergeable > 0 && (
+          <MergeButton
+            count={mergeable}
+            disabled={false}
+            onClick={onOpenMergeDialog}
+          />
+        )}
+        {footerExtras && (
+          <div className="agent-sidebar__footer-row">
+            {footerExtras}
+          </div>
+        )}
       </div>
       <div
         className="agent-sidebar__width-handle"
