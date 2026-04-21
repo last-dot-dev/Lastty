@@ -53,19 +53,19 @@ fn emit_frame_for_session<R: Runtime>(
     let term_arc = manager.get(&session_id).map(|session| session.term.clone());
     let term_arc = term_arc?;
 
+    let render_start = Instant::now();
+    let mut term = term_arc.lock();
+    let frame = render_viewport(&mut term)?;
+    drop(term);
+    let render_elapsed = render_start.elapsed();
+    let ansi_bytes = frame.ansi.len();
+
     #[cfg(feature = "bench")]
     let perf = app_handle.try_state::<Arc<PerfRegistry>>();
     #[cfg(feature = "bench")]
     if let Some(perf) = perf.as_ref() {
         perf.take_mark_to_emit(session_id);
     }
-
-    let render_start = Instant::now();
-    let mut term = term_arc.lock();
-    let frame = render_viewport(&mut term);
-    drop(term);
-    let render_elapsed = render_start.elapsed();
-    let ansi_bytes = frame.ansi.len();
 
     let emit_start = Instant::now();
     app_handle
@@ -136,11 +136,17 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
                 }
             }
 
-            if let Some(metrics) = emit_frame_for_session(&app_handle, dirty.session_id) {
+            let mut emitted_any = false;
+            for session_id in dirty.sessions {
+                if let Some(metrics) = emit_frame_for_session(&app_handle, session_id) {
+                    emitted_any = true;
+                    avg_frame_ms = avg_frame_ms * 0.8 + metrics.frame_ms * 0.2;
+                    avg_ansi_bytes = avg_ansi_bytes * 0.8 + metrics.ansi_bytes as f64 * 0.2;
+                    frames_since_emit += 1;
+                }
+            }
+            if emitted_any {
                 last_emit = Some(Instant::now());
-                avg_frame_ms = avg_frame_ms * 0.8 + metrics.frame_ms * 0.2;
-                avg_ansi_bytes = avg_ansi_bytes * 0.8 + metrics.ansi_bytes as f64 * 0.2;
-                frames_since_emit += 1;
                 let emit_elapsed = last_perf_emit.elapsed();
                 if emit_elapsed >= PERF_EMIT_INTERVAL {
                     let total_wakeups = render_coordinator.total_wakeups();
@@ -181,7 +187,9 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
 /// Streaming render: returns a partial frame (just the damaged lines) when
 /// alacritty's damage tracking allows it, falling back to a full repaint when
 /// damage is global or scrollback is in view. Consumes the term's damage state.
-pub fn render_viewport<T: EventListener>(term: &mut Term<T>) -> TerminalFrame {
+/// Returns `None` when there is nothing visible to emit — the frontend already
+/// matches the current grid state.
+pub fn render_viewport<T: EventListener>(term: &mut Term<T>) -> Option<TerminalFrame> {
     let damage_kind = match term.damage() {
         TermDamage::Full => DamageKind::Full,
         TermDamage::Partial(iter) => DamageKind::Partial(iter.collect()),
@@ -200,11 +208,11 @@ pub fn render_viewport<T: EventListener>(term: &mut Term<T>) -> TerminalFrame {
             DamageKind::Partial(lines) if !lines.is_empty() => {
                 render_partial(term, &lines, term.columns())
             }
-            _ => String::with_capacity(32),
+            _ => return None,
         }
     };
 
-    finalize_frame(term, body)
+    Some(finalize_frame(term, body))
 }
 
 /// Always renders the full visible grid. Used for initial frontend paint
@@ -550,7 +558,7 @@ mod tests {
         let mut term = term(8, 4);
         apply_escape_sequence(&mut term, b"\x1b[?25l");
 
-        let frame = render_viewport(&mut term);
+        let frame = render_viewport(&mut term).expect("render_viewport produced no frame");
         let ansi = String::from_utf8(frame.ansi).expect("frame ansi should be valid utf-8");
 
         assert!(!frame.cursor_visible);
@@ -562,7 +570,7 @@ mod tests {
         let mut term = term(8, 4);
         apply_escape_sequence(&mut term, b"\x1b[?1049h");
 
-        let frame = render_viewport(&mut term);
+        let frame = render_viewport(&mut term).expect("render_viewport produced no frame");
 
         assert!(frame.alternate_screen);
     }
@@ -574,7 +582,7 @@ mod tests {
 
         term.scroll_display(Scroll::Top);
 
-        let frame = render_viewport(&mut term);
+        let frame = render_viewport(&mut term).expect("render_viewport produced no frame");
         let visible = visible_text(&term);
         let ansi = String::from_utf8(frame.ansi).expect("frame ansi should be valid utf-8");
 
@@ -599,7 +607,7 @@ mod tests {
             screen_lines: 4,
         });
 
-        let frame = render_viewport(&mut term);
+        let frame = render_viewport(&mut term).expect("render_viewport produced no frame");
         let visible = visible_text(&term);
 
         assert_eq!(frame.display_offset, 0);
@@ -613,7 +621,7 @@ mod tests {
         let mut term = term(4, 2);
         apply_escape_sequence(&mut term, "😀x".as_bytes());
 
-        let frame = render_viewport(&mut term);
+        let frame = render_viewport(&mut term).expect("render_viewport produced no frame");
         let viewport = viewport_text(&term);
 
         assert_eq!(viewport, "😀x \r\n    ");
@@ -627,7 +635,7 @@ mod tests {
         let mut term = term(2, 2);
         apply_escape_sequence(&mut term, "A😀".as_bytes());
 
-        let frame = render_viewport(&mut term);
+        let frame = render_viewport(&mut term).expect("render_viewport produced no frame");
         let viewport = viewport_text(&term);
 
         assert_eq!(viewport, "A\r\n😀");
@@ -641,7 +649,7 @@ mod tests {
         let mut term = term(4, 2);
         apply_escape_sequence(&mut term, "e\u{301}x".as_bytes());
 
-        let frame = render_viewport(&mut term);
+        let frame = render_viewport(&mut term).expect("render_viewport produced no frame");
         let viewport = viewport_text(&term);
 
         assert_eq!(viewport, "e\u{301}x  \r\n    ");
