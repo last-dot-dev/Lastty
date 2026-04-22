@@ -180,6 +180,8 @@ export function reduceAgentMessage(
           { widgetType: message.data.widget_type, props: message.data.props, timestamp },
         ].slice(-10),
       };
+    default:
+      return state;
   }
 }
 

@@ -611,7 +611,10 @@ fn emit_agent_ui<R: Runtime>(
             if let Some(router) = app.try_state::<std::sync::Arc<crate::peer::PeerRouter<R>>>() {
                 router.ingest_from_session(&session_id, peer_msg.clone());
             }
-            None
+            // Peer messages ride their own BusEvent channel and frontend store.
+            // Skip the agent:ui emit so reducers that don't know about Peer
+            // don't clobber per-session agent state.
+            return;
         }
         _ => None,
     };
