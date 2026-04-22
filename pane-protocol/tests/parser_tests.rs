@@ -1,6 +1,7 @@
 use pane_protocol::encoder::encode;
 use pane_protocol::message::AgentUiMessage;
 use pane_protocol::parser::{OscParser, ParsedChunk};
+use pane_protocol::peer::{Addr, PeerMessage, Presence};
 use serde_json::json;
 
 fn parse_all(data: &[u8]) -> Vec<ParsedChunk> {
@@ -593,4 +594,38 @@ fn ansi_escape_sequences_pass_through_unmodified() {
         .collect();
 
     assert_eq!(all_bytes, data.to_vec());
+}
+
+#[test]
+fn parse_peer_post_message() {
+    let msg = AgentUiMessage::Peer(PeerMessage::Post {
+        channel: "general".into(),
+        body: json!({"text": "hi from pane"}),
+        reply_to: None,
+    });
+    let encoded = encode(&msg);
+    let chunks = parse_all(&encoded);
+    assert_eq!(chunks, vec![ParsedChunk::AgentMessage(msg)]);
+}
+
+#[test]
+fn parse_peer_dm_to_user() {
+    let msg = AgentUiMessage::Peer(PeerMessage::Dm {
+        to: Addr::User,
+        body: json!({"text": "hello"}),
+        correlation_id: None,
+    });
+    let encoded = encode(&msg);
+    let chunks = parse_all(&encoded);
+    assert_eq!(chunks, vec![ParsedChunk::AgentMessage(msg)]);
+}
+
+#[test]
+fn parse_peer_presence() {
+    let msg = AgentUiMessage::Peer(PeerMessage::Presence {
+        status: Presence::Thinking,
+    });
+    let encoded = encode(&msg);
+    let chunks = parse_all(&encoded);
+    assert_eq!(chunks, vec![ParsedChunk::AgentMessage(msg)]);
 }

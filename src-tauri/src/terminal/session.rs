@@ -15,7 +15,7 @@ use alacritty_terminal::event_loop::{EventLoop, Msg};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term};
 use alacritty_terminal::tty;
-use pane_protocol::{AgentUiMessage, OscParser, ParsedChunk};
+use pane_protocol::{AgentUiMessage, OscParser, ParsedChunk, PeerMessage};
 use serde::Serialize;
 use tauri::{Emitter, Manager, Runtime};
 use uuid::Uuid;
@@ -225,6 +225,18 @@ pub fn create_session<R: Runtime>(
             socket_path.to_string_lossy().to_string(),
         );
     }
+    // Prepend the directory containing lastty-peer to PATH so agents can call
+    // `lastty-peer post general "hello"` without a full path.
+    if let Some(bin_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        let existing_path = std::env::var("PATH").unwrap_or_default();
+        env.insert(
+            "PATH".to_string(),
+            format!("{}:{}", bin_dir.display(), existing_path),
+        );
+    }
     let pty_config = tty::Options {
         shell,
         working_directory: Some(cwd),
@@ -253,13 +265,21 @@ pub fn create_session<R: Runtime>(
         let control_stream = control_stream.clone();
         let control_connected = control_connected.clone();
         let control_accept_alive = control_accept_alive.clone();
+        let socket_app = app.clone();
+        let socket_session_id = id;
         thread::spawn(move || {
             while control_accept_alive.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         let _ = stream.set_nonblocking(false);
-                        *control_stream.lock().unwrap() = Some(stream);
                         control_connected.store(true, Ordering::Relaxed);
+                        if let Ok(reader_stream) = stream.try_clone() {
+                            let reader_app = socket_app.clone();
+                            thread::spawn(move || {
+                                pump_control_socket(reader_stream, reader_app, socket_session_id);
+                            });
+                        }
+                        *control_stream.lock().unwrap() = Some(stream);
                         break;
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -320,6 +340,37 @@ pub fn create_session<R: Runtime>(
         control_stream,
         control_accept_alive,
     })
+}
+
+/// Reads newline-delimited `PeerMessage` JSON from the agent's control socket
+/// and routes each message through the `PeerRouter`. Runs until the connection
+/// closes or an unrecoverable read error occurs.
+#[cfg(unix)]
+fn pump_control_socket<R: Runtime>(
+    stream: std::os::unix::net::UnixStream,
+    app: tauri::AppHandle<R>,
+    session_id: SessionId,
+) {
+    use std::io::BufRead;
+    let reader = io::BufReader::new(stream);
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<PeerMessage>(&line) {
+            Ok(msg) => {
+                if let Some(router) = app.try_state::<std::sync::Arc<crate::peer::PeerRouter<R>>>()
+                {
+                    router.ingest_from_session(&session_id, msg);
+                }
+            }
+            Err(error) => {
+                tracing::debug!(%error, "control socket: malformed peer message, skipping line");
+            }
+        }
+    }
 }
 
 impl<R: Runtime> TerminalSession<R> {
@@ -540,30 +591,25 @@ impl<R: Runtime> Read for ProtocolReader<R> {
             return Ok(self.drain_pending(buf));
         }
 
-        loop {
-            let mut raw = vec![0u8; buf.len().max(4096)];
-            match self.source.read(&mut raw) {
-                Ok(0) => return Ok(0),
-                Ok(read) => {
-                    for new_cwd in self.osc7.feed(&raw[..read]) {
-                        self.update_cwd(new_cwd);
-                    }
-                    let chunks = self.parser.feed(&raw[..read]);
-                    self.handle_chunks(chunks);
-                    if !self.pending_terminal.is_empty() {
-                        return Ok(self.drain_pending(buf));
-                    }
+        let mut raw = vec![0u8; buf.len().max(4096)];
+        match self.source.read(&mut raw) {
+            Ok(0) => Ok(0),
+            Ok(read) => {
+                for new_cwd in self.osc7.feed(&raw[..read]) {
+                    self.update_cwd(new_cwd);
                 }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    return Err(error);
+                let chunks = self.parser.feed(&raw[..read]);
+                self.handle_chunks(chunks);
+                if !self.pending_terminal.is_empty() {
+                    return Ok(self.drain_pending(buf));
                 }
-                Err(error) => return Err(error),
+                // All bytes were OSC agent messages — no terminal data to return.
+                // Signal WouldBlock so the EventLoop can process queued Msg::Input
+                // before we re-enter the PTY read. Avoids blocking on macOS where
+                // the cloned PTY fd may not return EAGAIN despite O_NONBLOCK.
+                Err(io::Error::from(io::ErrorKind::WouldBlock))
             }
+            Err(error) => Err(error),
         }
     }
 }

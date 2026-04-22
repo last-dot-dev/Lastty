@@ -174,6 +174,14 @@ fn translate_user(
                 Value::Null => Value::String(String::new()),
                 other => other.clone(),
             };
+            // Subprocess output that starts with ESC is a raw OSC sequence
+            // (e.g. an agent calling printf to emit a peer message). Echo the
+            // bytes through so ProtocolReader can parse the embedded 7770 payload.
+            if let Value::String(s) = &content {
+                if s.as_bytes().first() == Some(&0x1b) {
+                    out.push_echo(s.as_bytes());
+                }
+            }
             let prefix = if parent_tool_use_id.is_some() {
                 "  ↳ "
             } else {
@@ -468,5 +476,33 @@ mod tests {
     fn empty_line_is_skipped() {
         let msgs = run_stream(&[""]);
         assert!(msgs.is_empty());
+    }
+
+    #[test]
+    fn osc_tool_result_echoed_as_raw_bytes() {
+        // When subprocess output starts with ESC (e.g. a printf OSC sequence),
+        // the adapter must push those bytes through terminal_echo so the
+        // ProtocolReader can parse the embedded 7770 peer message.
+        let osc_content = "\x1b]7770;hello\x07";
+        let line = serde_json::json!({
+            "type": "user",
+            "session_id": "s",
+            "message": {
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "t1",
+                    "content": osc_content,
+                    "is_error": false
+                }]
+            }
+        })
+        .to_string();
+        let mut adapter = ClaudeCodeAdapter::new("p".into());
+        let yielded = adapter.on_stdout_line(line.as_bytes());
+        assert_eq!(
+            yielded.terminal_echo.first(),
+            Some(&0x1b),
+            "expected terminal_echo to start with ESC for OSC tool result"
+        );
     }
 }
