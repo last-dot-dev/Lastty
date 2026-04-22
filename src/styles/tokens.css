@@ -36,6 +36,9 @@
   --branch-color-6: #BA7517;
   --branch-color-7: #639922;
 
+  --accent: #378ADD;
+  --terminal-font-size: 14px;
+
   color-scheme: light dark;
 }
 

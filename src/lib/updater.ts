@@ -40,6 +40,7 @@ export interface UpdaterState {
   progress: DownloadProgress;
   error: UpdaterError | null;
   releaseNotesUrl: string | null;
+  lastDismissedPhase: UpdaterPhase | null;
 }
 
 export interface UpdaterDeps {
@@ -61,6 +62,7 @@ const INITIAL_STATE: UpdaterState = {
   progress: { downloadedBytes: 0, totalBytes: null },
   error: null,
   releaseNotesUrl: null,
+  lastDismissedPhase: null,
 };
 
 export class UpdaterStore {
@@ -189,6 +191,17 @@ export class UpdaterStore {
         error: { phase: "relaunch", message: errorMessage(error) },
       });
     }
+  };
+
+  dismissBanner = (): void => {
+    this.setState({ lastDismissedPhase: this.state.phase });
+  };
+
+  userCheckForUpdates = (): Promise<void> => {
+    if (this.state.lastDismissedPhase !== null) {
+      this.setState({ lastDismissedPhase: null });
+    }
+    return this.checkAndDownload();
   };
 
   retry = (): Promise<void> => {

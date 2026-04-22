@@ -160,6 +160,34 @@ describe("UpdaterStore", () => {
     expect(store.getState().phase).toBe("downloaded");
   });
 
+  it("userCheckForUpdates clears dismiss flag and triggers a check", async () => {
+    const update = makeFakeUpdate();
+    const check = vi.fn(async () => update) as unknown as CheckFn;
+    const relaunch = vi.fn() as unknown as RelaunchFn;
+    const store = new UpdaterStore({ check, relaunch });
+
+    await store.checkAndDownload();
+    await store.beginInstall();
+    store.dismissBanner();
+    expect(store.getState().lastDismissedPhase).toBe("ready-to-restart");
+
+    await store.userCheckForUpdates();
+
+    expect(store.getState().lastDismissedPhase).toBeNull();
+  });
+
+  it("userCheckForUpdates from idle kicks off a check", async () => {
+    const update = makeFakeUpdate();
+    const check = vi.fn(async () => update) as unknown as CheckFn;
+    const relaunch = vi.fn() as unknown as RelaunchFn;
+    const store = new UpdaterStore({ check, relaunch });
+
+    await store.userCheckForUpdates();
+
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(store.getState().phase).toBe("downloaded");
+  });
+
   it("guards against concurrent downloads", async () => {
     const startedRef: { fn: (() => void) | null } = { fn: null };
     const downloadRef: { fn: (() => void) | null } = { fn: null };

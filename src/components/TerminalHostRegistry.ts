@@ -38,6 +38,8 @@ export interface SessionHostProps {
   blocked: boolean;
   focused: boolean;
   theme: EffectiveTheme;
+  fontFamily?: string;
+  fontSize?: number;
   onSnapshotChange?: (snapshot: PersistedTerminalSnapshot) => void;
   restoredSnapshot?: PersistedTerminalSnapshot | null;
 }

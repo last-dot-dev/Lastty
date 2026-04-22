@@ -5,6 +5,7 @@ import Sidebar, { type SidebarGraph } from "./Sidebar";
 import DesktopStrip, { type DesktopEntry } from "./DesktopStrip";
 import type { WorktreeRow } from "./WorktreeList";
 import type { AgentDefinition } from "../../lib/ipc";
+import UpdateBanner from "../UpdateBanner";
 
 export default function AgentShell({
   blocked,
@@ -33,6 +34,7 @@ export default function AgentShell({
   sidebarFooterExtras,
   sidebarGraph,
   nowMs,
+  activeSessionCount,
   children,
 }: {
   blocked: BlockedSessionRef[];
@@ -61,10 +63,12 @@ export default function AgentShell({
   sidebarFooterExtras?: ReactNode;
   sidebarGraph: SidebarGraph;
   nowMs: number;
+  activeSessionCount: number;
   children: ReactNode;
 }) {
   return (
     <>
+      <UpdateBanner activeSessionCount={activeSessionCount} />
       <AlertBar blocked={blocked} onJump={onJumpToBlocked} />
       <DesktopStrip
         desktops={desktops}

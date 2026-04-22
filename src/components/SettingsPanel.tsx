@@ -2,15 +2,30 @@ import { useEffect, useRef } from "react";
 
 import type { KeyboardMode } from "../app/keybindings";
 import type { ThemeOverride } from "../hooks/useThemeOverride";
+import {
+  ACCENT_COLORS,
+  FONT_FAMILIES,
+  MAX_FONT_SIZE,
+  MIN_FONT_SIZE,
+  type AccentColor,
+  type FontFamily,
+} from "../hooks/useAppearance";
 
 const THEME_OPTIONS: ThemeOverride[] = ["system", "light", "dark"];
+const ACCENT_OPTIONS = Object.keys(ACCENT_COLORS) as AccentColor[];
 
 export interface SettingsPanelProps {
   open: boolean;
   keyboardMode: KeyboardMode;
   themeOverride: ThemeOverride;
+  accent: AccentColor;
+  fontFamily: FontFamily;
+  fontSize: number;
   onKeyboardModeChange: (mode: KeyboardMode) => void;
   onThemeOverrideChange: (override: ThemeOverride) => void;
+  onAccentChange: (accent: AccentColor) => void;
+  onFontFamilyChange: (family: FontFamily) => void;
+  onFontSizeChange: (size: number) => void;
   onClose: () => void;
 }
 
@@ -18,8 +33,14 @@ export default function SettingsPanel({
   open,
   keyboardMode,
   themeOverride,
+  accent,
+  fontFamily,
+  fontSize,
   onKeyboardModeChange,
   onThemeOverrideChange,
+  onAccentChange,
+  onFontFamilyChange,
+  onFontSizeChange,
   onClose,
 }: SettingsPanelProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -105,7 +126,7 @@ export default function SettingsPanel({
         </section>
 
         <section className="settings-section">
-          <div className="settings-section-title">Appearance</div>
+          <div className="settings-section-title">Theme</div>
           <div className="settings-pill-row" role="group" aria-label="Theme">
             {THEME_OPTIONS.map((option) => (
               <button
@@ -117,6 +138,91 @@ export default function SettingsPanel({
                 {option}
               </button>
             ))}
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-title">Accent color</div>
+          <div
+            aria-label="Accent color"
+            className="settings-swatch-row"
+            role="group"
+          >
+            {ACCENT_OPTIONS.map((option) => (
+              <button
+                aria-label={option}
+                aria-pressed={accent === option}
+                className={`settings-swatch${accent === option ? " is-active" : ""}`}
+                key={option}
+                onClick={() => onAccentChange(option)}
+                style={{ background: ACCENT_COLORS[option] }}
+                type="button"
+              />
+            ))}
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-title">Font</div>
+          <div className="settings-option-grid">
+            <label className="settings-field">
+              <span className="settings-field-label">Family</span>
+              <select
+                aria-label="Font family"
+                className="settings-select"
+                onChange={(event) =>
+                  onFontFamilyChange(event.target.value as FontFamily)
+                }
+                value={fontFamily}
+              >
+                {FONT_FAMILIES.map((family) => (
+                  <option key={family} value={family}>
+                    {family}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="settings-field">
+              <span className="settings-field-label">
+                Size ({MIN_FONT_SIZE}–{MAX_FONT_SIZE}px)
+              </span>
+              <div className="settings-stepper">
+                <button
+                  aria-label="Decrease font size"
+                  className="settings-stepper-btn"
+                  disabled={fontSize <= MIN_FONT_SIZE}
+                  onClick={() => onFontSizeChange(fontSize - 1)}
+                  type="button"
+                >
+                  −
+                </button>
+                <input
+                  aria-label="Font size"
+                  className="settings-number"
+                  max={MAX_FONT_SIZE}
+                  min={MIN_FONT_SIZE}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (Number.isFinite(next)) onFontSizeChange(next);
+                  }}
+                  type="number"
+                  value={fontSize}
+                />
+                <button
+                  aria-label="Increase font size"
+                  className="settings-stepper-btn"
+                  disabled={fontSize >= MAX_FONT_SIZE}
+                  onClick={() => onFontSizeChange(fontSize + 1)}
+                  type="button"
+                >
+                  +
+                </button>
+              </div>
+            </label>
+          </div>
+          <div className="settings-note">
+            Applies to the terminal and UI monospaced text. Pick a font you have installed
+            locally; the app falls back to the system mono stack.
           </div>
         </section>
       </div>

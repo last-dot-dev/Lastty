@@ -13,7 +13,6 @@ import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import KeyboardHelpOverlay from "./components/KeyboardHelpOverlay";
 import NewViewWelcome from "./components/NewViewWelcome";
 import SettingsPanel from "./components/SettingsPanel";
-import UpdateBadge from "./components/UpdateBadge";
 import {
   detectPlatform,
   matchBinding,
@@ -50,6 +49,7 @@ import type { WorktreeRow } from "./components/agent/WorktreeList";
 import MergeDialog from "./components/agent/MergeDialog";
 import type { DesktopEntry } from "./components/agent/DesktopStrip";
 import type { BlockedSessionRef } from "./components/agent/AlertBar";
+import { useAppearance } from "./hooks/useAppearance";
 import { useThemeOverride } from "./hooks/useThemeOverride";
 import { useKeyboardMode } from "./hooks/useKeyboardMode";
 import { useLastAgent } from "./hooks/useLastAgent";
@@ -477,6 +477,7 @@ export default function TerminalWorkspace() {
   }, [activeProjectRoot, graphByCwd]);
 
   const theme = useThemeOverride();
+  const appearance = useAppearance();
   const keyboardMode = useKeyboardMode();
   const { lastAgentId, setLastAgentId } = useLastAgent();
   const resolvedLastAgentId =
@@ -1480,7 +1481,6 @@ export default function TerminalWorkspace() {
         }}
       >
         Booting terminal workspace…
-        <UpdateBadge activeSessionCount={0} />
       </div>
     );
   }
@@ -1489,7 +1489,6 @@ export default function TerminalWorkspace() {
 
   return (
     <div className="agent-root" data-platform={platform}>
-      <UpdateBadge activeSessionCount={activeSessionCount} />
       <AgentShell
         blocked={blockedRefs}
         onJumpToBlocked={handleJumpToBlocked}
@@ -1545,6 +1544,7 @@ export default function TerminalWorkspace() {
         }
         sidebarGraph={sidebarGraph}
         nowMs={clock}
+        activeSessionCount={activeSessionCount}
       >
         <div className={`agent-grid ${exposeMode ? "agent-expose-active" : ""}`}>
           <div
@@ -1648,6 +1648,7 @@ export default function TerminalWorkspace() {
                               }
                               onClose={() => cancelDraftPane(paneId)}
                               onLaunch={(config) => handleLaunchAgent(paneId, config)}
+                              onAgentChange={setLastAgentId}
                             />
                           ),
                         }}
@@ -1732,8 +1733,14 @@ export default function TerminalWorkspace() {
         open={settingsOpen}
         keyboardMode={keyboardMode.mode}
         themeOverride={theme.override}
+        accent={appearance.accent}
+        fontFamily={appearance.fontFamily}
+        fontSize={appearance.fontSize}
         onKeyboardModeChange={keyboardMode.setMode}
         onThemeOverrideChange={theme.setOverride}
+        onAccentChange={appearance.setAccent}
+        onFontFamilyChange={appearance.setFontFamily}
+        onFontSizeChange={appearance.setFontSize}
         onClose={() => setSettingsOpen(false)}
       />
       <NotificationToasts sessionInfoById={sessionInfoById} />
@@ -2230,6 +2237,8 @@ interface LaunchAgentConfig {
   branchName: string;
 }
 
+const MAX_PROMPT_PX = 300;
+
 function LaunchAgentModal({
   agents,
   worktrees,
@@ -2238,6 +2247,7 @@ function LaunchAgentModal({
   initialAgentId,
   onClose,
   onLaunch,
+  onAgentChange,
 }: {
   agents: AgentDefinition[];
   worktrees: WorktreeRow[];
@@ -2246,10 +2256,15 @@ function LaunchAgentModal({
   initialAgentId: string;
   onClose: () => void;
   onLaunch: (config: LaunchAgentConfig) => void;
+  onAgentChange?: (agentId: string) => void;
 }) {
-  const [selectedAgentId, setSelectedAgentId] = useState<string>(
+  const [selectedAgentId, setSelectedAgentIdState] = useState<string>(
     initialAgentId || agents[0]?.id || "",
   );
+  const setSelectedAgentId = (id: string) => {
+    setSelectedAgentIdState(id);
+    onAgentChange?.(id);
+  };
   const [prompt, setPrompt] = useState("");
   const [worktreeChoice, setWorktreeChoice] = useState<string>("in_place");
   const [launchCount, setLaunchCount] = useState<number>(1);
@@ -2258,6 +2273,20 @@ function LaunchAgentModal({
   const selectedAgent = isShell
     ? { id: "shell", name: "Shell" }
     : agents.find((a) => a.id === selectedAgentId) ?? agents[0];
+
+  const launcherRef = useRef<HTMLDivElement | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useLayoutEffect(() => {
+    const el = promptRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, MAX_PROMPT_PX)}px`;
+  }, [prompt, isShell]);
+
+  useEffect(() => {
+    if (isShell) launcherRef.current?.focus();
+  }, [isShell]);
 
   const agentOptions = [
     { value: "shell", label: "Shell", sublabel: "plain terminal" },
@@ -2315,93 +2344,107 @@ function LaunchAgentModal({
   };
 
   return (
-    <div className="agent-launcher agent-launcher--inline">
-      <div className="agent-launcher__header">
-        <span className="agent-launcher__title">New terminal</span>
-        <button
-          type="button"
-          className="agent-launcher__close"
-          onClick={onClose}
-          aria-label="cancel"
-          title="cancel"
-        >
-          ×
-        </button>
-      </div>
-        {!isShell && (
-          <textarea
-            className="agent-launcher__prompt"
-            placeholder="Describe a task"
-            rows={5}
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                event.preventDefault();
-                submitLaunch();
-              }
-            }}
-            autoFocus
-          />
-        )}
-        <div className="agent-launcher__chips">
-          <ChipMenu
-            icon="▣"
-            label={selectedAgent?.name ?? "Agent"}
-            options={agentOptions}
-            value={selectedAgentId}
-            onChange={setSelectedAgentId}
-          />
-          <span
-            className="agent-launcher__chip is-readonly"
-            title="active view's project folder"
-          >
-            <span aria-hidden="true">📁</span>
-            {projectLabel}
-          </span>
-          <ChipMenu
-            icon="⎇"
-            label={worktreeLabel}
-            options={worktreeOptions}
-            value={effectiveChoice}
-            onChange={setWorktreeChoice}
-          />
+    <div
+      className="agent-launcher agent-launcher--inline"
+      ref={launcherRef}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onClose();
+        }
+      }}
+    >
+      <button
+        type="button"
+        className="agent-launcher__dismiss"
+        onClick={onClose}
+        aria-label="cancel"
+        title="cancel (Esc)"
+      >
+        ×
+      </button>
+      <div className="agent-launcher__stage">
+        <h1 className="agent-launcher__heading">What are we working on?</h1>
+        <div className="agent-launcher__composer">
           {!isShell && (
-            <ChipMenu
-              icon="⊞"
-              label={`${launchCount}×`}
-              options={[1, 2, 3, 4, 5].map((n) => ({
-                value: String(n),
-                label: `${n}×`,
-                sublabel:
-                  n === 1 ? "one agent" : `${n} parallel agents, each isolated`,
-              }))}
-              value={String(launchCount)}
-              onChange={(value) => {
-                const parsed = Number.parseInt(value, 10);
-                if (!Number.isNaN(parsed)) setLaunchCount(parsed);
+            <textarea
+              ref={promptRef}
+              className="agent-launcher__prompt"
+              placeholder="Describe a task…"
+              rows={1}
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  submitLaunch();
+                }
               }}
+              autoFocus
             />
           )}
-          {!isShell && worktreeChoice === "new" && launchCount === 1 && (
-            <input
-              className="agent-launcher__branch-input"
-              placeholder="branch name (optional)"
-              value={branchName}
-              onChange={(event) => setBranchName(event.target.value)}
+          <div className="agent-launcher__chips">
+            <ChipMenu
+              icon="▣"
+              label={selectedAgent?.name ?? "Agent"}
+              options={agentOptions}
+              value={selectedAgentId}
+              onChange={setSelectedAgentId}
             />
-          )}
-          <div className="agent-launcher__spacer" />
-          <button
-            type="button"
-            className="agent-launcher__launch"
-            disabled={!canLaunch}
-            onClick={submitLaunch}
-            title="Launch (⌘↵)"
-          >
-            {launching ? "launching…" : "launch ⌘↵"}
-          </button>
+            <span
+              className="agent-launcher__chip is-readonly"
+              title="active view's project folder"
+            >
+              <span aria-hidden="true">📁</span>
+              {projectLabel}
+            </span>
+            <ChipMenu
+              icon="⎇"
+              label={worktreeLabel}
+              options={worktreeOptions}
+              value={effectiveChoice}
+              onChange={setWorktreeChoice}
+            />
+            {!isShell && (
+              <ChipMenu
+                icon="⊞"
+                label={`${launchCount}×`}
+                options={[1, 2, 3, 4, 5].map((n) => ({
+                  value: String(n),
+                  label: `${n}×`,
+                  sublabel:
+                    n === 1 ? "one agent" : `${n} parallel agents, each isolated`,
+                }))}
+                value={String(launchCount)}
+                onChange={(value) => {
+                  const parsed = Number.parseInt(value, 10);
+                  if (!Number.isNaN(parsed)) setLaunchCount(parsed);
+                }}
+              />
+            )}
+            {!isShell && worktreeChoice === "new" && launchCount === 1 && (
+              <input
+                className="agent-launcher__branch-input"
+                placeholder="branch name (optional)"
+                value={branchName}
+                onChange={(event) => setBranchName(event.target.value)}
+              />
+            )}
+            <div className="agent-launcher__spacer" />
+            <button
+              type="button"
+              className="agent-launcher__send"
+              disabled={!canLaunch}
+              onClick={submitLaunch}
+              title={launching ? "launching…" : "Launch (⌘↵)"}
+              aria-label="launch"
+            >
+              <span aria-hidden="true">{launching ? "…" : "↑"}</span>
+            </button>
+          </div>
         </div>
+      </div>
     </div>
   );
 }

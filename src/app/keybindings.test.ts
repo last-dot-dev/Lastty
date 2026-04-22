@@ -72,6 +72,43 @@ describe("matchBinding", () => {
         matchBinding(keyEvent({ key: "Tab", ctrl: true }), "other", "standard").match?.binding.id,
       ).toBe("desktop.next");
     });
+
+    it("matches Ctrl+Shift+Enter to pane.split.horizontal on both platforms", () => {
+      for (const platform of ["mac", "other"] as const) {
+        const result = matchBinding(
+          keyEvent({ key: "Enter", ctrl: true, shift: true }),
+          platform,
+          "standard",
+        );
+        expect(result.match?.binding.id).toBe("pane.split.horizontal");
+      }
+    });
+
+    it("matches Ctrl+Shift+] to desktop.next whether the browser reports ] or }", () => {
+      for (const platform of ["mac", "other"] as const) {
+        for (const key of ["]", "}"]) {
+          const result = matchBinding(
+            keyEvent({ key, ctrl: true, shift: true }),
+            platform,
+            "standard",
+          );
+          expect(result.match?.binding.id).toBe("desktop.next");
+        }
+      }
+    });
+
+    it("matches Ctrl+Shift+[ to desktop.prev whether the browser reports [ or {", () => {
+      for (const platform of ["mac", "other"] as const) {
+        for (const key of ["[", "{"]) {
+          const result = matchBinding(
+            keyEvent({ key, ctrl: true, shift: true }),
+            platform,
+            "standard",
+          );
+          expect(result.match?.binding.id).toBe("desktop.prev");
+        }
+      }
+    });
   });
 
   describe("tmux mode", () => {
@@ -233,7 +270,9 @@ describe("formatKey", () => {
   });
 
   it("formats a multi-step tmux shortcut as separate parts", () => {
-    const tmuxSplit = bindingFor("tmux", "pane.split.horizontal")!.shortcuts[1]!;
+    const tmuxSplit = bindingFor("tmux", "pane.split.horizontal")!.shortcuts.find(
+      (shortcut) => shortcut.sequence.length > 1,
+    )!;
     expect(formatShortcut(tmuxSplit, "other")).toEqual(["Ctrl+A", "Shift+|"]);
   });
 });

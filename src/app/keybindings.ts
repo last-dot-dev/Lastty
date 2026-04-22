@@ -112,6 +112,10 @@ export const BINDINGS: Binding[] = [
     shortcuts: [
       { sequence: [{ key: "s" }], modes: ALL_MODES },
       {
+        sequence: [{ key: "Enter", shift: true, modifiers: "ctrl" }],
+        modes: ALL_MODES,
+      },
+      {
         sequence: [
           { key: "a", modifiers: "ctrl" },
           {
@@ -186,6 +190,12 @@ export const BINDINGS: Binding[] = [
       { sequence: [{ key: "Tab", modifiers: "ctrl" }], modes: ALL_MODES },
       {
         sequence: [
+          { key: "]", matchKeys: ["]", "}"], shift: true, modifiers: "ctrl" },
+        ],
+        modes: ALL_MODES,
+      },
+      {
+        sequence: [
           { key: "a", modifiers: "ctrl" },
           {
             key: ">",
@@ -207,6 +217,12 @@ export const BINDINGS: Binding[] = [
       { sequence: [{ key: "[" }], modes: ALL_MODES },
       {
         sequence: [{ key: "Tab", shift: true, modifiers: "ctrl" }],
+        modes: ALL_MODES,
+      },
+      {
+        sequence: [
+          { key: "[", matchKeys: ["[", "{"], shift: true, modifiers: "ctrl" },
+        ],
         modes: ALL_MODES,
       },
       {
@@ -399,6 +415,8 @@ function formatKeyLabel(key: string): string {
       return "↓";
     case "Tab":
       return "⇥";
+    case "Enter":
+      return "⏎";
     default:
       return key.length === 1 ? key.toUpperCase() : key;
   }

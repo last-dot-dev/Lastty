@@ -6,6 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SettingsPanel from "./SettingsPanel";
 
+const APPEARANCE_PROPS = {
+  accent: "blue" as const,
+  fontFamily: "System Default" as const,
+  fontSize: 14,
+  onAccentChange: () => {},
+  onFontFamilyChange: () => {},
+  onFontSizeChange: () => {},
+};
+
 let container: HTMLDivElement;
 let root: Root;
 
@@ -36,6 +45,7 @@ describe("SettingsPanel", () => {
           onKeyboardModeChange={() => {}}
           onThemeOverrideChange={() => {}}
           onClose={() => {}}
+          {...APPEARANCE_PROPS}
         />,
       );
     });
@@ -55,6 +65,7 @@ describe("SettingsPanel", () => {
           onKeyboardModeChange={onKeyboardModeChange}
           onThemeOverrideChange={onThemeOverrideChange}
           onClose={() => {}}
+          {...APPEARANCE_PROPS}
         />,
       );
     });
@@ -83,6 +94,7 @@ describe("SettingsPanel", () => {
           onKeyboardModeChange={() => {}}
           onThemeOverrideChange={() => {}}
           onClose={onClose}
+          {...APPEARANCE_PROPS}
         />,
       );
     });

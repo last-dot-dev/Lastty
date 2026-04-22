@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::{Manager, TitleBarStyle};
+#[cfg(target_os = "macos")]
+use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::{Emitter, Manager, TitleBarStyle};
 use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "bench")]
@@ -31,12 +33,19 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "check_for_updates" {
+                let _ = app.emit("menu://check-for-updates", ());
+            }
+        })
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 
             #[cfg(target_os = "macos")]
             {
                 window.set_title_bar_style(TitleBarStyle::Overlay)?;
+                install_macos_menu(app)?;
             }
 
             #[cfg(feature = "bench")]
@@ -179,17 +188,87 @@ fn main() {
 }
 
 #[cfg(target_os = "macos")]
+fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
+    let check_for_updates =
+        MenuItemBuilder::with_id("check_for_updates", "Check for Updates…").build(app)?;
+
+    let app_menu = SubmenuBuilder::new(app, "Lastty")
+        .about(None)
+        .item(&check_for_updates)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .close_window()
+        .fullscreen()
+        .build()?;
+
+    let menu = MenuBuilder::new(app)
+        .items(&[&app_menu, &edit_menu, &window_menu])
+        .build()?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn fix_path_from_login_shell() {
+    use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    let Ok(output) = std::process::Command::new(&shell)
-        .args(["-l", "-c", "printf %s \"$PATH\""])
-        .output()
+    // Interactive login shell so ~/.zshrc is sourced too — many macOS users put
+    // `eval "$(/opt/homebrew/bin/brew shellenv)"` there rather than in .zprofile,
+    // and a login-only probe would miss it.
+    let Ok(mut child) = Command::new(&shell)
+        .args(["-l", "-i", "-c", "printf %s \"$PATH\""])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
     else {
         return;
     };
-    if !output.status.success() {
-        return;
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
     }
+
+    let Ok(output) = child.wait_with_output() else {
+        return;
+    };
     let Ok(path) = std::str::from_utf8(&output.stdout) else {
         return;
     };
