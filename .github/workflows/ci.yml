@@ -87,7 +87,4 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm tauri build --debug
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ""
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      - run: pnpm tauri build --debug --config '{"bundle":{"createUpdaterArtifacts":false}}'
