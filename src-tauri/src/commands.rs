@@ -46,9 +46,9 @@ pub async fn create_terminal(
 ) -> Result<String, String> {
     let env = build_pane_env();
     let cwd = cwd
+        .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from))
-        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+        .ok_or_else(|| "create_terminal: cwd is required".to_string())?;
     let command = command.map(|program| CommandSpec {
         program,
         args: args.unwrap_or_default(),
@@ -321,6 +321,9 @@ async fn restore_terminal_sessions_for_runtime<R: tauri::Runtime>(
     let env = build_pane_env();
     let mut restored = Vec::with_capacity(sessions.len());
     for session in sessions {
+        if session.cwd.is_empty() {
+            return Err("restore_terminal_sessions: each session requires a non-empty cwd".into());
+        }
         let session_id = state
             .create_session(SessionConfig {
                 cwd: std::path::PathBuf::from(&session.cwd),
@@ -365,11 +368,14 @@ pub async fn launch_agent(
     state: State<'_, TerminalManager>,
     event_bus: State<'_, EventBus>,
 ) -> Result<LaunchAgentResult, String> {
-    let cwd = std::env::var("HOME")
-        .ok()
+    let workspace_root = request
+        .cwd
+        .as_deref()
+        .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/"));
-    let result = agents::launch_agent(&state, &cwd, request).map_err(|error| error.to_string())?;
+        .ok_or_else(|| "launch_agent: cwd is required".to_string())?;
+    let result = agents::launch_agent(&state, &workspace_root, request)
+        .map_err(|error| error.to_string())?;
     let agent_id = state
         .get(&SessionId::parse(&result.session_id)?)
         .and_then(|session| session.agent_id.clone());

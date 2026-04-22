@@ -149,6 +149,13 @@ function pathsEqual(a: string | null | undefined, b: string | null | undefined):
   return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
 }
 
+function isUnderProjectRoot(cwd: string, projectRoot: string): boolean {
+  if (!cwd || !projectRoot) return false;
+  const a = cwd.replace(/\/+$/, "");
+  const b = projectRoot.replace(/\/+$/, "");
+  return a === b || a.startsWith(`${b}/`);
+}
+
 interface DesktopCell {
   left: number;
   top: number;
@@ -299,6 +306,13 @@ export default function TerminalWorkspace() {
       useAgentStore.getState().setAttention(focusedSessionId, false);
     }
   }, [focusedSessionId]);
+
+  function cwdForPane(paneId: string | null | undefined): string | undefined {
+    if (!paneId || !workspace) return undefined;
+    const sessionId = workspace.panes[paneId]?.sessionId;
+    if (!sessionId) return undefined;
+    return sessionInfoById[sessionId]?.cwd || undefined;
+  }
   const [draggingPaneId, setDraggingPaneId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -511,8 +525,22 @@ export default function TerminalWorkspace() {
         const persisted = mode === "stress" ? null : readPersistedWorkspaceState();
         if (persisted?.panes.length) {
           try {
+            const projectRootByPaneId = new Map<string, string>();
+            for (const desktop of persisted.desktops) {
+              if (!desktop.layout || !desktop.projectRoot) continue;
+              for (const paneId of orderedPaneIds(desktop.layout)) {
+                projectRootByPaneId.set(paneId, desktop.projectRoot);
+              }
+            }
             const restoredSessions = await restoreTerminalSessions(
-              persisted.panes.map((pane) => ({ cwd: pane.cwd })),
+              persisted.panes.map((pane) => {
+                const projectRoot = projectRootByPaneId.get(pane.paneId);
+                const cwd =
+                  projectRoot && !isUnderProjectRoot(pane.cwd, projectRoot)
+                    ? projectRoot
+                    : pane.cwd || projectRoot || "";
+                return { cwd };
+              }),
             );
             if (cancelled) return;
             const restored = buildRestoredWorkspaceState(persisted, restoredSessions);
@@ -792,8 +820,13 @@ export default function TerminalWorkspace() {
   }, [helpOpen, settingsOpen, keyboardMode.mode]);
 
   async function handleSplit(paneId: string, direction: SplitDirection) {
-    const desktop = workspace ? findDesktopForPane(workspace, paneId) : null;
-    const cwd = desktop?.projectRoot || undefined;
+    if (!workspace) return;
+    const desktop = findDesktopForPane(workspace, paneId);
+    const cwd = cwdForPane(paneId) || desktop?.projectRoot || undefined;
+    if (!cwd) {
+      console.error("handleSplit: no cwd available for pane", paneId);
+      return;
+    }
     const sessionId = await createTerminal(cwd);
     await hydrateSessionInfo(
       sessionId,
@@ -900,10 +933,15 @@ export default function TerminalWorkspace() {
       for (let i = 0; i < count; i += 1) {
         let newSessionId: string;
         let newTitle: string;
+        const fallbackCwd = attachPath || desktop.projectRoot || undefined;
         if (config.agentId === "shell") {
-          const cwd = attachPath || desktop.projectRoot || undefined;
+          const cwd = fallbackCwd;
+          if (!cwd) {
+            console.error("handleLaunchAgent: no cwd available");
+            return;
+          }
           newSessionId = await createTerminal(cwd);
-          newTitle = basenameOfPath(cwd || "") || "shell";
+          newTitle = basenameOfPath(cwd) || "shell";
           await hydrateSessionInfo(newSessionId, newTitle);
         } else {
           const worktree: WorktreeStrategy = isolate
@@ -915,10 +953,14 @@ export default function TerminalWorkspace() {
             : attachPath
               ? { kind: "attach", path: attachPath }
               : { kind: "in_place" };
+          if (!fallbackCwd) {
+            console.error("handleLaunchAgent: no cwd available");
+            return;
+          }
           const result = await launchAgent({
             agent_id: config.agentId,
             prompt: config.prompt || null,
-            cwd: attachPath || desktop.projectRoot || null,
+            cwd: fallbackCwd,
             worktree,
           });
           if (result.auto_promoted) {
@@ -1268,7 +1310,7 @@ export default function TerminalWorkspace() {
   }
 
   async function fillActiveDesktop(projectRoot: string, viewName?: string) {
-    if (!workspace) return;
+    if (!workspace || !projectRoot) return;
     const targetDesktopId = workspace.activeDesktopId;
     const sessionId = await createTerminal(projectRoot);
     const title = `shell ${Object.keys(sessionInfoById).length + 1}`;
