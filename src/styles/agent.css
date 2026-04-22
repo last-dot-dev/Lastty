@@ -601,6 +601,48 @@
   text-overflow: ellipsis;
 }
 
+.agent-worktree-row__name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-worktree-row__rename-toggle {
+  background: transparent;
+  border: none;
+  padding: 0 4px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+  flex-shrink: 0;
+}
+
+.agent-worktree-row:hover .agent-worktree-row__rename-toggle,
+.agent-worktree-row__rename-toggle:focus-visible {
+  opacity: 1;
+}
+
+.agent-worktree-row__rename-toggle:hover {
+  color: var(--color-text-primary);
+}
+
+.agent-worktree-row__rename-input {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+  background: var(--color-background-primary);
+  border: 1px solid var(--status-plan-dot);
+  border-radius: 3px;
+  padding: 2px 4px;
+  outline: none;
+  width: 100%;
+  min-width: 0;
+}
+
 .agent-worktree-row__meta {
   display: flex;
   flex-wrap: wrap;

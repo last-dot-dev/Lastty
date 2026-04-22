@@ -35,6 +35,7 @@ export default function WorktreeList({
   onAttach,
   onMerge,
   onAbandon,
+  onRename,
   style,
 }: {
   rows: WorktreeRow[];
@@ -43,6 +44,7 @@ export default function WorktreeList({
   onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
   onMerge: (worktreePath: string) => void;
   onAbandon?: (worktreePath: string) => void;
+  onRename?: (worktreePath: string, newBranch: string) => Promise<void>;
   style?: CSSProperties;
 }) {
   return (
@@ -61,6 +63,7 @@ export default function WorktreeList({
             onAttach={onAttach}
             onMerge={onMerge}
             onAbandon={onAbandon}
+            onRename={onRename}
           />
         ))}
       </div>
@@ -75,6 +78,7 @@ function WorktreeRowView({
   onAttach,
   onMerge,
   onAbandon,
+  onRename,
 }: {
   row: WorktreeRow;
   agents: AgentDefinition[];
@@ -82,9 +86,12 @@ function WorktreeRowView({
   onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
   onMerge: (worktreePath: string) => void;
   onAbandon?: (worktreePath: string) => void;
+  onRename?: (worktreePath: string, newBranch: string) => Promise<void>;
 }) {
   const [attachOpen, setAttachOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const [renameValue, setRenameValue] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -116,6 +123,26 @@ function WorktreeRowView({
     }
   };
 
+  async function commitRename() {
+    if (!onRename || renameValue === null) return;
+    const next = renameValue.trim();
+    if (!next || next === row.branchName) {
+      setRenameValue(null);
+      return;
+    }
+    setRenaming(true);
+    try {
+      await onRename(row.path, next);
+      setRenameValue(null);
+    } catch (error) {
+      window.alert(
+        `Rename failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setRenaming(false);
+    }
+  }
+
   return (
     <div
       ref={ref}
@@ -123,8 +150,7 @@ function WorktreeRowView({
         row.merged ? "is-merged" : ""
       } ${row.isMain ? "is-main" : ""}`}
     >
-      <button
-        type="button"
+      <div
         className="agent-worktree-row__body"
         onClick={onRowClick}
       >
@@ -137,9 +163,48 @@ function WorktreeRowView({
           {dot}
         </span>
         <span className="agent-worktree-row__content">
-          <span className="agent-worktree-row__name">
-            {row.branchName || "(detached)"}
-          </span>
+          {renameValue === null ? (
+            <span className="agent-worktree-row__name-row">
+              <span className="agent-worktree-row__name">
+                {row.branchName || "(detached)"}
+              </span>
+              {!row.isMain && onRename && (
+                <button
+                  type="button"
+                  className="agent-worktree-row__rename-toggle"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setRenameValue(row.branchName);
+                  }}
+                  title="rename this worktree and its branch"
+                  aria-label={`rename ${row.branchName}`}
+                >
+                  ✎
+                </button>
+              )}
+            </span>
+          ) : (
+            <input
+              className="agent-worktree-row__rename-input"
+              value={renameValue}
+              disabled={renaming}
+              onChange={(event) => setRenameValue(event.target.value)}
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void commitRename();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  setRenameValue(null);
+                }
+              }}
+              onBlur={() => {
+                if (!renaming) setRenameValue(null);
+              }}
+              autoFocus
+            />
+          )}
           <span className="agent-worktree-row__meta">
             {row.isMain ? (
               <>
@@ -163,7 +228,7 @@ function WorktreeRowView({
             )}
           </span>
         </span>
-      </button>
+      </div>
       {row.changedFiles.length > 0 && (
         <ul className="agent-worktree-row__files">
           {row.changedFiles.map((file) => (
