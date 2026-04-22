@@ -19,6 +19,7 @@ __pycache__/
 .vscode/
 .omx/
 .lastty-recordings/
+.lastty-worktrees/
 .pane-worktrees/
 *.swp
 *.swo
