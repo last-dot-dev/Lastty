@@ -102,6 +102,12 @@ impl<R: Runtime> EventListener for EventProxy<R> {
                         session_id: self.session_id.to_string(),
                         exit_code: status.code(),
                     });
+                if let Some(router) = self
+                    .app
+                    .try_state::<std::sync::Arc<crate::peer::PeerRouter<R>>>()
+                {
+                    router.forget_session(&self.session_id.to_string());
+                }
             }
             Event::Title(title) => {
                 *self.title.lock().unwrap() = title.clone();

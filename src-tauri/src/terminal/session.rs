@@ -607,6 +607,12 @@ fn emit_agent_ui<R: Runtime>(
             summary: summary.clone(),
             exit_code: *exit_code,
         }),
+        AgentUiMessage::Peer(peer_msg) => {
+            if let Some(router) = app.try_state::<std::sync::Arc<crate::peer::PeerRouter<R>>>() {
+                router.ingest_from_session(&session_id, peer_msg.clone());
+            }
+            None
+        }
         _ => None,
     };
     let message_value = serde_json::to_value(&message).unwrap_or(serde_json::Value::Null);

@@ -14,6 +14,7 @@ pub mod git_util;
 pub mod git_worktrees;
 pub mod history;
 pub mod input;
+pub mod peer;
 #[cfg(feature = "bench")]
 pub mod perf_registry;
 pub mod protocol;
