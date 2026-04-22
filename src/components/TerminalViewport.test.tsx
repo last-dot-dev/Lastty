@@ -392,16 +392,20 @@ describe("TerminalViewport", () => {
     expect(harness.terminalScrollMock).toHaveBeenCalledWith("session-1", 1);
   });
 
-  it("clears the xterm scrollback on the first frame after a host resize", async () => {
+  it("writes frames verbatim after a host resize, with no scrollback-clear escape", async () => {
     await renderViewport();
 
     const terminal = lastTerminal();
     const writesBefore = decodeWrites(terminal).length;
+    harness.terminalResizeMock.mockClear();
 
     await act(async () => {
+      terminal.cols = 120;
+      terminal.rows = 30;
       for (const cb of resizeObserverCallbacks) {
         cb([], {} as ResizeObserver);
       }
+      await waitForDebouncedResize();
       harness.emit("term:frame", {
         session_id: "session-1",
         frame: makeFrame(false, "AFTER_RESIZE"),
@@ -409,20 +413,32 @@ describe("TerminalViewport", () => {
       await flush();
     });
 
+    expect(harness.terminalResizeMock).toHaveBeenCalledWith("session-1", 120, 30);
     const writesAfter = decodeWrites(terminal);
     expect(writesAfter.length).toBe(writesBefore + 1);
-    expect(writesAfter.at(-1)).toBe("\u001b[3JAFTER_RESIZE");
+    expect(writesAfter.at(-1)).toBe("AFTER_RESIZE");
+  });
 
-    // Subsequent frames without a resize should not include the clear.
+
+  it("coalesces rapid resize observer ticks into a single debounced resize IPC", async () => {
+    await renderViewport();
+
+    const terminal = lastTerminal();
+    harness.terminalResizeMock.mockClear();
+
     await act(async () => {
-      harness.emit("term:frame", {
-        session_id: "session-1",
-        frame: makeFrame(false, "NEXT_FRAME"),
-      } satisfies TerminalFrameEvent);
-      await flush();
+      for (let i = 0; i < 10; i++) {
+        terminal.cols = 80 + i;
+        terminal.rows = 24 + i;
+        for (const cb of resizeObserverCallbacks) {
+          cb([], {} as ResizeObserver);
+        }
+      }
+      await waitForDebouncedResize();
     });
 
-    expect(decodeWrites(terminal).at(-1)).toBe("NEXT_FRAME");
+    expect(harness.terminalResizeMock).toHaveBeenCalledTimes(1);
+    expect(harness.terminalResizeMock).toHaveBeenCalledWith("session-1", 89, 33);
   });
 
   it("does not forward wheel events when there is no rust-side scrollback", async () => {
@@ -548,4 +564,10 @@ function emptySelectionBuffer(): SelectionBuffer {
 async function flush() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function waitForDebouncedResize() {
+  // TerminalHostRegistry debounces the resize IPC by 50ms (RESIZE_IPC_DEBOUNCE_MS).
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  await flush();
 }
