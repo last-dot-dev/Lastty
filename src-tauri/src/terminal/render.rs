@@ -128,16 +128,23 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
         }
 
         loop {
-            let dirty = render_coordinator.wait_for_next();
+            let mut dirty = render_coordinator.wait_for_next();
 
-            // Cap emit rate during bursts. Idle keystrokes pay no cost because
-            // last_emit will be stale; back-to-back marks on the same session
-            // are deduped in the coordinator's queue and coalesced into one
-            // full-viewport render of the latest state.
+            // Cap emit rate during bursts. We use the condvar wait rather than
+            // thread::sleep so marks that arrive during the cap window are
+            // collected into *this* emit batch instead of facing a second full
+            // MIN_FRAME_INTERVAL penalty on the next iteration.
             if let Some(last) = last_emit {
                 let elapsed = last.elapsed();
                 if elapsed < MIN_FRAME_INTERVAL {
-                    thread::sleep(MIN_FRAME_INTERVAL - elapsed);
+                    let remaining = MIN_FRAME_INTERVAL - elapsed;
+                    if let Some(more) = render_coordinator.wait_for_next_timeout(remaining) {
+                        for session_id in more.sessions {
+                            if !dirty.sessions.contains(&session_id) {
+                                dirty.sessions.push(session_id);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -305,7 +312,7 @@ pub fn render_full<T: EventListener>(term: &Term<T>) -> String {
 
         let needs_sgr = cell.fg != prev_fg || cell.bg != prev_bg || cell.flags != prev_flags;
         if needs_sgr {
-            emit_sgr(&mut out, cell.fg, cell.bg, cell.flags);
+            emit_sgr(&mut out, cell.fg, cell.bg, cell.flags, prev_flags);
             prev_fg = cell.fg;
             prev_bg = cell.bg;
             prev_flags = cell.flags;
@@ -357,7 +364,7 @@ pub fn render_partial<T: EventListener>(
 
             let needs_sgr = cell.fg != prev_fg || cell.bg != prev_bg || cell.flags != prev_flags;
             if needs_sgr {
-                emit_sgr(&mut out, cell.fg, cell.bg, cell.flags);
+                emit_sgr(&mut out, cell.fg, cell.bg, cell.flags, prev_flags);
                 prev_fg = cell.fg;
                 prev_bg = cell.bg;
                 prev_flags = cell.flags;
@@ -385,49 +392,60 @@ fn push_cell_char(out: &mut String, cell: &alacritty_terminal::term::cell::Cell)
     }
 }
 
-fn emit_sgr(out: &mut String, fg: Color, bg: Color, flags: Flags) {
-    out.push_str("\x1b[0");
-
-    if flags.contains(Flags::BOLD) {
-        out.push_str(";1");
-    }
-    if flags.contains(Flags::DIM) {
-        out.push_str(";2");
-    }
-    if flags.contains(Flags::ITALIC) {
-        out.push_str(";3");
-    }
-    if flags.contains(Flags::UNDERLINE) {
-        out.push_str(";4");
-    }
-    if flags.contains(Flags::DOUBLE_UNDERLINE) {
-        out.push_str(";21");
-    }
-    if flags.contains(Flags::UNDERCURL) {
-        out.push_str(";4:3");
-    }
-    if flags.contains(Flags::DOTTED_UNDERLINE) {
-        out.push_str(";4:4");
-    }
-    if flags.contains(Flags::DASHED_UNDERLINE) {
-        out.push_str(";4:5");
-    }
-    if flags.contains(Flags::INVERSE) {
-        out.push_str(";7");
-    }
-    if flags.contains(Flags::HIDDEN) {
-        out.push_str(";8");
-    }
-    if flags.contains(Flags::STRIKEOUT) {
-        out.push_str(";9");
+/// Emits a minimal SGR sequence to transition from `prev_*` to the new cell
+/// attrs. Avoids the `\x1b[0` reset (and re-emission of all flags) when only
+/// colors changed and no flag needs to be cleared — saves ~3 bytes per cell for
+/// plain-color workloads like `color-cycle`.
+fn emit_sgr(out: &mut String, fg: Color, bg: Color, flags: Flags, prev_flags: Flags) {
+    // If a flag that was previously set is now absent, we must reset first
+    // because there is no individual "turn off bold/italic/…" sequence we use.
+    let needs_reset = prev_flags.difference(flags) != Flags::empty();
+    if needs_reset {
+        out.push_str("\x1b[0");
+    } else {
+        out.push_str("\x1b[");
     }
 
-    emit_color_sgr(out, fg, true);
-    emit_color_sgr(out, bg, false);
+    let mut any = needs_reset;
+
+    macro_rules! flag_sgr {
+        ($flag:expr, $code:literal) => {
+            if flags.contains($flag) && (needs_reset || !prev_flags.contains($flag)) {
+                if any {
+                    out.push(';');
+                }
+                out.push_str($code);
+                any = true;
+            }
+        };
+    }
+
+    flag_sgr!(Flags::BOLD, "1");
+    flag_sgr!(Flags::DIM, "2");
+    flag_sgr!(Flags::ITALIC, "3");
+    flag_sgr!(Flags::UNDERLINE, "4");
+    flag_sgr!(Flags::DOUBLE_UNDERLINE, "21");
+    flag_sgr!(Flags::UNDERCURL, "4:3");
+    flag_sgr!(Flags::DOTTED_UNDERLINE, "4:4");
+    flag_sgr!(Flags::DASHED_UNDERLINE, "4:5");
+    flag_sgr!(Flags::INVERSE, "7");
+    flag_sgr!(Flags::HIDDEN, "8");
+    flag_sgr!(Flags::STRIKEOUT, "9");
+
+    emit_color_sgr(out, fg, true, &mut any);
+    emit_color_sgr(out, bg, false, &mut any);
     out.push('m');
 }
 
-fn emit_color_sgr(out: &mut String, color: Color, is_fg: bool) {
+fn emit_color_sgr(out: &mut String, color: Color, is_fg: bool, any: &mut bool) {
+    macro_rules! sep {
+        () => {
+            if *any {
+                out.push(';');
+            }
+            *any = true;
+        };
+    }
     match color {
         Color::Named(name) => {
             let code = match name {
@@ -457,15 +475,18 @@ fn emit_color_sgr(out: &mut String, color: Color, is_fg: bool) {
                     }
                 }
             };
-            let _ = write!(out, ";{code}");
+            sep!();
+            let _ = write!(out, "{code}");
         }
         Color::Indexed(idx) => {
             let prefix = if is_fg { 38 } else { 48 };
-            let _ = write!(out, ";{prefix};5;{idx}");
+            sep!();
+            let _ = write!(out, "{prefix};5;{idx}");
         }
         Color::Spec(rgb) => {
             let prefix = if is_fg { 38 } else { 48 };
-            let _ = write!(out, ";{prefix};2;{};{};{}", rgb.r, rgb.g, rgb.b);
+            sep!();
+            let _ = write!(out, "{prefix};2;{};{};{}", rgb.r, rgb.g, rgb.b);
         }
     }
 }
