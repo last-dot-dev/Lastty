@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,9 @@ pub enum ChangeStatus {
     Other,
 }
 
-const LASTTY_DIRNAME: &str = ".pane-worktrees";
+const LASTTY_DIRNAME: &str = ".lastty-worktrees";
+// Recognize worktrees created before the rename so they still show as managed.
+const LEGACY_DIRNAME: &str = ".pane-worktrees";
 
 pub fn list_worktrees(repo_root: &Path) -> Result<Vec<Worktree>> {
     if !crate::git_util::is_git_repo(repo_root) {
@@ -54,6 +56,7 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<Worktree>> {
     let main_path = run_git_trim(repo_root, &["rev-parse", "--show-toplevel"])
         .ok_or_else(|| anyhow!("not inside a git repository: {}", repo_root.display()))?;
     let lastty_root = Path::new(&main_path).join(LASTTY_DIRNAME);
+    let legacy_root = Path::new(&main_path).join(LEGACY_DIRNAME);
 
     let mut out = Vec::new();
     let mut current: Option<WorktreePartial> = None;
@@ -61,13 +64,13 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<Worktree>> {
     for line in stdout.lines() {
         if line.is_empty() {
             if let Some(partial) = current.take() {
-                out.push(partial.finish(&main_path, &lastty_root));
+                out.push(partial.finish(&main_path, &lastty_root, &legacy_root));
             }
             continue;
         }
         if let Some(rest) = line.strip_prefix("worktree ") {
             if let Some(partial) = current.take() {
-                out.push(partial.finish(&main_path, &lastty_root));
+                out.push(partial.finish(&main_path, &lastty_root, &legacy_root));
             }
             current = Some(WorktreePartial::new(rest.to_string()));
         } else if let Some(partial) = current.as_mut() {
@@ -81,7 +84,7 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<Worktree>> {
         }
     }
     if let Some(partial) = current.take() {
-        out.push(partial.finish(&main_path, &lastty_root));
+        out.push(partial.finish(&main_path, &lastty_root, &legacy_root));
     }
     Ok(out)
 }
@@ -179,9 +182,10 @@ impl WorktreePartial {
         }
     }
 
-    fn finish(self, main_path: &str, lastty_root: &PathBuf) -> Worktree {
+    fn finish(self, main_path: &str, lastty_root: &Path, legacy_root: &Path) -> Worktree {
         let is_main = paths_equal(&self.path, main_path);
-        let is_lastty = Path::new(&self.path).starts_with(lastty_root);
+        let path = Path::new(&self.path);
+        let is_lastty = path.starts_with(lastty_root) || path.starts_with(legacy_root);
         let branch = self
             .branch
             .unwrap_or_else(|| if self.detached { "(detached)" } else { "" }.to_string());
@@ -203,6 +207,7 @@ fn paths_equal(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::process::Command;
 
     fn run(cwd: &Path, args: &[&str]) {
@@ -235,7 +240,7 @@ mod tests {
     #[test]
     fn list_discovers_main_and_secondaries() {
         let tmp = init_repo_with_commit();
-        let wt_root = tmp.join(".pane-worktrees");
+        let wt_root = tmp.join(".lastty-worktrees");
         std::fs::create_dir_all(&wt_root).expect("mkdir");
         let feature_dir = wt_root.join("lastty-feature-001");
         run(
@@ -259,7 +264,7 @@ mod tests {
             .find(|w| !w.is_main)
             .expect("secondary present");
         assert_eq!(secondary.branch, "lastty-feature-001");
-        assert!(secondary.is_lastty, "secondary under .pane-worktrees");
+        assert!(secondary.is_lastty, "secondary under .lastty-worktrees");
         assert!(!secondary.detached);
 
         std::fs::remove_dir_all(&tmp).ok();
@@ -268,7 +273,7 @@ mod tests {
     #[test]
     fn status_counts_uncommitted_and_unmerged() {
         let tmp = init_repo_with_commit();
-        let wt_root = tmp.join(".pane-worktrees");
+        let wt_root = tmp.join(".lastty-worktrees");
         std::fs::create_dir_all(&wt_root).expect("mkdir");
         let feature_dir = wt_root.join("lastty-feature-002");
         run(

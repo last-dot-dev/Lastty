@@ -359,7 +359,7 @@ fn resolve_strategy(
                         &suffix[..6]
                     )
                 });
-            let worktree_root = base_cwd.join(".pane-worktrees");
+            let worktree_root = base_cwd.join(".lastty-worktrees");
             std::fs::create_dir_all(&worktree_root)?;
             let worktree_path = worktree_root.join(&branch_name);
             if worktree_path.exists() {

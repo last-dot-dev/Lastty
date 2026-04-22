@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn prepare_shared_sets_cargo_target_dir_and_copies_dotfiles() {
         let main = std::env::temp_dir().join(format!("lastty-prep-main-{}", uuid::Uuid::new_v4()));
-        let worktree = main.join(".pane-worktrees").join("lastty-test-001");
+        let worktree = main.join(".lastty-worktrees").join("lastty-test-001");
         std::fs::create_dir_all(&main).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(main.join(".env"), "FOO=1").unwrap();
