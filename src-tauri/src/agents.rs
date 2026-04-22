@@ -440,10 +440,55 @@ fn build_command_spec(
         });
     }
 
-    Ok(CommandSpec {
-        program: agent.command.clone(),
-        args,
-    })
+    let program = resolve_in_path(&agent.command)
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or_else(|| command_not_found_error(agent))?;
+
+    Ok(CommandSpec { program, args })
+}
+
+/// Resolves a bare program name against the current process's `PATH`. Returns
+/// the input unchanged if it already contains a path separator (absolute or
+/// explicitly relative). Returns `None` if the binary is not found or isn't
+/// executable.
+pub(crate) fn resolve_in_path(program: &str) -> Option<PathBuf> {
+    if program.is_empty() {
+        return None;
+    }
+    if program.contains('/') {
+        let path = Path::new(program);
+        return is_executable(path).then(|| path.to_path_buf());
+    }
+    let path_env = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_env)
+        .map(|dir| dir.join(program))
+        .find(|candidate| is_executable(candidate))
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn command_not_found_error(agent: &AgentDefinition) -> anyhow::Error {
+    let path_env = std::env::var("PATH").unwrap_or_default();
+    anyhow::anyhow!(
+        "Can't find `{command}` on your PATH.\n\n\
+         Install {name}, or if it's already installed, add its directory to your \
+         shell startup file (on macOS: `~/.zprofile` or `~/.zshrc`) and restart Lastty.\n\n\
+         PATH searched:\n{path}",
+        command = agent.command,
+        name = agent.name,
+        path = path_env
+    )
 }
 
 fn build_agent_env(_base_cwd: &Path) -> HashMap<String, String> {
@@ -513,8 +558,8 @@ fn default_agents() -> Vec<AgentDefinition> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_command_spec, load_rules, AgentDefinition, PromptTransport, RuleAction,
-        RuleDefinition, RuleFilter, RuleTrigger,
+        build_command_spec, load_rules, resolve_in_path, AgentDefinition, PromptTransport,
+        RuleAction, RuleDefinition, RuleFilter, RuleTrigger,
     };
     use std::collections::HashMap;
     use std::fs;
@@ -523,10 +568,12 @@ mod tests {
     #[test]
     fn argv_transport_appends_prompt() {
         let agent = AgentDefinition {
-            id: "codex".to_string(),
-            name: "Codex".to_string(),
-            command: "codex".to_string(),
-            default_args: vec!["exec".to_string()],
+            id: "sh".to_string(),
+            name: "sh".to_string(),
+            // Absolute path bypasses PATH resolution; keeps the assertion stable
+            // regardless of the test machine's PATH.
+            command: "/bin/sh".to_string(),
+            default_args: vec!["-c".to_string()],
             prompt_transport: PromptTransport::Simple("argv".to_string()),
             shell: false,
             env: HashMap::new(),
@@ -536,8 +583,52 @@ mod tests {
         };
 
         let spec = build_command_spec(&agent, Some("fix it")).unwrap();
-        assert_eq!(spec.program, "codex");
-        assert_eq!(spec.args, vec!["exec".to_string(), "fix it".to_string()]);
+        assert_eq!(spec.program, "/bin/sh");
+        assert_eq!(spec.args, vec!["-c".to_string(), "fix it".to_string()]);
+    }
+
+    #[test]
+    fn build_command_spec_errors_when_binary_missing() {
+        let agent = AgentDefinition {
+            id: "ghost".to_string(),
+            name: "Ghost CLI".to_string(),
+            command: "this-binary-definitely-does-not-exist-on-path-xyz".to_string(),
+            default_args: Vec::new(),
+            prompt_transport: PromptTransport::Simple("none".to_string()),
+            shell: false,
+            env: HashMap::new(),
+            icon: None,
+            resume_command: None,
+            resume_args: Vec::new(),
+        };
+
+        let err = build_command_spec(&agent, None).unwrap_err().to_string();
+        assert!(err.contains("Can't find"), "unexpected error: {err}");
+        assert!(err.contains("Ghost CLI"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn resolve_in_path_finds_standard_binaries() {
+        let resolved = resolve_in_path("sh").expect("sh must be on PATH");
+        assert!(resolved.is_absolute());
+        assert!(resolved.ends_with("sh"));
+    }
+
+    #[test]
+    fn resolve_in_path_passes_through_absolute_paths() {
+        let resolved = resolve_in_path("/bin/sh").expect("/bin/sh must exist");
+        assert_eq!(resolved, PathBuf::from("/bin/sh"));
+    }
+
+    #[test]
+    fn resolve_in_path_returns_none_for_missing() {
+        assert!(resolve_in_path("this-binary-does-not-exist-anywhere-zzz").is_none());
+    }
+
+    #[test]
+    fn resolve_in_path_rejects_non_executable() {
+        // A directory is not an executable file.
+        assert!(resolve_in_path("/tmp").is_none());
     }
 
     #[test]
