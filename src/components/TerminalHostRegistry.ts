@@ -57,7 +57,7 @@ interface Entry {
   removeCopyListener: (() => void) | null;
   removeWheelListener: (() => void) | null;
   wheelAccumDy: number;
-  pendingScrollbackClear: boolean;
+  resizeIpcTimer: number | null;
   snapshotTimer: number | null;
   status: string;
   statusListeners: Set<StatusListener>;
@@ -98,7 +98,12 @@ function setStatus(entry: Entry, status: string) {
   }
 }
 
-const ERASE_SAVED_LINES = new Uint8Array([0x1b, 0x5b, 0x33, 0x4a]);
+// During a window drag, ResizeObserver fires per paint and cols/rows can cross
+// several cell boundaries. Each IPC eventually lands as a SIGWINCH on the
+// child process; a TUI that re-emits its banner on SIGWINCH (Claude Code is
+// one) will stack copies in scrollback. Coalesce with a trailing debounce so
+// only the final stable size makes it to the PTY.
+const RESIZE_IPC_DEBOUNCE_MS = 50;
 
 const PASTE_CHUNK_CHARS = 16 * 1024;
 
@@ -153,23 +158,34 @@ function suppressQueryResponses(terminal: Terminal) {
   parser.registerDcsHandler?.({ intermediates: "$", final: "r" }, () => true);
 }
 
-function syncTerminalViewport(entry: Entry): Promise<void> {
+function syncTerminalViewport(entry: Entry): void {
   try {
     entry.fit.fit();
   } catch {
-    return Promise.resolve();
+    return;
   }
 
   const { cols, rows } = entry.terminal;
   if (cols === entry.lastSentCols && rows === entry.lastSentRows) {
-    return Promise.resolve();
+    return;
   }
-  entry.lastSentCols = cols;
-  entry.lastSentRows = rows;
 
-  return terminalResize(entry.sessionId, cols, rows).catch((error) => {
-    console.error("terminal resize failed", error);
-  });
+  if (entry.resizeIpcTimer !== null) {
+    window.clearTimeout(entry.resizeIpcTimer);
+  }
+  entry.resizeIpcTimer = window.setTimeout(() => {
+    entry.resizeIpcTimer = null;
+    if (entry.disposed) return;
+    const { cols: currentCols, rows: currentRows } = entry.terminal;
+    if (currentCols === entry.lastSentCols && currentRows === entry.lastSentRows) {
+      return;
+    }
+    entry.lastSentCols = currentCols;
+    entry.lastSentRows = currentRows;
+    terminalResize(entry.sessionId, currentCols, currentRows).catch((error) => {
+      console.error("terminal resize failed", error);
+    });
+  }, RESIZE_IPC_DEBOUNCE_MS);
 }
 
 function cellHeightPx(entry: Entry): number {
@@ -281,11 +297,21 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
   bindWheelScroll(entry);
   entry.resizeObserver = new ResizeObserver(() => {
     if (entry.disposed) return;
-    entry.pendingScrollbackClear = true;
-    void syncTerminalViewport(entry);
+    syncTerminalViewport(entry);
   });
   entry.resizeObserver.observe(host);
-  await syncTerminalViewport(entry);
+
+  try {
+    entry.fit.fit();
+  } catch {
+    // ignore pre-init fit errors
+  }
+  const { cols: initialCols, rows: initialRows } = entry.terminal;
+  entry.lastSentCols = initialCols;
+  entry.lastSentRows = initialRows;
+  await terminalResize(entry.sessionId, initialCols, initialRows).catch((error) => {
+    console.error("terminal resize failed", error);
+  });
 
   const handleCopy = (event: ClipboardEvent) => {
     if (!terminal.hasSelection()) return;
@@ -298,14 +324,7 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
     entry.latestFrame = frame;
     const prepared = prepareXtermFrameWrite(frame, entry.frameState);
     entry.frameState = prepared.state;
-    let bytes = prepared.bytes;
-    if (entry.pendingScrollbackClear) {
-      entry.pendingScrollbackClear = false;
-      const merged = new Uint8Array(ERASE_SAVED_LINES.length + bytes.length);
-      merged.set(ERASE_SAVED_LINES, 0);
-      merged.set(bytes, ERASE_SAVED_LINES.length);
-      bytes = merged;
-    }
+    const bytes = prepared.bytes;
     if (__LASTTY_BENCH__) {
       const writeStart = performance.now();
       terminal.write(bytes, () => {
@@ -370,7 +389,12 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     fontFamily: "Menlo, NFFallback, Monaco, monospace",
     fontSize: 14,
     lineHeight: 1.2,
-    scrollback: 10_000,
+    // Rust's alacritty owns authoritative scrollback and drives wheel scroll
+    // through terminalScroll IPC. Giving xterm.js its own scrollback lets
+    // fit.fit()'s cols reflow push rows into private scrollback that falls
+    // through wheel-handling whenever Rust's total_lines == rows, showing
+    // reflow-duplicated ghosts to the user on drag-resize.
+    scrollback: 0,
     theme: xtermThemeFor(props.theme),
   });
 
@@ -404,7 +428,7 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     removeCopyListener: null,
     removeWheelListener: null,
     wheelAccumDy: 0,
-    pendingScrollbackClear: false,
+    resizeIpcTimer: null,
     snapshotTimer: null,
     status: "initializing",
     statusListeners: new Set(),
@@ -511,6 +535,10 @@ export function releaseTerminalHost(sessionId: string): void {
   entry.unlistenFrame?.();
   entry.removeCopyListener?.();
   entry.removeWheelListener?.();
+  if (entry.resizeIpcTimer !== null) {
+    window.clearTimeout(entry.resizeIpcTimer);
+    entry.resizeIpcTimer = null;
+  }
   if (entry.snapshotTimer !== null) {
     window.clearTimeout(entry.snapshotTimer);
   }
