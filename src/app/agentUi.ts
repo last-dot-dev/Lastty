@@ -52,6 +52,7 @@ export interface AgentSessionState {
   pendingApprovals: Array<{ id: string; message: string; options: string[] }>;
   notifications: Array<{ level: string; message: string; timestamp: number }>;
   widgets: Array<{ widgetType: string; props: unknown; timestamp: number }>;
+  attention: boolean;
 }
 
 type FileEditKind = "edit" | "create" | "delete";
@@ -70,6 +71,7 @@ export function emptyAgentSessionState(): AgentSessionState {
     pendingApprovals: [],
     notifications: [],
     widgets: [],
+    attention: false,
   };
 }
 

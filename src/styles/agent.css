@@ -3,6 +3,11 @@
   50% { opacity: 0.3; }
 }
 
+@keyframes attentionPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .agent-root {
   position: fixed;
   inset: 0;
@@ -1562,6 +1567,19 @@
 
 .agent-window-shell.is-needs-help {
   border-left-color: var(--status-help-accent);
+}
+
+.agent-window-shell.is-needs-help::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--status-help-accent);
+  z-index: 2;
+  pointer-events: none;
+  animation: attentionPulse 1.4s ease-in-out infinite;
 }
 
 .agent-window-shell.is-focused .agent-window-header {

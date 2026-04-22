@@ -48,6 +48,10 @@ describe("deriveAgentStatus", () => {
     expect(deriveAgentStatus(ui, false)).toBe("needs_help");
   });
 
+  it("returns needs_help when attention flag is set", () => {
+    expect(deriveAgentStatus(stateWith({ attention: true }), false)).toBe("needs_help");
+  });
+
   it("needs_help wins over finished", () => {
     const ui = stateWith({
       pendingApprovals: [{ id: "a", message: "?", options: [] }],

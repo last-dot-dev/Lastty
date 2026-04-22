@@ -18,7 +18,7 @@ export function deriveAgentStatus(
   exited = false,
 ): AgentStatus {
   if (!ui) return exited ? "done" : "plan";
-  if (ui.pendingApprovals.length > 0) return "needs_help";
+  if (ui.pendingApprovals.length > 0 || ui.attention) return "needs_help";
   if (ui.finished !== null || exited) return "done";
   return "plan";
 }

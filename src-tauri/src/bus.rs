@@ -59,6 +59,9 @@ pub enum BusEvent {
         approval_id: String,
         choice: String,
     },
+    SessionAttention {
+        session_id: String,
+    },
     PtyInput {
         session_id: String,
         bytes: Vec<u8>,
@@ -487,6 +490,7 @@ impl BusEvent {
             BusEvent::AgentFileEdit { .. } => "agent_file_edit",
             BusEvent::AgentFinished { .. } => "agent_finished",
             BusEvent::UserApproval { .. } => "user_approval",
+            BusEvent::SessionAttention { .. } => "session_attention",
             BusEvent::PtyInput { .. } => "pty_input",
             BusEvent::PtyOutput { .. } => "pty_output",
             BusEvent::Resize { .. } => "resize",
@@ -506,6 +510,7 @@ impl BusEvent {
             | BusEvent::AgentFileEdit { session_id, .. }
             | BusEvent::AgentFinished { session_id, .. }
             | BusEvent::UserApproval { session_id, .. }
+            | BusEvent::SessionAttention { session_id, .. }
             | BusEvent::PtyInput { session_id, .. }
             | BusEvent::PtyOutput { session_id, .. }
             | BusEvent::Resize { session_id, .. }

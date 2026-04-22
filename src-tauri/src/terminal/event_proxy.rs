@@ -121,6 +121,18 @@ impl<R: Runtime> EventListener for EventProxy<R> {
                     )
                     .ok();
             }
+            Event::Bell => {
+                let session_id = self.session_id.to_string();
+                self.app
+                    .emit(
+                        "session:attention",
+                        serde_json::json!({ "session_id": session_id }),
+                    )
+                    .ok();
+                self.app
+                    .state::<EventBus<R>>()
+                    .publish(BusEvent::SessionAttention { session_id });
+            }
             _ => {}
         }
     }

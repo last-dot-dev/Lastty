@@ -13,6 +13,7 @@ interface AgentStore {
   sessions: Record<string, AgentSessionState>;
   ingest: (sessionId: string, message: AgentUiMessage) => void;
   resolveApproval: (sessionId: string, approvalId: string) => void;
+  setAttention: (sessionId: string, attention: boolean) => void;
   forgetSession: (sessionId: string) => void;
   reset: () => void;
 }
@@ -37,6 +38,17 @@ export const useAgentStore = create<AgentStore>((set) => ({
         sessions: {
           ...state.sessions,
           [sessionId]: resolveApproval(existing, approvalId),
+        },
+      };
+    }),
+  setAttention: (sessionId, attention) =>
+    set((state) => {
+      const existing = state.sessions[sessionId] ?? emptyAgentSessionState();
+      if (existing.attention === attention) return state;
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...existing, attention },
         },
       };
     }),

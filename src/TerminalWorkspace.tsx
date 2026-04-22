@@ -295,6 +295,9 @@ export default function TerminalWorkspace() {
   }, [workspace, focusedPaneId]);
   useEffect(() => {
     focusedSessionIdRef.current = focusedSessionId;
+    if (focusedSessionId) {
+      useAgentStore.getState().setAttention(focusedSessionId, false);
+    }
   }, [focusedSessionId]);
   const [draggingPaneId, setDraggingPaneId] = useState<string | null>(null);
 
@@ -652,6 +655,10 @@ export default function TerminalWorkspace() {
       const message = parseAgentMessage(event.payload.message);
       if (!message) return;
       useAgentStore.getState().ingest(event.payload.session_id, message);
+    }).then((fn) => unsubs.push(fn));
+
+    void listen<{ session_id: string }>("session:attention", (event) => {
+      useAgentStore.getState().setAttention(event.payload.session_id, true);
     }).then((fn) => unsubs.push(fn));
 
     void listen<unknown>("bus:event", (event) => {
