@@ -2222,40 +2222,6 @@ function PaneDropOverlay({
   );
 }
 
-function EmptyDesktop({ onNewTerminal }: { onNewTerminal: () => void }) {
-  return (
-    <div
-      style={{
-        flex: 1,
-        display: "grid",
-        placeItems: "center",
-        color: "var(--color-text-secondary)",
-        fontFamily: "var(--font-mono)",
-        gap: 10,
-        padding: 24,
-      }}
-    >
-      <div style={{ fontSize: 12 }}>This desktop has no panes.</div>
-      <button
-        type="button"
-        onClick={onNewTerminal}
-        style={{
-          borderRadius: "var(--border-radius-md)",
-          border: "0.5px solid var(--color-border-secondary)",
-          background: "var(--color-background-secondary)",
-          color: "var(--color-text-primary)",
-          padding: "6px 12px",
-          cursor: "pointer",
-          fontFamily: "inherit",
-          fontSize: 12,
-        }}
-      >
-        New terminal
-      </button>
-    </div>
-  );
-}
-
 interface LaunchAgentConfig {
   agentId: string;
   prompt: string;
