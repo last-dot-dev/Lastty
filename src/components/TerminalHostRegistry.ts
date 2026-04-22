@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
+import { CanvasAddon } from "@xterm/addon-canvas";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -268,6 +269,14 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
 
   console.log(`[resume] initEntry terminal.open ${sessionId}`);
   terminal.open(host);
+  // Canvas renderer draws block/box-drawing glyphs programmatically at exact cell
+  // bounds, so lineHeight > 1 doesn't create vertical gaps between tiled characters
+  // (unlike DomRenderer which relies on font metrics and CSS text layout).
+  try {
+    terminal.loadAddon(new CanvasAddon());
+  } catch {
+    // Canvas unavailable — DomRenderer fallback is fine for non-icon content
+  }
   focusTerminalIfActive(entry);
   bindWheelScroll(entry);
   entry.resizeObserver = new ResizeObserver(() => {
