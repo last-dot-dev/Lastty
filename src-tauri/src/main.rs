@@ -64,6 +64,9 @@ fn main() {
             let event_bus = bus::EventBus::new(app.handle().clone(), recordings_dir);
             app.manage(event_bus);
 
+            let peer_router = Arc::new(lastty::peer::PeerRouter::new(app.handle().clone()));
+            app.manage(peer_router);
+
             let manager = TerminalManager::new(app.handle().clone(), render_coordinator.clone());
 
             let cwd = std::env::var("HOME")
@@ -145,6 +148,7 @@ fn main() {
             commands::list_rules,
             commands::launch_agent,
             commands::respond_to_approval,
+            commands::send_peer_message,
             commands::list_recordings,
             commands::read_recording,
             commands::list_history,

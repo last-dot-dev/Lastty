@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use pane_protocol::peer::{Addr, Presence};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::broadcast;
@@ -76,6 +77,20 @@ pub enum BusEvent {
         rule_name: String,
         launched_session_id: String,
         launched_agent_id: String,
+    },
+    PeerMessage {
+        session_id: String,
+        from: Addr,
+        to: Addr,
+        kind: String,
+        channel: Option<String>,
+        correlation_id: Option<String>,
+        body: serde_json::Value,
+    },
+    PeerPresence {
+        session_id: String,
+        from: Addr,
+        status: Presence,
     },
 }
 
@@ -476,6 +491,8 @@ impl BusEvent {
             BusEvent::PtyOutput { .. } => "pty_output",
             BusEvent::Resize { .. } => "resize",
             BusEvent::RuleTriggered { .. } => "rule_triggered",
+            BusEvent::PeerMessage { .. } => "peer_message",
+            BusEvent::PeerPresence { .. } => "peer_presence",
         }
     }
 
@@ -492,7 +509,9 @@ impl BusEvent {
             | BusEvent::PtyInput { session_id, .. }
             | BusEvent::PtyOutput { session_id, .. }
             | BusEvent::Resize { session_id, .. }
-            | BusEvent::RuleTriggered { session_id, .. } => Some(session_id.as_str()),
+            | BusEvent::RuleTriggered { session_id, .. }
+            | BusEvent::PeerMessage { session_id, .. }
+            | BusEvent::PeerPresence { session_id, .. } => Some(session_id.as_str()),
         }
     }
 
@@ -550,6 +569,36 @@ impl BusEvent {
         }
     }
 
+    fn channel(&self) -> Option<&str> {
+        match self {
+            BusEvent::PeerMessage { channel, .. } => channel.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn peer_sender_agent_id(&self) -> Option<&str> {
+        match self {
+            BusEvent::PeerMessage { from, .. } | BusEvent::PeerPresence { from, .. } => {
+                from.agent_id()
+            }
+            _ => None,
+        }
+    }
+
+    fn to_agent(&self) -> Option<&str> {
+        match self {
+            BusEvent::PeerMessage { to, .. } => to.agent_id(),
+            _ => None,
+        }
+    }
+
+    fn presence(&self) -> Option<&str> {
+        match self {
+            BusEvent::PeerPresence { status, .. } => Some(status.as_str()),
+            _ => None,
+        }
+    }
+
     fn template_value(&self, key: &str) -> Option<String> {
         match key {
             "session_id" => self.session_id().map(ToOwned::to_owned),
@@ -574,6 +623,10 @@ impl BusEvent {
                 BusEvent::Resize { rows, .. } => Some(rows.to_string()),
                 _ => None,
             },
+            "channel" => self.channel().map(ToOwned::to_owned),
+            "from_agent" => self.peer_sender_agent_id().map(ToOwned::to_owned),
+            "to_agent" => self.to_agent().map(ToOwned::to_owned),
+            "presence" => self.presence().map(ToOwned::to_owned),
             _ => None,
         }
     }
@@ -650,16 +703,35 @@ fn run_rule_action<R: Runtime + 'static>(
     workspace_root: PathBuf,
     action: PreparedRuleAction,
 ) {
-    tauri::async_runtime::spawn_blocking(move || {
-        let manager = app.state::<TerminalManager<R>>();
+    tauri::async_runtime::spawn(async move {
+        let launched = {
+            let app = app.clone();
+            let workspace_root = workspace_root.clone();
+            let action = action.clone();
+            tokio::task::spawn_blocking(move || {
+                let manager = app.state::<TerminalManager<R>>();
+                let mut request = action.request.clone();
+                if request.cwd.is_none() {
+                    request.cwd = inherited_cwd(&manager, action.source_session_id.as_deref());
+                }
+                let result = agents::launch_agent(&manager, &workspace_root, request.clone());
+                (request, result)
+            })
+            .await
+        };
+
         let event_bus = app.state::<EventBus<R>>();
+        let manager = app.state::<TerminalManager<R>>();
 
-        let mut request = action.request.clone();
-        if request.cwd.is_none() {
-            request.cwd = inherited_cwd(&manager, action.source_session_id.as_deref());
-        }
+        let (request, result) = match launched {
+            Ok(pair) => pair,
+            Err(error) => {
+                tracing::warn!(rule = %action.rule_name, "rule launch task panicked: {error}");
+                return;
+            }
+        };
 
-        match agents::launch_agent(&manager, &workspace_root, request.clone()) {
+        match result {
             Ok(result) => {
                 let launched_agent_id = SessionId::parse(&result.session_id)
                     .ok()
@@ -744,6 +816,26 @@ fn rule_matches(rule: &RuleDefinition, event: &BusEvent) -> bool {
     }
     if let Some(expected) = filter.choice.as_deref() {
         if event.choice() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = filter.channel.as_deref() {
+        if event.channel() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = filter.from_agent.as_deref() {
+        if event.peer_sender_agent_id() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = filter.to_agent.as_deref() {
+        if event.to_agent() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = filter.presence.as_deref() {
+        if event.presence() != Some(expected) {
             return false;
         }
     }

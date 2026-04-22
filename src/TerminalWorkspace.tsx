@@ -19,16 +19,17 @@ import {
   type PendingBinding,
 } from "./app/keybindings";
 
+import { parseAgentMessage, toolCallCount } from "./app/agentUi";
 import {
-  emptyAgentSessionState,
-  parseAgentMessage,
-  reduceAgentMessage,
-  resolveApproval,
-  toolCallCount,
-  visibleNotifications,
-  type AgentSessionState,
-  type ToolCallRecord,
-} from "./app/agentUi";
+  useAgentStore,
+  useAgentSession,
+  useBlockedSessionIds,
+} from "./app/agentStore";
+import { AgentInspector } from "./components/agent/AgentInspector";
+import { NotificationToasts } from "./components/agent/NotificationToasts";
+import { ChatPanel } from "./components/peer/ChatPanel";
+import { usePeerStore } from "./app/peerStore";
+import type { PeerMessageEvent, PeerPresenceEvent } from "./app/peerTypes";
 import {
   deriveAgentStatus,
   deriveAgentType,
@@ -197,14 +198,12 @@ export default function TerminalWorkspace() {
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [sessionInfoById, setSessionInfoById] = useState<Record<string, SessionInfo>>({});
-  const [agentUiBySession, setAgentUiBySession] = useState<
-    Record<string, AgentSessionState>
-  >({});
   const focusedSessionIdRef = useRef<string | null>(null);
   const [draftPaneIds, setDraftPaneIds] = useState<Set<string>>(() => new Set());
   const [draftSeedByPaneId, setDraftSeedByPaneId] = useState<Record<string, string>>({});
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [exposeMode, setExposeMode] = useState(false);
   const platform = useMemo(() => detectPlatform(), []);
   const pendingBindingRef = useRef<PendingBinding[]>([]);
@@ -635,14 +634,17 @@ export default function TerminalWorkspace() {
     void listen<AgentUiEvent>("agent:ui", (event) => {
       const message = parseAgentMessage(event.payload.message);
       if (!message) return;
-      const sid = event.payload.session_id;
-      setAgentUiBySession((current) => ({
-        ...current,
-        [sid]: reduceAgentMessage(
-          current[sid] ?? emptyAgentSessionState(),
-          message,
-        ),
-      }));
+      useAgentStore.getState().ingest(event.payload.session_id, message);
+    }).then((fn) => unsubs.push(fn));
+
+    void listen<unknown>("bus:event", (event) => {
+      const payload = event.payload as { type?: unknown } | null;
+      const kind = payload && typeof payload === "object" ? payload.type : undefined;
+      if (kind === "peer_message") {
+        usePeerStore.getState().ingestMessage(payload as PeerMessageEvent);
+      } else if (kind === "peer_presence") {
+        usePeerStore.getState().ingestPresence(payload as PeerPresenceEvent);
+      }
     }).then((fn) => unsubs.push(fn));
 
     return () => {
@@ -1197,7 +1199,7 @@ export default function TerminalWorkspace() {
       return next;
     };
     setSessionInfoById(dropKey);
-    setAgentUiBySession(dropKey);
+    useAgentStore.getState().forgetSession(sessionId);
     setTerminalSnapshotsBySessionId(dropKey);
     setRestoredSnapshotsBySessionId(dropKey);
     setWorkspace((current) => {
@@ -1375,11 +1377,10 @@ export default function TerminalWorkspace() {
     });
   }
 
-  const toastNotifications = Object.entries(agentUiBySession).flatMap(([sessionId, state]) =>
-    visibleNotifications(state, clock).map((notification) => ({
-      sessionId,
-      notification,
-    })),
+  const blockedSessionIds = useBlockedSessionIds();
+  const blockedSessionIdSet = useMemo(
+    () => new Set(blockedSessionIds),
+    [blockedSessionIds],
   );
 
   const worktreeRows: WorktreeRow[] = (() => {
@@ -1413,21 +1414,17 @@ export default function TerminalWorkspace() {
     (row) => !row.isMain && !row.merged,
   ).length;
 
-  const blockedRefs: BlockedSessionRef[] = Object.entries(agentUiBySession)
-    .filter(([, ui]) => ui.pendingApprovals.length > 0)
-    .map(([sessionId]) => ({
-      sessionId,
-      taskName: deriveTaskName(sessionInfoById[sessionId]),
-    }));
+  const blockedRefs: BlockedSessionRef[] = blockedSessionIds.map((sessionId) => ({
+    sessionId,
+    taskName: deriveTaskName(sessionInfoById[sessionId]),
+  }));
 
   const desktopEntries: DesktopEntry[] = workspace
     ? workspace.desktops.map((desktop) => {
         const paneIds = desktop.layout ? orderedPaneIds(desktop.layout) : [];
         const hasBlocked = paneIds.some((paneId) => {
           const pane = workspace.panes[paneId];
-          return pane
-            ? (agentUiBySession[pane.sessionId]?.pendingApprovals.length ?? 0) > 0
-            : false;
+          return pane ? blockedSessionIdSet.has(pane.sessionId) : false;
         });
         return {
           id: desktop.id,
@@ -1497,7 +1494,6 @@ export default function TerminalWorkspace() {
               desktop={desktop}
               workspace={workspace}
               sessionInfoById={sessionInfoById}
-              agentUiBySession={agentUiBySession}
               sessionCreationOrder={sessionCreationOrder}
             />
           );
@@ -1561,7 +1557,6 @@ export default function TerminalWorkspace() {
                           desktop,
                           workspace,
                           sessionInfoById,
-                          agentUiBySession,
                           restoredSnapshotsBySessionId,
                           onCloseChrome: (paneId) => handleClose(paneId),
                           onToggleMaximize: handleToggleMaximizePane,
@@ -1582,13 +1577,7 @@ export default function TerminalWorkspace() {
                           onSnapshot: handleTerminalSnapshot,
                           onApproval: (sessionId, approvalId, choice) => {
                             void respondToApproval(sessionId, approvalId, choice).then(() => {
-                              setAgentUiBySession((current) => ({
-                                ...current,
-                                [sessionId]: resolveApproval(
-                                  current[sessionId] ?? emptyAgentSessionState(),
-                                  approvalId,
-                                ),
-                              }));
+                              useAgentStore.getState().resolveApproval(sessionId, approvalId);
                             });
                           },
                           onSpawnAdjacent: (paneId, direction) =>
@@ -1705,7 +1694,32 @@ export default function TerminalWorkspace() {
         onThemeOverrideChange={theme.setOverride}
         onClose={() => setSettingsOpen(false)}
       />
-      <ToastStack notifications={toastNotifications} sessionInfoById={sessionInfoById} />
+      <NotificationToasts sessionInfoById={sessionInfoById} />
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      <button
+        type="button"
+        onClick={() => setChatOpen((open) => !open)}
+        title="Peer chat"
+        aria-label="Toggle peer chat"
+        style={{
+          position: "fixed",
+          right: 14,
+          bottom: 14,
+          width: 36,
+          height: 36,
+          borderRadius: 18,
+          border: "0.5px solid var(--color-border-secondary)",
+          background: "var(--color-background-primary)",
+          color: "var(--color-text-primary)",
+          cursor: "pointer",
+          zIndex: chatOpen ? 59 : 60,
+          display: chatOpen ? "none" : "grid",
+          placeItems: "center",
+          fontSize: 16,
+        }}
+      >
+        💬
+      </button>
     </div>
   );
 }
@@ -1714,7 +1728,6 @@ interface RenderLayoutCtx {
   desktop: DesktopState;
   workspace: WorkspaceState;
   sessionInfoById: Record<string, SessionInfo>;
-  agentUiBySession: Record<string, AgentSessionState>;
   restoredSnapshotsBySessionId: Record<string, PersistedTerminalSnapshot>;
   onCloseChrome: (paneId: string) => Promise<void>;
   onToggleMaximize: (paneId: string) => void;
@@ -1832,7 +1845,6 @@ function PaneTile({
     desktop,
     workspace,
     sessionInfoById,
-    agentUiBySession,
     restoredSnapshotsBySessionId,
     onCloseChrome,
     onToggleMaximize,
@@ -1899,7 +1911,7 @@ function PaneTile({
   }
 
   const session = sessionInfoById[pane.sessionId];
-  const agent = agentUiBySession[pane.sessionId] ?? emptyAgentSessionState();
+  const agent = useAgentSession(pane.sessionId);
   const blocked = agent.pendingApprovals.length > 0;
   const status: AgentStatus = deriveAgentStatus(agent, Boolean(agent.finished));
   const taskName = deriveTaskName(session);
@@ -2202,169 +2214,6 @@ function EmptyDesktop({ onNewTerminal }: { onNewTerminal: () => void }) {
   );
 }
 
-function AgentInspector({ agent }: { agent: AgentSessionState }) {
-  const latestWidget = agent.widgets.at(-1);
-  return (
-    <aside
-      style={{
-        borderLeft: "0.5px solid var(--color-border-tertiary)",
-        background: "var(--color-background-secondary)",
-        color: "var(--color-text-primary)",
-        padding: 12,
-        overflow: "auto",
-        display: "grid",
-        gap: 12,
-      }}
-    >
-      <InspectorBlock label="Status">
-        <div>{agent.status?.phase ?? "idle"}</div>
-        {agent.status?.detail && (
-          <div style={{ color: "var(--color-text-secondary)" }}>{agent.status.detail}</div>
-        )}
-        {agent.progress && (
-          <div>
-            {agent.progress.pct}% · {agent.progress.message}
-          </div>
-        )}
-      </InspectorBlock>
-      {agent.toolCallOrder.length > 0 && (
-        <InspectorBlock label="Tool Calls">
-          {agent.rootToolCallIds.map((id) => (
-            <ToolCallNode
-              key={id}
-              id={id}
-              toolCallsById={agent.toolCallsById}
-              childrenByParentId={agent.childrenByParentId}
-            />
-          ))}
-        </InspectorBlock>
-      )}
-      {agent.fileEdits.length > 0 && (
-        <InspectorBlock label="Files Changed">
-          {agent.fileEdits.slice(-6).map((file) => (
-            <div key={`${file.kind}-${file.path}`}>
-              {file.kind.toUpperCase()} {file.path}
-            </div>
-          ))}
-        </InspectorBlock>
-      )}
-      {latestWidget && (
-        <InspectorBlock label={`Widget · ${latestWidget.widgetType}`}>
-          <WidgetRenderer widgetType={latestWidget.widgetType} props={latestWidget.props} />
-        </InspectorBlock>
-      )}
-    </aside>
-  );
-}
-
-function ToolCallNode({
-  id,
-  toolCallsById,
-  childrenByParentId,
-}: {
-  id: string;
-  toolCallsById: Record<string, ToolCallRecord>;
-  childrenByParentId: Record<string, string[]>;
-}) {
-  const call = toolCallsById[id];
-  if (!call) return null;
-  const children = childrenByParentId[id] ?? [];
-  const isSubagent = call.name === "Agent" || call.name === "Task";
-  return (
-    <div
-      style={{
-        borderBottom: "0.5px solid var(--color-border-tertiary)",
-        paddingBottom: 6,
-        paddingLeft: call.depth > 0 ? 10 : 0,
-        borderLeft:
-          call.depth > 0 ? "1px solid var(--color-border-tertiary)" : undefined,
-        marginLeft: call.depth > 0 ? call.depth * 8 : 0,
-      }}
-    >
-      <div>
-        {call.depth > 0 && (
-          <span style={{ color: "var(--color-text-tertiary)" }}>↳ </span>
-        )}
-        {isSubagent && (
-          <span
-            aria-hidden
-            style={{ color: "var(--color-text-secondary)", marginRight: 4 }}
-          >
-            ▸
-          </span>
-        )}
-        {call.name}
-      </div>
-      <div style={{ color: "var(--color-text-secondary)" }}>
-        {JSON.stringify(call.args)}
-      </div>
-      {call.result !== undefined && (
-        <div style={{ color: "var(--color-text-success)" }}>
-          {JSON.stringify(call.result)}
-        </div>
-      )}
-      {call.error && (
-        <div style={{ color: "var(--color-text-danger)" }}>{call.error}</div>
-      )}
-      {children.map((childId) => (
-        <ToolCallNode
-          key={childId}
-          id={childId}
-          toolCallsById={toolCallsById}
-          childrenByParentId={childrenByParentId}
-        />
-      ))}
-    </div>
-  );
-}
-
-function WidgetRenderer({ widgetType, props }: { widgetType: string; props: unknown }) {
-  if (widgetType === "markdown" && typeof props === "object" && props && "content" in props) {
-    return <pre style={widgetBodyStyle}>{String((props as { content: unknown }).content)}</pre>;
-  }
-  if (widgetType === "table" && isTableProps(props)) {
-    return (
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-        <thead>
-          <tr>
-            {props.headers.map((header) => (
-              <th
-                key={header}
-                style={{
-                  textAlign: "left",
-                  borderBottom: "0.5px solid var(--color-border-tertiary)",
-                  paddingBottom: 6,
-                }}
-              >
-                {header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {props.rows.map((row, rowIndex) => (
-            <tr key={rowIndex}>
-              {row.map((value, cellIndex) => (
-                <td key={cellIndex} style={{ paddingTop: 6, color: "var(--color-text-primary)" }}>
-                  {String(value)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    );
-  }
-  if (widgetType === "json") {
-    return <pre style={widgetBodyStyle}>{JSON.stringify(props, null, 2)}</pre>;
-  }
-  return (
-    <div style={{ color: "var(--color-text-secondary)", fontSize: 12 }}>
-      Unsupported widget payload
-    </div>
-  );
-}
-
 interface LaunchAgentConfig {
   agentId: string;
   prompt: string;
@@ -2621,82 +2470,3 @@ function ChipMenu({
   );
 }
 
-
-function ToastStack({
-  notifications,
-  sessionInfoById,
-}: {
-  notifications: Array<{ sessionId: string; notification: { level: string; message: string } }>;
-  sessionInfoById: Record<string, SessionInfo>;
-}) {
-  if (notifications.length === 0) return null;
-  return (
-    <div
-      style={{
-        position: "fixed",
-        top: 14,
-        right: 14,
-        display: "grid",
-        gap: 8,
-        zIndex: 50,
-      }}
-    >
-      {notifications.slice(-4).map(({ sessionId, notification }, index) => (
-        <div
-          key={`${sessionId}-${index}-${notification.message}`}
-          style={{
-            minWidth: 240,
-            borderRadius: "var(--border-radius-md)",
-            border: "0.5px solid var(--color-border-secondary)",
-            background: "var(--color-background-primary)",
-            color: "var(--color-text-primary)",
-            padding: "8px 10px",
-            boxShadow: "var(--elev-shadow)",
-          }}
-        >
-          <div style={{ fontSize: 10, color: "var(--color-text-tertiary)" }}>
-            {sessionInfoById[sessionId]?.title ?? sessionId}
-          </div>
-          <div style={{ fontSize: 12 }}>{notification.message}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function InspectorBlock({ children, label }: { children: ReactNode; label: string }) {
-  return (
-    <section style={{ display: "grid", gap: 8, fontSize: 12 }}>
-      <div
-        style={{
-          color: "var(--color-text-tertiary)",
-          textTransform: "uppercase",
-          letterSpacing: 1,
-          fontSize: 10,
-          fontWeight: 500,
-        }}
-      >
-        {label}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function isTableProps(
-  props: unknown,
-): props is { headers: string[]; rows: Array<Array<string | number | boolean>> } {
-  return (
-    typeof props === "object" &&
-    props !== null &&
-    Array.isArray((props as { headers?: unknown }).headers) &&
-    Array.isArray((props as { rows?: unknown }).rows)
-  );
-}
-
-const widgetBodyStyle: CSSProperties = {
-  margin: 0,
-  whiteSpace: "pre-wrap",
-  fontSize: 12,
-  color: "var(--color-text-primary)",
-};

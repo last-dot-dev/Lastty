@@ -14,11 +14,14 @@ use crate::agents::{
 use crate::bus::{BusEvent, EventBus, HistoryEntry, HistorySource, RecordingInfo};
 use crate::font_config::FontConfig;
 use crate::history;
+use crate::peer::PeerRouter;
 #[cfg(feature = "bench")]
 use crate::runtime_modes;
 use crate::terminal::manager::TerminalManager;
 use crate::terminal::render::TerminalFrame;
 use crate::terminal::session::{CommandSpec, SessionConfig, SessionId, SessionInfo};
+use pane_protocol::peer::PeerMessage;
+use std::sync::Arc;
 
 fn build_pane_env() -> HashMap<String, String> {
     let mut env = HashMap::new();
@@ -375,6 +378,16 @@ pub async fn launch_agent(
         agent_id,
     });
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn send_peer_message(
+    context_session_id: Option<String>,
+    message: PeerMessage,
+    router: State<'_, Arc<PeerRouter>>,
+) -> Result<(), String> {
+    router.ingest_from_user(context_session_id, message);
+    Ok(())
 }
 
 #[tauri::command]

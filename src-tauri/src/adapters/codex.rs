@@ -94,6 +94,17 @@ fn translate_line(
         }
         CodexEvent::ItemCompleted { item } => {
             if let Some(msg) = tool_result_from_item(&item) {
+                // Echo raw OSC bytes from subprocess output so ProtocolReader
+                // can parse embedded 7770 peer messages.
+                if let ItemPayload::CommandExecution {
+                    aggregated_output: Some(ref output),
+                    ..
+                } = item.payload
+                {
+                    if output.as_bytes().first() == Some(&0x1b) {
+                        out.push_echo(output.as_bytes());
+                    }
+                }
                 out.push_echo(b"\xe2\x9c\x93\r\n"); // "✓\r\n"
                 out.push_message(msg);
             }
