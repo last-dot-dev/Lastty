@@ -25,6 +25,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - run: node scripts/prepare-sidecars.mjs
+
       - run: cargo test --workspace --all-features
 
   rust-lint:
@@ -41,6 +43,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo fmt --all -- --check
+
+      - run: node scripts/prepare-sidecars.mjs
+
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   frontend:
