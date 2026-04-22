@@ -3,7 +3,6 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebglAddon } from "@xterm/addon-webgl";
 
 import {
   getFontConfig,
@@ -21,22 +20,6 @@ import type { PersistedTerminalSnapshot } from "../app/sessionRestore";
 import { xtermThemeFor } from "./terminalTheme";
 
 type EffectiveTheme = "light" | "dark";
-
-// `options.theme` swap doesn't invalidate the WebGL renderer's glyph texture
-// atlas, so cells rendered under the old theme keep their baked-in fg/bg.
-// Clear the atlas (if the build supports it) and force a full repaint.
-function repaintAfterThemeChange(terminal: Terminal): void {
-  try {
-    (terminal as Terminal & { clearTextureAtlas?: () => void }).clearTextureAtlas?.();
-  } catch {
-    // best-effort
-  }
-  try {
-    terminal.refresh(0, terminal.rows - 1);
-  } catch {
-    // terminal may not yet be attached
-  }
-}
 
 function focusTerminalIfActive(entry: Entry): void {
   try {
@@ -60,16 +43,12 @@ export interface SessionHostProps {
 
 type StatusListener = (status: string) => void;
 
-const ATLAS_CLEAR_INTERVAL_MS = 10_000;
-const ATLAS_CLEAR_WRITE_THRESHOLD = 200;
-
 interface Entry {
   sessionId: string;
   host: HTMLDivElement;
   terminal: Terminal;
   fit: FitAddon;
   serialize: SerializeAddon;
-  webgl: WebglAddon | null;
   frameState: XtermFrameState | null;
   latestFrame: TerminalFrame | null;
   resizeObserver: ResizeObserver;
@@ -79,8 +58,6 @@ interface Entry {
   wheelAccumDy: number;
   pendingScrollbackClear: boolean;
   snapshotTimer: number | null;
-  atlasClearTimer: number | null;
-  writesSinceAtlasClear: number;
   status: string;
   statusListeners: Set<StatusListener>;
   currentSlot: HTMLElement | null;
@@ -289,32 +266,6 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
     terminal.write(persistedSnapshot.serializedBuffer);
   }
 
-  try {
-    entry.webgl = new WebglAddon();
-    entry.webgl.onContextLoss(() => {
-      setStatus(entry, `session ${sessionId} (canvas fallback)`);
-      entry.webgl?.dispose();
-      entry.webgl = null;
-    });
-    terminal.loadAddon(entry.webgl);
-  } catch {
-    entry.webgl = null;
-  }
-
-  // Truecolor-heavy workloads (agent output, syntax highlighting) saturate the
-  // WebGL glyph atlas after ~10-15s. Once full, new (char, color) combos fall
-  // back to CPU rasterization, causing lagspikes and visual glitches where
-  // wrong glyphs render at the correct cells. Reset periodically when writes
-  // have actually happened, so idle sessions stay cached.
-  entry.atlasClearTimer = window.setInterval(() => {
-    if (entry.disposed || !entry.webgl) return;
-    if (entry.writesSinceAtlasClear < ATLAS_CLEAR_WRITE_THRESHOLD) return;
-    entry.writesSinceAtlasClear = 0;
-    try {
-      (terminal as Terminal & { clearTextureAtlas?: () => void }).clearTextureAtlas?.();
-    } catch {}
-  }, ATLAS_CLEAR_INTERVAL_MS);
-
   console.log(`[resume] initEntry terminal.open ${sessionId}`);
   terminal.open(host);
   focusTerminalIfActive(entry);
@@ -346,7 +297,6 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
       merged.set(bytes, ERASE_SAVED_LINES.length);
       bytes = merged;
     }
-    entry.writesSinceAtlasClear += 1;
     if (__LASTTY_BENCH__) {
       const writeStart = performance.now();
       terminal.write(bytes, () => {
@@ -438,7 +388,6 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     terminal,
     fit: null as unknown as FitAddon,
     serialize: null as unknown as SerializeAddon,
-    webgl: null,
     frameState: null,
     latestFrame: null,
     resizeObserver: null as unknown as ResizeObserver,
@@ -448,8 +397,6 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     wheelAccumDy: 0,
     pendingScrollbackClear: false,
     snapshotTimer: null,
-    atlasClearTimer: null,
-    writesSinceAtlasClear: 0,
     status: "initializing",
     statusListeners: new Set(),
     currentSlot: null,
@@ -497,7 +444,6 @@ export function attachTerminalHost(
 
   if (entry.terminal.options && props.theme) {
     entry.terminal.options.theme = xtermThemeFor(props.theme);
-    repaintAfterThemeChange(entry.terminal);
   }
 
   focusTerminalIfActive(entry);
@@ -528,7 +474,6 @@ export function updateTerminalHostProps(
   }
   if (props.theme && entry.terminal.options) {
     entry.terminal.options.theme = xtermThemeFor(props.theme);
-    repaintAfterThemeChange(entry.terminal);
   }
   focusTerminalIfActive(entry);
 }
@@ -560,9 +505,6 @@ export function releaseTerminalHost(sessionId: string): void {
   if (entry.snapshotTimer !== null) {
     window.clearTimeout(entry.snapshotTimer);
   }
-  if (entry.atlasClearTimer !== null) {
-    window.clearInterval(entry.atlasClearTimer);
-  }
   const snapshotCb = entry.snapshotCallbackRef.current;
   if (snapshotCb && entry.serialize) {
     snapshotCb({
@@ -572,7 +514,6 @@ export function releaseTerminalHost(sessionId: string): void {
       serializedBuffer: entry.serialize.serialize({ scrollback: 10_000 }),
     });
   }
-  entry.webgl?.dispose();
   entry.terminal.dispose();
   if (entry.host.parentElement) {
     entry.host.parentElement.removeChild(entry.host);

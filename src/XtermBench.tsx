@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
-import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 
 import {
@@ -10,7 +9,7 @@ import {
   writeBenchmarkReport,
 } from "./lib/ipc";
 
-type RendererMode = "dom" | "webgl";
+type RendererMode = "dom";
 
 interface BenchResult {
   renderer: RendererMode;
@@ -69,53 +68,45 @@ export default function XtermBench() {
       const workloads = buildWorkloads(config.cols, config.rows);
       const results: BenchResult[] = [];
 
-      for (const renderer of ["dom", "webgl"] as RendererMode[]) {
-        const term = new Terminal({
+      const renderer: RendererMode = "dom";
+      const term = new Terminal({
+        cols: config.cols,
+        rows: config.rows,
+        scrollback: 0,
+        allowProposedApi: true,
+        fontFamily: `${font.family}, NFFallback, Monaco, monospace`,
+        fontSize: font.size_px,
+        lineHeight: font.line_height,
+      });
+
+      hostRef.current.innerHTML = "";
+      term.open(hostRef.current);
+      await nextFrame();
+
+      for (const workload of workloads) {
+        setStatus(`warming ${renderer} ${workload.name}`);
+        await warmup(term, workload.frames, config.warmupIterations);
+
+        setStatus(`running ${renderer} ${workload.name}`);
+        const samples = await measureFrames(term, workload.frames, config.iterations);
+        const totalMs = samples.reduce((sum, value) => sum + value, 0);
+        results.push({
+          renderer,
+          workload: workload.name,
           cols: config.cols,
           rows: config.rows,
-          scrollback: 0,
-          allowProposedApi: true,
-          fontFamily: `${font.family}, NFFallback, Monaco, monospace`,
-          fontSize: font.size_px,
-          lineHeight: font.line_height,
+          frameCount: workload.frames.length,
+          iterations: config.iterations,
+          warmupIterations: config.warmupIterations,
+          totalMs,
+          meanMs: totalMs / samples.length,
+          p50Ms: percentile(samples, 50),
+          p95Ms: percentile(samples, 95),
+          maxMs: Math.max(...samples),
         });
-
-        let webglAddon: WebglAddon | null = null;
-        if (renderer === "webgl") {
-          webglAddon = new WebglAddon();
-          term.loadAddon(webglAddon);
-        }
-
-        hostRef.current.innerHTML = "";
-        term.open(hostRef.current);
-        await nextFrame();
-
-        for (const workload of workloads) {
-          setStatus(`warming ${renderer} ${workload.name}`);
-          await warmup(term, workload.frames, config.warmupIterations);
-
-          setStatus(`running ${renderer} ${workload.name}`);
-          const samples = await measureFrames(term, workload.frames, config.iterations);
-          const totalMs = samples.reduce((sum, value) => sum + value, 0);
-          results.push({
-            renderer,
-            workload: workload.name,
-            cols: config.cols,
-            rows: config.rows,
-            frameCount: workload.frames.length,
-            iterations: config.iterations,
-            warmupIterations: config.warmupIterations,
-            totalMs,
-            meanMs: totalMs / samples.length,
-            p50Ms: percentile(samples, 50),
-            p95Ms: percentile(samples, 95),
-            maxMs: Math.max(...samples),
-          });
-        }
-
-        webglAddon?.dispose();
-        term.dispose();
       }
+
+      term.dispose();
 
       if (cancelled) return;
 

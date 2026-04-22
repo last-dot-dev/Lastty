@@ -13,19 +13,6 @@ const harness = vi.hoisted(() => {
     fit = vi.fn();
   }
 
-  class FakeWebglAddon {
-    contextLossHandler: (() => void) | null = null;
-    disposed = false;
-
-    onContextLoss(handler: () => void) {
-      this.contextLossHandler = handler;
-    }
-
-    dispose() {
-      this.disposed = true;
-    }
-  }
-
   class FakeSerializeAddon {
     serialize = vi.fn(() => "SERIALIZED");
   }
@@ -141,7 +128,6 @@ const harness = vi.hoisted(() => {
     FakeSerializeAddon,
     FakeTerminal,
     FakeUnicode11Addon,
-    FakeWebglAddon,
     emit,
     getTerminalFrameMock,
     listenMock,
@@ -169,10 +155,6 @@ vi.mock("../lib/ipc", async (importOriginal) => {
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: harness.FakeFitAddon,
-}));
-
-vi.mock("@xterm/addon-webgl", () => ({
-  WebglAddon: harness.FakeWebglAddon,
 }));
 
 vi.mock("@xterm/addon-serialize", () => ({
