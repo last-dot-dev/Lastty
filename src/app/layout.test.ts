@@ -16,6 +16,7 @@ import {
   nextDesktopIdInDirection,
   orderedPaneIds,
   renameDesktop,
+  reorderDesktops,
   resizeSplit,
   resizeSplitWeights,
   splitAtPane,
@@ -295,6 +296,30 @@ describe("desktop management", () => {
 
     const unchanged = renameDesktop(renamed, renamed.activeDesktopId, "   ");
     expect(unchanged).toBe(renamed);
+  });
+
+  it("reorderDesktops moves a tab before or after a target", () => {
+    let state = createWorkspace(createPaneRecord("session-a"), "/proj");
+    state = createDesktop(state, createPaneRecord("session-b"), "/proj");
+    state = createDesktop(state, createPaneRecord("session-c"), "/proj");
+    const [first, second, third] = state.desktops;
+
+    const movedBefore = reorderDesktops(state, third!.id, first!.id, "before");
+    expect(movedBefore.desktops.map((d) => d.id)).toEqual([third!.id, first!.id, second!.id]);
+    expect(movedBefore.activeDesktopId).toBe(state.activeDesktopId);
+
+    const movedAfter = reorderDesktops(state, first!.id, second!.id, "after");
+    expect(movedAfter.desktops.map((d) => d.id)).toEqual([second!.id, first!.id, third!.id]);
+  });
+
+  it("reorderDesktops is a no-op for same id or missing id", () => {
+    let state = createWorkspace(createPaneRecord("session-a"), "/proj");
+    state = createDesktop(state, createPaneRecord("session-b"), "/proj");
+    const [first] = state.desktops;
+
+    expect(reorderDesktops(state, first!.id, first!.id, "before")).toBe(state);
+    expect(reorderDesktops(state, "missing", first!.id, "before")).toBe(state);
+    expect(reorderDesktops(state, first!.id, "missing", "after")).toBe(state);
   });
 
   it("nextDesktopIdInDirection wraps around", () => {

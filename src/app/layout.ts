@@ -489,6 +489,25 @@ export function renameDesktop(
   return updateDesktop(state, desktopId, (desktop) => ({ ...desktop, name: trimmed }));
 }
 
+export function reorderDesktops(
+  state: WorkspaceState,
+  draggedId: string,
+  targetId: string,
+  placement: "before" | "after",
+): WorkspaceState {
+  if (draggedId === targetId) return state;
+  const dragged = state.desktops.find((d) => d.id === draggedId);
+  if (!dragged) return state;
+  if (!state.desktops.some((d) => d.id === targetId)) return state;
+  const without = state.desktops.filter((d) => d.id !== draggedId);
+  const adjustedTarget = without.findIndex((d) => d.id === targetId);
+  const insertAt = placement === "before" ? adjustedTarget : adjustedTarget + 1;
+  return {
+    ...state,
+    desktops: [...without.slice(0, insertAt), dragged, ...without.slice(insertAt)],
+  };
+}
+
 export function nextDesktopIdInDirection(
   state: WorkspaceState,
   direction: 1 | -1,

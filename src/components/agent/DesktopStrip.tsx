@@ -9,6 +9,9 @@ export interface DesktopEntry {
 }
 
 const PREVIEW_DELAY_MS = 400;
+const DESKTOP_DRAG_MIME = "application/x-lastty-desktop-id";
+
+type ReorderPlacement = "before" | "after";
 
 export default function DesktopStrip({
   desktops,
@@ -18,6 +21,7 @@ export default function DesktopStrip({
   onCloseDesktop,
   onRenameDesktop,
   onDropPaneOnDesktop,
+  onReorderDesktops,
   canAcceptPaneDrop,
   renderPreview,
   exposeMode,
@@ -30,6 +34,11 @@ export default function DesktopStrip({
   onCloseDesktop: (id: string) => void;
   onRenameDesktop: (id: string, name: string) => void;
   onDropPaneOnDesktop?: (desktopId: string) => void;
+  onReorderDesktops?: (
+    draggedId: string,
+    targetId: string,
+    placement: ReorderPlacement,
+  ) => void;
   canAcceptPaneDrop?: boolean;
   renderPreview?: (desktopId: string) => ReactNode;
   exposeMode: boolean;
@@ -40,6 +49,9 @@ export default function DesktopStrip({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoverAnchor, setHoverAnchor] = useState<{ left: number; top: number } | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [reorderOver, setReorderOver] = useState<
+    { id: string; placement: ReorderPlacement } | null
+  >(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const hoverTimerRef = useRef<number | null>(null);
 
@@ -95,14 +107,19 @@ export default function DesktopStrip({
         const active = desktop.id === activeDesktopId;
         const isEditing = editingId === desktop.id;
         const isDropTarget = dropTargetId === desktop.id;
+        const insertBefore = reorderOver?.id === desktop.id && reorderOver.placement === "before";
+        const insertAfter = reorderOver?.id === desktop.id && reorderOver.placement === "after";
         return (
           <div
             key={desktop.id}
             role="tab"
             aria-selected={active}
+            draggable={!isEditing}
             className={`agent-desktop-tab ${active ? "is-active" : ""} ${
               desktop.hasBlocked ? "is-needs-help" : ""
-            } ${isDropTarget ? "is-drop-target" : ""}`}
+            } ${isDropTarget ? "is-drop-target" : ""} ${
+              insertBefore ? "is-insert-before" : ""
+            } ${insertAfter ? "is-insert-after" : ""}`}
             onMouseDown={(event) => {
               if (event.button === 1) {
                 event.preventDefault();
@@ -119,22 +136,54 @@ export default function DesktopStrip({
               setEditingId(desktop.id);
               setDraftName(desktop.name);
             }}
+            onDragStart={(event) => {
+              event.dataTransfer.setData(DESKTOP_DRAG_MIME, desktop.id);
+              event.dataTransfer.effectAllowed = "move";
+              cancelHover();
+            }}
+            onDragEnd={() => setReorderOver(null)}
             onDragEnter={(event) => {
+              if (event.dataTransfer.types.includes(DESKTOP_DRAG_MIME)) {
+                event.preventDefault();
+                return;
+              }
               if (!canAcceptPaneDrop) return;
               event.preventDefault();
               setDropTargetId(desktop.id);
             }}
             onDragOver={(event) => {
+              if (event.dataTransfer.types.includes(DESKTOP_DRAG_MIME)) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                const rect = event.currentTarget.getBoundingClientRect();
+                const placement: ReorderPlacement =
+                  event.clientX < rect.left + rect.width / 2 ? "before" : "after";
+                setReorderOver((current) =>
+                  current?.id === desktop.id && current.placement === placement
+                    ? current
+                    : { id: desktop.id, placement },
+                );
+                return;
+              }
               if (!canAcceptPaneDrop) return;
               event.preventDefault();
               event.dataTransfer.dropEffect = "move";
             }}
             onDragLeave={(event) => {
-              if (event.currentTarget === event.target) {
-                setDropTargetId((current) => (current === desktop.id ? null : current));
-              }
+              if (event.currentTarget !== event.target) return;
+              setDropTargetId((current) => (current === desktop.id ? null : current));
+              setReorderOver((current) => (current?.id === desktop.id ? null : current));
             }}
             onDrop={(event) => {
+              const draggedId = event.dataTransfer.getData(DESKTOP_DRAG_MIME);
+              if (draggedId) {
+                event.preventDefault();
+                const placement = reorderOver?.placement ?? "after";
+                setReorderOver(null);
+                cancelHover();
+                onReorderDesktops?.(draggedId, desktop.id, placement);
+                return;
+              }
               if (!canAcceptPaneDrop) return;
               event.preventDefault();
               setDropTargetId(null);
