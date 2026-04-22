@@ -108,6 +108,12 @@ impl<R: Runtime> EventListener for EventProxy<R> {
                 {
                     router.forget_session(&self.session_id.to_string());
                 }
+                if let Some(manager) = self
+                    .app
+                    .try_state::<crate::terminal::manager::TerminalManager<R>>()
+                {
+                    manager.remove(&self.session_id);
+                }
             }
             Event::Title(title) => {
                 *self.title.lock().unwrap() = title.clone();
