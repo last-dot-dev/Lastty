@@ -38,6 +38,7 @@ references/**
 docs/plan/**
 docs/plans/**
 src-tauri/gen/
+src-tauri/binaries/
 
 # AgentOps session artifacts
 .agents/

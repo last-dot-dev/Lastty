@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeBuildCommand": "pnpm build && node scripts/prepare-sidecars.mjs"
   },
   "app": {
     "windows": [
@@ -26,6 +26,7 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "externalBin": ["binaries/lastty-mcp"],
     "category": "DeveloperTool",
     "shortDescription": "Agent-native tiled terminal for codemaxxing",
     "longDescription": "Lastty is an agent-native tiled terminal. Run coding agents in PTY panes with structured UI updates, built for orchestrating parallel AI workflows.",

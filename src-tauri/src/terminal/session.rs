@@ -225,18 +225,6 @@ pub fn create_session<R: Runtime>(
             socket_path.to_string_lossy().to_string(),
         );
     }
-    // Prepend the directory containing lastty-peer to PATH so agents can call
-    // `lastty-peer post general "hello"` without a full path.
-    if let Some(bin_dir) = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-    {
-        let existing_path = std::env::var("PATH").unwrap_or_default();
-        env.insert(
-            "PATH".to_string(),
-            format!("{}:{}", bin_dir.display(), existing_path),
-        );
-    }
     let pty_config = tty::Options {
         shell,
         working_directory: Some(cwd),

@@ -2276,10 +2276,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "lastty-peer"
+name = "lastty-mcp"
 version = "0.1.0"
 dependencies = [
  "pane-protocol",
+ "serde",
  "serde_json",
 ]
 
