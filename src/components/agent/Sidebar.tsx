@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import WorktreeList, { type WorktreeRow } from "./WorktreeList";
-import CommitGraph from "./CommitGraph";
 import MergeButton from "./MergeButton";
-import type { GraphLayout } from "../../lib/graphLayout";
 import type { AgentDefinition } from "../../lib/ipc";
+import type { GraphLayout } from "../../lib/graphLayout";
 
 export type SidebarGraph =
   | { state: "idle"; reason: string }
@@ -53,11 +52,12 @@ export default function Sidebar({
   onAttach,
   onMerge,
   onAbandon,
+  onRename,
   mergeable,
   onOpenMergeDialog,
   footerExtras,
-  graph,
-  nowMs,
+  sessionsSlot,
+  graphSlot,
 }: {
   rows: WorktreeRow[];
   agents: AgentDefinition[];
@@ -67,11 +67,12 @@ export default function Sidebar({
   onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
   onMerge: (worktreePath: string) => void;
   onAbandon?: (worktreePath: string) => void;
+  onRename?: (worktreePath: string, newBranch: string) => Promise<void>;
   mergeable: number;
   onOpenMergeDialog: () => void;
   footerExtras?: ReactNode;
-  graph: SidebarGraph;
-  nowMs: number;
+  sessionsSlot: ReactNode;
+  graphSlot?: ReactNode;
 }) {
   const [width, setWidth] = useState(() => loadNumber(WIDTH_KEY, 240, WIDTH_MIN, WIDTH_MAX));
   const [topHeight, setTopHeight] = useState(() =>
@@ -156,6 +157,7 @@ export default function Sidebar({
         onAttach={onAttach}
         onMerge={onMerge}
         onAbandon={onAbandon}
+        onRename={onRename}
         style={{ height: topHeight, maxHeight: "none", flexShrink: 0 }}
       />
       <div
@@ -165,11 +167,15 @@ export default function Sidebar({
         onPointerDown={startTopHeightDrag}
       />
       <div className="agent-sidebar__section is-bottom">
-        <div className="agent-sidebar__label">Graph</div>
-        <div className="agent-sidebar__graph-body">
-          <GraphBody graph={graph} nowMs={nowMs} />
-        </div>
+        <div className="agent-sidebar__label">Sessions</div>
+        {sessionsSlot}
       </div>
+      {graphSlot && (
+        <div className="agent-sidebar__section is-graph">
+          <div className="agent-sidebar__label">Graph</div>
+          <div className="agent-sidebar__graph-body">{graphSlot}</div>
+        </div>
+      )}
       <div className="agent-sidebar__footer">
         {mergeable > 0 && (
           <MergeButton
@@ -191,36 +197,5 @@ export default function Sidebar({
         onPointerDown={startWidthDrag}
       />
     </aside>
-  );
-}
-
-function GraphBody({ graph, nowMs }: { graph: SidebarGraph; nowMs: number }) {
-  if (graph.state === "idle") {
-    return (
-      <span className="agent-graph-empty">
-        {graph.reason} — click <kbd>change</kbd> to pick a git repo
-      </span>
-    );
-  }
-  if (graph.state === "loading") {
-    return <span className="agent-graph-empty">loading…</span>;
-  }
-  if (graph.state === "error") {
-    return <span className="agent-graph-empty">{graph.message}</span>;
-  }
-  if (graph.layout.rows.length === 0) {
-    return (
-      <span className="agent-graph-empty">
-        no commits — click <kbd>change</kbd> to pick a git repo
-      </span>
-    );
-  }
-  return (
-    <CommitGraph
-      layout={graph.layout}
-      headSha={graph.headSha}
-      headRef={graph.headRef}
-      nowMs={nowMs}
-    />
   );
 }

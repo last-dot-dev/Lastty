@@ -678,6 +678,34 @@ pub async fn remove_worktree(path: String, repo_root: String) -> Result<(), Stri
 }
 
 #[tauri::command]
+pub async fn rename_worktree(
+    path: String,
+    new_branch: String,
+    repo_root: String,
+    state: State<'_, TerminalManager>,
+) -> Result<crate::git_pr::RenameWorktreeResult, String> {
+    rename_worktree_for_runtime(path, new_branch, repo_root, state).await
+}
+
+async fn rename_worktree_for_runtime<R: tauri::Runtime>(
+    path: String,
+    new_branch: String,
+    repo_root: String,
+    state: State<'_, TerminalManager<R>>,
+) -> Result<crate::git_pr::RenameWorktreeResult, String> {
+    let old_path = Path::new(&path);
+    let live = state.live_sessions_on(old_path);
+    if !live.is_empty() {
+        return Err(format!(
+            "cannot rename: {} session(s) attached — close them first",
+            live.len()
+        ));
+    }
+    crate::git_pr::rename_worktree(old_path, &new_branch, Path::new(&repo_root))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn abandon_worktree(
     path: String,
     repo_root: String,

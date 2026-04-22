@@ -367,6 +367,19 @@ export async function removeWorktree(
   return invoke("remove_worktree", { path, repoRoot });
 }
 
+export interface RenameWorktreeResult {
+  new_path: string;
+  new_branch: string;
+}
+
+export async function renameWorktree(
+  path: string,
+  newBranch: string,
+  repoRoot: string,
+): Promise<RenameWorktreeResult> {
+  return invoke("rename_worktree", { path, newBranch, repoRoot });
+}
+
 export async function abandonWorktree(
   path: string,
   repoRoot: string,

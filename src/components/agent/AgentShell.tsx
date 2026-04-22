@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import AlertBar, { type BlockedSessionRef } from "./AlertBar";
-import Sidebar, { type SidebarGraph } from "./Sidebar";
+import Sidebar from "./Sidebar";
 import DesktopStrip, { type DesktopEntry } from "./DesktopStrip";
 import type { WorktreeRow } from "./WorktreeList";
 import type { AgentDefinition } from "../../lib/ipc";
@@ -18,6 +18,7 @@ export default function AgentShell({
   onAttach,
   onMerge,
   onAbandon,
+  onRename,
   mergeable,
   onOpenMergeDialog,
   desktops,
@@ -32,8 +33,8 @@ export default function AgentShell({
   exposeMode,
   onToggleExpose,
   sidebarFooterExtras,
-  sidebarGraph,
-  nowMs,
+  sidebarSessionsSlot,
+  sidebarGraphSlot,
   activeSessionCount,
   children,
 }: {
@@ -47,6 +48,7 @@ export default function AgentShell({
   onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
   onMerge: (worktreePath: string) => void;
   onAbandon?: (worktreePath: string) => void;
+  onRename?: (worktreePath: string, newBranch: string) => Promise<void>;
   mergeable: number;
   onOpenMergeDialog: () => void;
   desktops: DesktopEntry[];
@@ -61,8 +63,8 @@ export default function AgentShell({
   exposeMode: boolean;
   onToggleExpose: () => void;
   sidebarFooterExtras?: ReactNode;
-  sidebarGraph: SidebarGraph;
-  nowMs: number;
+  sidebarSessionsSlot: ReactNode;
+  sidebarGraphSlot?: ReactNode;
   activeSessionCount: number;
   children: ReactNode;
 }) {
@@ -93,11 +95,12 @@ export default function AgentShell({
           onAttach={onAttach}
           onMerge={onMerge}
           onAbandon={onAbandon}
+          onRename={onRename}
           mergeable={mergeable}
           onOpenMergeDialog={onOpenMergeDialog}
           footerExtras={sidebarFooterExtras}
-          graph={sidebarGraph}
-          nowMs={nowMs}
+          sessionsSlot={sidebarSessionsSlot}
+          graphSlot={sidebarGraphSlot}
         />
         {children}
       </div>

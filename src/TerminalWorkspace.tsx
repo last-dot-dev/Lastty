@@ -46,10 +46,15 @@ import ProgressBar from "./components/agent/ProgressBar";
 import ReplyInput from "./components/agent/ReplyInput";
 import EdgeSpawner, { type SpawnDirection } from "./components/agent/EdgeSpawner";
 import type { WorktreeRow } from "./components/agent/WorktreeList";
+import SessionList, { buildSessionListRows } from "./components/agent/SessionList";
+import CommitGraph from "./components/agent/CommitGraph";
+import { layoutGraph } from "./lib/graphLayout";
+import type { SidebarGraph } from "./components/agent/Sidebar";
 import MergeDialog from "./components/agent/MergeDialog";
 import type { DesktopEntry } from "./components/agent/DesktopStrip";
 import type { BlockedSessionRef } from "./components/agent/AlertBar";
 import { useAppearance } from "./hooks/useAppearance";
+import { useShowGitGraph } from "./hooks/useShowGitGraph";
 import { useThemeOverride } from "./hooks/useThemeOverride";
 import { useKeyboardMode } from "./hooks/useKeyboardMode";
 import { useLastAgent } from "./hooks/useLastAgent";
@@ -125,10 +130,9 @@ import {
   type WorktreeStrategy,
   abandonWorktree,
   pruneLocalIfClean,
+  renameWorktree,
   resumeHistoryEntry,
 } from "./lib/ipc";
-import { layoutGraph } from "./lib/graphLayout";
-import type { SidebarGraph } from "./components/agent/Sidebar";
 import { useStressDriver } from "./app/stressDriver";
 import {
   getRecentProjects,
@@ -236,17 +240,18 @@ export default function TerminalWorkspace() {
   const [clock, setClock] = useState(Date.now());
   const [hydrated, setHydrated] = useState(false);
   const [benchMode, setBenchMode] = useState<string | null>(null);
+  const showGitGraph = useShowGitGraph();
+  type GraphEntry =
+    | { state: "loading" }
+    | { state: "error"; message: string }
+    | { state: "ready"; graph: GitGraph };
+  const [graphByCwd, setGraphByCwd] = useState<Record<string, GraphEntry>>({});
   const [terminalSnapshotsBySessionId, setTerminalSnapshotsBySessionId] = useState<
     Record<string, PersistedTerminalSnapshot>
   >({});
   const [restoredSnapshotsBySessionId, setRestoredSnapshotsBySessionId] = useState<
     Record<string, PersistedTerminalSnapshot>
   >({});
-  type GraphEntry =
-    | { state: "loading" }
-    | { state: "error"; message: string }
-    | { state: "ready"; graph: GitGraph };
-  const [graphByCwd, setGraphByCwd] = useState<Record<string, GraphEntry>>({});
   type WorktreesEntry =
     | { state: "loading" }
     | { state: "error"; message: string }
@@ -337,7 +342,7 @@ export default function TerminalWorkspace() {
   }, [workspace, workspaceRoot]);
 
   useEffect(() => {
-    if (!activeProjectRoot) return;
+    if (!activeProjectRoot || !showGitGraph.show) return;
     let cancelled = false;
     setGraphByCwd((current) =>
       current[activeProjectRoot]
@@ -364,7 +369,7 @@ export default function TerminalWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [activeProjectRoot]);
+  }, [activeProjectRoot, showGitGraph.show]);
 
   const nonGitPromptedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -480,6 +485,16 @@ export default function TerminalWorkspace() {
     reloadWorktrees();
   }
 
+  async function handleRenameWorktree(worktreePath: string, newBranch: string) {
+    if (!activeProjectRoot) throw new Error("no active project");
+    await renameWorktree(worktreePath, newBranch, activeProjectRoot);
+    invalidateWorktreeStatus(worktreePath);
+    reloadWorktrees();
+  }
+
+  const theme = useThemeOverride();
+  const appearance = useAppearance();
+
   const sidebarGraph = useMemo<SidebarGraph>(() => {
     if (!activeProjectRoot) return { state: "idle", reason: "no repo" };
     const entry = graphByCwd[activeProjectRoot];
@@ -493,8 +508,6 @@ export default function TerminalWorkspace() {
     };
   }, [activeProjectRoot, graphByCwd]);
 
-  const theme = useThemeOverride();
-  const appearance = useAppearance();
   const keyboardMode = useKeyboardMode();
   const { lastAgentId, setLastAgentId } = useLastAgent();
   const resolvedLastAgentId =
@@ -1464,6 +1477,20 @@ export default function TerminalWorkspace() {
     [blockedSessionIds],
   );
 
+  const sessionIdToPaneId = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (!workspace) return map;
+    for (const pane of Object.values(workspace.panes)) {
+      map[pane.sessionId] = pane.id;
+    }
+    return map;
+  }, [workspace]);
+
+  const sessionListRows = useMemo(
+    () => buildSessionListRows(sessionInfoById, sessionIdToPaneId),
+    [sessionInfoById, sessionIdToPaneId],
+  );
+
   const worktreeRows: WorktreeRow[] = (() => {
     if (!workspace || !activeProjectRoot) return [];
     const entry = worktreesByRepo[activeProjectRoot];
@@ -1553,6 +1580,7 @@ export default function TerminalWorkspace() {
         }
         onMerge={(worktreePath) => setMergeDialog({ focusPath: worktreePath })}
         onAbandon={(worktreePath) => void handleAbandonWorktree(worktreePath)}
+        onRename={handleRenameWorktree}
         mergeable={mergeableCount}
         onOpenMergeDialog={() => setMergeDialog({ focusPath: null })}
         desktops={desktopEntries}
@@ -1591,8 +1619,18 @@ export default function TerminalWorkspace() {
             <span>Settings</span>
           </button>
         }
-        sidebarGraph={sidebarGraph}
-        nowMs={clock}
+        sidebarSessionsSlot={
+          <SessionList
+            rows={sessionListRows}
+            onFocusPane={handleFocusPaneAnywhere}
+            nowMs={clock}
+          />
+        }
+        sidebarGraphSlot={
+          showGitGraph.show ? (
+            <GraphBody graph={sidebarGraph} nowMs={clock} />
+          ) : undefined
+        }
         activeSessionCount={activeSessionCount}
       >
         <div className={`agent-grid ${exposeMode ? "agent-expose-active" : ""}`}>
@@ -1790,6 +1828,8 @@ export default function TerminalWorkspace() {
         onAccentChange={appearance.setAccent}
         onFontFamilyChange={appearance.setFontFamily}
         onFontSizeChange={appearance.setFontSize}
+        showGitGraph={showGitGraph.show}
+        onShowGitGraphChange={showGitGraph.setShow}
         onClose={() => setSettingsOpen(false)}
       />
       <NotificationToasts sessionInfoById={sessionInfoById} />
@@ -2567,6 +2607,29 @@ function ChipMenu({
         </div>
       )}
     </div>
+  );
+}
+
+function GraphBody({ graph, nowMs }: { graph: SidebarGraph; nowMs: number }) {
+  if (graph.state === "idle") {
+    return <span className="agent-graph-empty">{graph.reason}</span>;
+  }
+  if (graph.state === "loading") {
+    return <span className="agent-graph-empty">loading…</span>;
+  }
+  if (graph.state === "error") {
+    return <span className="agent-graph-empty">{graph.message}</span>;
+  }
+  if (graph.layout.rows.length === 0) {
+    return <span className="agent-graph-empty">no commits</span>;
+  }
+  return (
+    <CommitGraph
+      layout={graph.layout}
+      headSha={graph.headSha}
+      headRef={graph.headRef}
+      nowMs={nowMs}
+    />
   );
 }
 

@@ -209,7 +209,7 @@ pub fn launch_agent<R: Runtime>(
 
     let (strategy, auto_promoted) = auto_promote_if_busy(manager, &base_cwd, request.worktree);
 
-    let resolved = resolve_strategy(&base_cwd, &agent.id, strategy)?;
+    let resolved = resolve_strategy(&base_cwd, &agent.id, strategy, request.prompt.as_deref())?;
     let ResolvedStrategy {
         cwd,
         worktree_path,
@@ -321,6 +321,7 @@ fn resolve_strategy(
     base_cwd: &Path,
     agent_id: &str,
     strategy: WorktreeStrategy,
+    prompt: Option<&str>,
 ) -> anyhow::Result<ResolvedStrategy> {
     match strategy {
         WorktreeStrategy::InPlace => Ok(ResolvedStrategy {
@@ -352,11 +353,13 @@ fn resolve_strategy(
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| {
                     let suffix = uuid::Uuid::new_v4().simple().to_string();
-                    format!(
-                        "lastty-{}-{}",
-                        sanitize_branch_component(agent_id),
-                        &suffix[..6]
-                    )
+                    let agent_component = sanitize_branch_component(agent_id);
+                    match prompt.and_then(|p| slugify_prompt(p, 28)) {
+                        Some(slug) => {
+                            format!("lastty-{}-{}-{}", agent_component, slug, &suffix[..4])
+                        }
+                        None => format!("lastty-{}-{}", agent_component, &suffix[..6]),
+                    }
                 });
             let worktree_root = base_cwd.join(".lastty-worktrees");
             std::fs::create_dir_all(&worktree_root)?;
@@ -526,6 +529,51 @@ fn sanitize_branch_component(value: &str) -> String {
         .collect()
 }
 
+const SLUG_STOPWORDS: &[&str] = &[
+    "a", "an", "the", "is", "are", "to", "of", "for", "and", "or", "in", "on", "please", "can",
+    "you", "i", "want", "need", "fix", "add", "make", "update",
+];
+
+fn slugify_prompt(prompt: &str, max_len: usize) -> Option<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let flush = |buf: &mut String, out: &mut Vec<String>| {
+        if !buf.is_empty() {
+            out.push(std::mem::take(buf));
+        }
+    };
+    for ch in prompt.chars() {
+        if ch.is_ascii_alphanumeric() {
+            current.push(ch.to_ascii_lowercase());
+        } else {
+            flush(&mut current, &mut tokens);
+        }
+    }
+    flush(&mut current, &mut tokens);
+
+    let mut picked: Vec<String> = Vec::new();
+    for token in tokens {
+        if SLUG_STOPWORDS.contains(&token.as_str()) {
+            continue;
+        }
+        picked.push(token);
+        if picked.len() >= 4 {
+            break;
+        }
+    }
+
+    let mut joined = picked.join("-");
+    if joined.len() > max_len {
+        joined.truncate(max_len);
+        joined = joined.trim_end_matches('-').to_string();
+    }
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
 fn default_agents() -> Vec<AgentDefinition> {
     vec![
         AgentDefinition {
@@ -558,8 +606,8 @@ fn default_agents() -> Vec<AgentDefinition> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_command_spec, load_rules, resolve_in_path, AgentDefinition, PromptTransport,
-        RuleAction, RuleDefinition, RuleFilter, RuleTrigger,
+        build_command_spec, load_rules, resolve_in_path, slugify_prompt, AgentDefinition,
+        PromptTransport, RuleAction, RuleDefinition, RuleFilter, RuleTrigger,
     };
     use std::collections::HashMap;
     use std::fs;
@@ -696,5 +744,44 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn slugify_prompt_drops_stopwords() {
+        assert_eq!(
+            slugify_prompt("please fix the bell attention bug", 28).as_deref(),
+            Some("bell-attention-bug"),
+        );
+    }
+
+    #[test]
+    fn slugify_prompt_keeps_first_four_content_words() {
+        assert_eq!(
+            slugify_prompt("rewrite the auth middleware module tests today", 64).as_deref(),
+            Some("rewrite-auth-middleware-module"),
+        );
+    }
+
+    #[test]
+    fn slugify_prompt_truncates_and_trims_trailing_hyphen() {
+        let got = slugify_prompt("reimplement persistent session hydration", 20);
+        let slug = got.as_deref().unwrap();
+        assert!(slug.len() <= 20, "slug={slug}");
+        assert!(!slug.ends_with('-'), "slug={slug}");
+    }
+
+    #[test]
+    fn slugify_prompt_empty_returns_none() {
+        assert_eq!(slugify_prompt("", 28), None);
+        assert_eq!(slugify_prompt("   ", 28), None);
+        assert_eq!(slugify_prompt("please the a an", 28), None);
+    }
+
+    #[test]
+    fn slugify_prompt_strips_non_ascii_and_punctuation() {
+        assert_eq!(
+            slugify_prompt("refactor café's naïve parser!! NOW", 28).as_deref(),
+            Some("refactor-caf-s-na"),
+        );
     }
 }

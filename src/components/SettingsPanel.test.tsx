@@ -10,9 +10,11 @@ const APPEARANCE_PROPS = {
   accent: "blue" as const,
   fontFamily: "System Default" as const,
   fontSize: 14,
+  showGitGraph: false,
   onAccentChange: () => {},
   onFontFamilyChange: () => {},
   onFontSizeChange: () => {},
+  onShowGitGraphChange: () => {},
 };
 
 let container: HTMLDivElement;

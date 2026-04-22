@@ -21,11 +21,13 @@ export interface SettingsPanelProps {
   accent: AccentColor;
   fontFamily: FontFamily;
   fontSize: number;
+  showGitGraph: boolean;
   onKeyboardModeChange: (mode: KeyboardMode) => void;
   onThemeOverrideChange: (override: ThemeOverride) => void;
   onAccentChange: (accent: AccentColor) => void;
   onFontFamilyChange: (family: FontFamily) => void;
   onFontSizeChange: (size: number) => void;
+  onShowGitGraphChange: (show: boolean) => void;
   onClose: () => void;
 }
 
@@ -36,11 +38,13 @@ export default function SettingsPanel({
   accent,
   fontFamily,
   fontSize,
+  showGitGraph,
   onKeyboardModeChange,
   onThemeOverrideChange,
   onAccentChange,
   onFontFamilyChange,
   onFontSizeChange,
+  onShowGitGraphChange,
   onClose,
 }: SettingsPanelProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -224,6 +228,23 @@ export default function SettingsPanel({
             Applies to the terminal and UI monospaced text. Pick a font you have installed
             locally; the app falls back to the system mono stack.
           </div>
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-title">Sidebar</div>
+          <label className="settings-toggle-row">
+            <input
+              type="checkbox"
+              checked={showGitGraph}
+              onChange={(event) => onShowGitGraphChange(event.target.checked)}
+            />
+            <span>
+              <span className="settings-option-label">Show git graph</span>
+              <span className="settings-option-copy">
+                Adds a commit-graph panel below Sessions in the sidebar.
+              </span>
+            </span>
+          </label>
         </section>
       </div>
     </div>

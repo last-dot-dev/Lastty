@@ -174,6 +174,7 @@ fn main() {
             commands::worktree_status,
             commands::create_pull_request,
             commands::remove_worktree,
+            commands::rename_worktree,
             commands::abandon_worktree,
             commands::list_prunable_worktrees,
             commands::prune_local_if_clean,

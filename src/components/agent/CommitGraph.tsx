@@ -1,11 +1,11 @@
 import { useMemo } from "react";
 
 import {
-  formatRelative,
   laneColor,
   type GraphLayout,
   type LaidOutCommit,
 } from "../../lib/graphLayout";
+import { formatRelative } from "../../lib/relativeTime";
 
 const LANE_W = 12;
 const ROW_H = 22;

@@ -170,6 +170,90 @@ pub fn remove_worktree(path: &Path, repo_root: &Path) -> Result<()> {
     .map(|_| ())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameWorktreeResult {
+    pub new_path: String,
+    pub new_branch: String,
+}
+
+fn sanitize_branch_name(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let sanitized: String = trimmed
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '/' => ch,
+            _ => '-',
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
+/// Rename a worktree's directory and branch.
+///
+/// PTYs cwd'd into the old path keep that path in the kernel; callers should
+/// refuse the rename when live sessions are attached.
+pub fn rename_worktree(
+    old_path: &Path,
+    new_branch: &str,
+    repo_root: &Path,
+) -> Result<RenameWorktreeResult> {
+    let sanitized = sanitize_branch_name(new_branch)
+        .ok_or_else(|| anyhow!("new branch name is empty or invalid: {new_branch:?}"))?;
+    if sanitized.contains('/') {
+        return Err(anyhow!("branch name cannot contain '/': {sanitized}"));
+    }
+
+    let old_branch = run_git_trim(old_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .ok_or_else(|| anyhow!("worktree has no branch checked out: {}", old_path.display()))?;
+    if old_branch == "HEAD" {
+        return Err(anyhow!(
+            "worktree HEAD is detached; cannot rename a detached worktree"
+        ));
+    }
+    if old_branch == sanitized {
+        return Err(anyhow!(
+            "new branch name is identical to current: {sanitized}"
+        ));
+    }
+
+    let parent = old_path
+        .parent()
+        .ok_or_else(|| anyhow!("worktree path has no parent: {}", old_path.display()))?;
+    let new_path = parent.join(&sanitized);
+    if new_path.exists() {
+        return Err(anyhow!(
+            "target path already exists: {}",
+            new_path.display()
+        ));
+    }
+
+    run_git_checked(
+        repo_root,
+        &[
+            "worktree",
+            "move",
+            old_path.to_string_lossy().as_ref(),
+            new_path.to_string_lossy().as_ref(),
+        ],
+    )?;
+    run_git_checked(&new_path, &["branch", "-m", &old_branch, &sanitized])
+        .context("git branch -m failed after worktree move")?;
+
+    Ok(RenameWorktreeResult {
+        new_path: new_path.to_string_lossy().to_string(),
+        new_branch: sanitized,
+    })
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AbandonResult {
     /// Whether the GitHub PR (if any) was closed.
@@ -386,5 +470,75 @@ mod tests {
             "a pull request for branch \"foo\" into branch \"main\" already exists"
         ));
         assert!(!looks_like_already_exists("unrelated failure"));
+    }
+
+    #[test]
+    fn sanitize_branch_name_rejects_empty_and_symbols_only() {
+        assert!(sanitize_branch_name("").is_none());
+        assert!(sanitize_branch_name("   ").is_none());
+        assert!(sanitize_branch_name("!!@@").is_none());
+    }
+
+    #[test]
+    fn sanitize_branch_name_replaces_and_trims() {
+        assert_eq!(
+            sanitize_branch_name("  feat bell attention!! ").as_deref(),
+            Some("feat-bell-attention"),
+        );
+    }
+
+    #[test]
+    fn rename_worktree_moves_and_renames() -> Result<()> {
+        let tmp = std::env::temp_dir().join(format!(
+            "lastty-rename-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        run_git_checked(&repo, &["init", "-q", "-b", "main"])?;
+        run_git_checked(&repo, &["config", "user.email", "t@t.t"])?;
+        run_git_checked(&repo, &["config", "user.name", "t"])?;
+        run_git_checked(&repo, &["commit", "--allow-empty", "-m", "init"])?;
+
+        let wt_root = repo.join(".lastty-worktrees");
+        std::fs::create_dir_all(&wt_root).unwrap();
+        let old_path = wt_root.join("lastty-claude-abc123");
+        run_git_checked(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "lastty-claude-abc123",
+                old_path.to_string_lossy().as_ref(),
+            ],
+        )?;
+
+        let result = rename_worktree(&old_path, "feat-rename", &repo)?;
+        assert_eq!(result.new_branch, "feat-rename");
+        assert!(std::path::Path::new(&result.new_path).exists());
+        assert!(!old_path.exists());
+
+        let branch = run_git_trim(
+            std::path::Path::new(&result.new_path),
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+        )
+        .unwrap();
+        assert_eq!(branch, "feat-rename");
+
+        std::fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn rename_worktree_rejects_same_name() {
+        let repo = std::env::temp_dir().join("x-should-not-exist-yyy");
+        let result = rename_worktree(&repo.join(".lastty-worktrees").join("keep"), "keep", &repo);
+        assert!(result.is_err());
     }
 }
