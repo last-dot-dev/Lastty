@@ -576,7 +576,7 @@ impl BusEvent {
         }
     }
 
-    fn from_agent(&self) -> Option<&str> {
+    fn peer_sender_agent_id(&self) -> Option<&str> {
         match self {
             BusEvent::PeerMessage { from, .. } | BusEvent::PeerPresence { from, .. } => {
                 from.agent_id()
@@ -624,7 +624,7 @@ impl BusEvent {
                 _ => None,
             },
             "channel" => self.channel().map(ToOwned::to_owned),
-            "from_agent" => self.from_agent().map(ToOwned::to_owned),
+            "from_agent" => self.peer_sender_agent_id().map(ToOwned::to_owned),
             "to_agent" => self.to_agent().map(ToOwned::to_owned),
             "presence" => self.presence().map(ToOwned::to_owned),
             _ => None,
@@ -825,7 +825,7 @@ fn rule_matches(rule: &RuleDefinition, event: &BusEvent) -> bool {
         }
     }
     if let Some(expected) = filter.from_agent.as_deref() {
-        if event.from_agent() != Some(expected) {
+        if event.peer_sender_agent_id() != Some(expected) {
             return false;
         }
     }

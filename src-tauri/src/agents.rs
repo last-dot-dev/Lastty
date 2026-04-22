@@ -60,9 +60,10 @@ pub enum SyncPolicy {
     Clean,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorktreeStrategy {
+    #[default]
     InPlace,
     Attach {
         path: String,
@@ -73,12 +74,6 @@ pub enum WorktreeStrategy {
         #[serde(default)]
         branch: Option<String>,
     },
-}
-
-impl Default for WorktreeStrategy {
-    fn default() -> Self {
-        Self::InPlace
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
