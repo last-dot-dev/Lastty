@@ -1,3 +1,4 @@
+pub(crate) mod attention;
 pub mod event_proxy;
 pub mod manager;
 pub(crate) mod osc7;

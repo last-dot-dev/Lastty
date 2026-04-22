@@ -124,6 +124,7 @@ pub struct TerminalSession<R: Runtime = tauri::Wry> {
     pub prompt: Option<String>,
     pub prompt_summary: Option<String>,
     pub worktree_path: Option<String>,
+    pub attention_menu_active: Arc<AtomicBool>,
     control_socket_path: Option<std::path::PathBuf>,
     control_connected: Arc<AtomicBool>,
     #[cfg(unix)]
@@ -322,6 +323,7 @@ pub fn create_session<R: Runtime>(
         prompt,
         prompt_summary,
         worktree_path,
+        attention_menu_active: Arc::new(AtomicBool::new(false)),
         control_socket_path,
         control_connected,
         #[cfg(unix)]

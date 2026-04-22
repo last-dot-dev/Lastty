@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,10 +15,12 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use base64::Engine as _;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+use crate::bus::{BusEvent, EventBus};
 #[cfg(feature = "bench")]
 use crate::perf_registry::PerfRegistry;
 use crate::render_sync::RenderCoordinator;
 
+use super::attention::detect_approval_menu;
 use super::manager::TerminalManager;
 use super::session::SessionId;
 
@@ -55,15 +58,32 @@ fn emit_frame_for_session<R: Runtime>(
     session_id: SessionId,
 ) -> Option<FrameEmitMetrics> {
     let manager = app_handle.state::<TerminalManager<R>>();
-    let term_arc = manager.get(&session_id).map(|session| session.term.clone());
-    let term_arc = term_arc?;
+    let session_handles = manager
+        .get(&session_id)
+        .map(|session| (session.term.clone(), session.attention_menu_active.clone()));
+    let (term_arc, attention_flag) = session_handles?;
 
     let render_start = Instant::now();
     let mut term = term_arc.lock();
     let frame = render_viewport(&mut term)?;
+    let menu_visible = detect_approval_menu(&visible_text_tail(&term, 20));
     drop(term);
     let render_elapsed = render_start.elapsed();
     let ansi_bytes = frame.ansi.len();
+
+    let was_active = attention_flag.swap(menu_visible, Ordering::AcqRel);
+    if menu_visible && !was_active {
+        let sid = session_id.to_string();
+        app_handle
+            .emit(
+                "session:attention",
+                serde_json::json!({ "session_id": sid }),
+            )
+            .ok();
+        app_handle
+            .state::<EventBus<R>>()
+            .publish(BusEvent::SessionAttention { session_id: sid });
+    }
 
     #[cfg(feature = "bench")]
     let perf = app_handle.try_state::<Arc<PerfRegistry>>();
@@ -374,6 +394,40 @@ pub fn render_partial<T: EventListener>(
         }
     }
 
+    out
+}
+
+pub(crate) fn visible_text_tail<T: EventListener>(term: &Term<T>, rows: usize) -> String {
+    let cols = term.columns();
+    let screen_lines = term.screen_lines();
+    let start = screen_lines.saturating_sub(rows);
+    let grid = term.grid();
+    let mut out = String::new();
+    for row_idx in start..screen_lines {
+        if row_idx > start {
+            out.push('\n');
+        }
+        let row = &grid[Line(row_idx as i32)];
+        for col in 0..cols {
+            let cell = &row[Column(col)];
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+            let c = cell.c;
+            if c == '\0' || c.is_ascii_control() {
+                out.push(' ');
+            } else {
+                out.push(c);
+            }
+            if let Some(zerowidth) = cell.zerowidth() {
+                for &zw in zerowidth {
+                    out.push(zw);
+                }
+            }
+        }
+    }
     out
 }
 
