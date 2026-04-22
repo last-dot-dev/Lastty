@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { UpdaterStore, type UpdaterDeps } from "./updater";
+import {
+  UpdaterStore,
+  scheduleUpdateCheck,
+  type UpdaterDeps,
+} from "./updater";
 
 type CheckFn = UpdaterDeps["check"];
 type RelaunchFn = UpdaterDeps["relaunch"];
@@ -186,6 +191,97 @@ describe("UpdaterStore", () => {
 
     expect(check).toHaveBeenCalledTimes(1);
     expect(store.getState().phase).toBe("downloaded");
+  });
+
+  describe("scheduleUpdateCheck", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const makeStore = () => {
+      const check = vi.fn(async () => null) as unknown as CheckFn;
+      const relaunch = vi.fn() as unknown as RelaunchFn;
+      return { store: new UpdaterStore({ check, relaunch }), check };
+    };
+
+    it("runs initial check after startup delay", async () => {
+      const { store, check } = makeStore();
+      const cleanup = scheduleUpdateCheck({
+        store,
+        startupDelayMs: 1_000,
+        intervalMs: 60_000,
+      });
+
+      expect(check).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(check).toHaveBeenCalledTimes(1);
+
+      cleanup();
+    });
+
+    it("skips interval ticks when no activity since last check", async () => {
+      const { store, check } = makeStore();
+      const cleanup = scheduleUpdateCheck({
+        store,
+        startupDelayMs: 1_000,
+        intervalMs: 60_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(check).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(check).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(check).toHaveBeenCalledTimes(1);
+
+      cleanup();
+    });
+
+    it("re-checks on interval when activity happens", async () => {
+      const { store, check } = makeStore();
+      const cleanup = scheduleUpdateCheck({
+        store,
+        startupDelayMs: 1_000,
+        intervalMs: 60_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(check).toHaveBeenCalledTimes(1);
+
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(check).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(check).toHaveBeenCalledTimes(2);
+
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(check).toHaveBeenCalledTimes(3);
+
+      cleanup();
+    });
+
+    it("cleanup stops further checks", async () => {
+      const { store, check } = makeStore();
+      const cleanup = scheduleUpdateCheck({
+        store,
+        startupDelayMs: 1_000,
+        intervalMs: 60_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(check).toHaveBeenCalledTimes(1);
+
+      cleanup();
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+      await vi.advanceTimersByTimeAsync(60_000 * 5);
+      expect(check).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("guards against concurrent downloads", async () => {

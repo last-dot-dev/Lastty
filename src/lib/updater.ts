@@ -6,6 +6,7 @@ import {
 import { relaunch as tauriRelaunch } from "@tauri-apps/plugin-process";
 
 const STARTUP_DELAY_MS = 10_000;
+const CHECK_INTERVAL_MS = 10 * 60 * 1000;
 const RELEASE_NOTES_BASE =
   "https://github.com/last-dot-dev/Lastty/releases/tag/";
 
@@ -234,11 +235,48 @@ function errorMessage(error: unknown): string {
 
 export const updaterStore = new UpdaterStore();
 
-export function scheduleUpdateCheck(
-  store: UpdaterStore = updaterStore,
-  delayMs: number = STARTUP_DELAY_MS,
-): void {
-  setTimeout(() => {
+const ACTIVITY_EVENTS = ["keydown", "pointerdown", "pointermove"] as const;
+
+export interface ScheduleOptions {
+  store?: UpdaterStore;
+  startupDelayMs?: number;
+  intervalMs?: number;
+}
+
+export function scheduleUpdateCheck({
+  store = updaterStore,
+  startupDelayMs = STARTUP_DELAY_MS,
+  intervalMs = CHECK_INTERVAL_MS,
+}: ScheduleOptions = {}): () => void {
+  let lastActivity = Date.now();
+  let lastCheck = 0;
+  const markActivity = () => {
+    lastActivity = Date.now();
+  };
+  const target = typeof window !== "undefined" ? window : null;
+  target?.addEventListener("focus", markActivity);
+  for (const name of ACTIVITY_EVENTS) {
+    target?.addEventListener(name, markActivity, { passive: true });
+  }
+
+  const tick = () => {
+    if (lastActivity < lastCheck) return;
+    lastCheck = Date.now();
     void store.checkAndDownload();
-  }, delayMs);
+  };
+
+  let intervalTimer: ReturnType<typeof setInterval> | null = null;
+  const startupTimer = setTimeout(() => {
+    tick();
+    intervalTimer = setInterval(tick, intervalMs);
+  }, startupDelayMs);
+
+  return () => {
+    clearTimeout(startupTimer);
+    if (intervalTimer) clearInterval(intervalTimer);
+    target?.removeEventListener("focus", markActivity);
+    for (const name of ACTIVITY_EVENTS) {
+      target?.removeEventListener(name, markActivity);
+    }
+  };
 }
