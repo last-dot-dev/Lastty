@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
+import { CanvasAddon } from "@xterm/addon-canvas";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -284,6 +285,15 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
 
   console.log(`[resume] initEntry terminal.open ${sessionId}`);
   terminal.open(host);
+  // customGlyphs: true is a no-op in DOMRenderer (xterm.js docs: "doesn't
+  // work with the DOM renderer"). Canvas renderer is required so block/box-
+  // drawing glyphs are drawn at exact cell bounds and lineHeight > 1 doesn't
+  // create vertical gaps in pixel-art content like logos.
+  try {
+    terminal.loadAddon(new CanvasAddon());
+  } catch {
+    // Canvas unavailable — DOMRenderer fallback is fine for non-icon content.
+  }
   focusTerminalIfActive(entry);
   bindWheelScroll(entry);
   entry.resizeObserver = new ResizeObserver(() => {
