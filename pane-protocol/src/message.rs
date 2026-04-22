@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::peer::PeerMessage;
+
 /// Messages sent from an agent to the host app via OSC 7770.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -70,4 +72,7 @@ pub enum AgentUiMessage {
         widget_type: String,
         props: Value,
     },
+
+    // Peer messaging — wrapping variant so OSC-only agents participate.
+    Peer(PeerMessage),
 }

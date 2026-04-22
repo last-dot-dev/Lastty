@@ -123,6 +123,10 @@ pub struct RuleFilter {
     pub tool: Option<String>,
     pub path: Option<String>,
     pub choice: Option<String>,
+    pub channel: Option<String>,
+    pub from_agent: Option<String>,
+    pub to_agent: Option<String>,
+    pub presence: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
