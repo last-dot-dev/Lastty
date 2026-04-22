@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::agents::SyncPolicy;
 
 const SYNC_CONFIG_PATH: &str = ".lastty/worktree-sync.toml";
-const SHARED_DIR: &str = ".pane-shared";
+const SHARED_DIR: &str = ".lastty-shared";
 const CARGO_TARGET_SUBDIR: &str = "cargo-target";
 const DEFAULT_COPY_GLOBS: &[&str] = &[".env", ".env.local"];
 const HOOK_TIMEOUT: Duration = Duration::from_secs(120);
