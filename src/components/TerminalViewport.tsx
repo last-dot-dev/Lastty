@@ -3,7 +3,7 @@ import "@xterm/xterm/css/xterm.css";
 
 import type { PersistedTerminalSnapshot } from "../app/sessionRestore";
 import { useEffectiveTheme } from "../hooks/useThemeOverride";
-import { checkCommandAvailable, terminalInput } from "../lib/ipc";
+import { terminalInput } from "../lib/ipc";
 import {
   attachTerminalHost,
   detachTerminalHost,
@@ -96,35 +96,15 @@ function TerminalViewportInner({
     });
   }, [blocked, focused, onSnapshotChange, restoredSnapshot, effectiveTheme, sessionId]);
 
-  const [claudeAvailable, setClaudeAvailable] = useState(true);
-  const [codexAvailable, setCodexAvailable] = useState(true);
   const [launched, setLaunched] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all([
-      checkCommandAvailable("claude"),
-      checkCommandAvailable("codex"),
-    ]).then(([claude, codex]) => {
-      if (cancelled) return;
-      setClaudeAvailable(claude);
-      setCodexAvailable(codex);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
+  // No install fallback: we won't invoke a package manager on the user's behalf —
+  // they may not have npm, and forcing a global install via a package manager they
+  // didn't choose is not our call to make.
   const launchCli = useCallback(
-    (command: string, installPackage: string, available: boolean) => {
-      const line = available
-        ? `${command}\n`
-        : `npm i -g ${installPackage} && ${command}\n`;
-      const bytes = Array.from(new TextEncoder().encode(line));
+    (command: string) => {
+      const bytes = Array.from(new TextEncoder().encode(`${command}\n`));
       void terminalInput(sessionId, bytes);
-      if (!available) {
-        if (command.startsWith("claude")) setClaudeAvailable(true);
-        if (command.startsWith("codex")) setCodexAvailable(true);
-      }
       setLaunched(true);
     },
     [sessionId],
@@ -155,37 +135,19 @@ function TerminalViewportInner({
             <button
               type="button"
               className="terminal-launch-btn"
-              title={
-                claudeAvailable
-                  ? "Start Claude Code (`claude --dangerously-skip-permissions`)"
-                  : "Install and start Claude Code (runs `npm i -g @anthropic-ai/claude-code`)"
-              }
+              title="Start Claude Code (`claude --dangerously-skip-permissions`)"
               aria-label="Start Claude Code in this terminal"
-              onClick={() =>
-                launchCli(
-                  "claude --dangerously-skip-permissions",
-                  "@anthropic-ai/claude-code",
-                  claudeAvailable,
-                )
-              }
+              onClick={() => launchCli("claude --dangerously-skip-permissions")}
             >
               <ClaudeLogo />
             </button>
             <button
               type="button"
               className="terminal-launch-btn"
-              title={
-                codexAvailable
-                  ? "Start Codex CLI (`codex --dangerously-bypass-approvals-and-sandbox`)"
-                  : "Install and start Codex CLI (runs `npm i -g @openai/codex`)"
-              }
+              title="Start Codex CLI (`codex --dangerously-bypass-approvals-and-sandbox`)"
               aria-label="Start Codex CLI in this terminal"
               onClick={() =>
-                launchCli(
-                  "codex --dangerously-bypass-approvals-and-sandbox",
-                  "@openai/codex",
-                  codexAvailable,
-                )
+                launchCli("codex --dangerously-bypass-approvals-and-sandbox")
               }
             >
               <CodexLogo />
