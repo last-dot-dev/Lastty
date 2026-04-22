@@ -17,24 +17,9 @@ SIMULATOR_PATH="${LASTTY_BENCH_SIMULATOR:-$(pwd)/scripts/stress/simulate.mjs}"
 
 rm -f "$OUT_FILE"
 
-USE_NIX=0
-if [[ "${LASTTY_BENCH_NO_NIX:-0}" != "1" ]] && command -v nix >/dev/null 2>&1; then
-  if nix develop -c true >/dev/null 2>&1; then
-    USE_NIX=1
-  fi
-fi
-
-run_cmd() {
-  if [[ "$USE_NIX" == "1" ]]; then
-    nix develop -c "$@"
-  else
-    "$@"
-  fi
-}
-
 echo "Building lastty (release, --features bench) via tauri-cli..."
 LASTTY_BENCH=1 \
-run_cmd pnpm tauri build --no-bundle --features bench >/tmp/lastty-stress-build.log 2>&1
+pnpm tauri build --no-bundle --features bench >/tmp/lastty-stress-build.log 2>&1
 
 TIMEOUT_SECS=$(( (DURATION_MS / 1000) + 60 ))
 
@@ -47,7 +32,7 @@ LASTTY_BENCH_SCENARIOS="$SCENARIOS" \
 LASTTY_BENCH_COLS="$COLS" \
 LASTTY_BENCH_ROWS="$ROWS" \
 LASTTY_BENCH_SIMULATOR="$SIMULATOR_PATH" \
-run_cmd ./target/release/lastty >/tmp/lastty-stress.log 2>&1 &
+./target/release/lastty >/tmp/lastty-stress.log 2>&1 &
 PID=$!
 
 cleanup() {
