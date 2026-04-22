@@ -27,6 +27,9 @@ import {
 } from "./app/agentStore";
 import { AgentInspector } from "./components/agent/AgentInspector";
 import { NotificationToasts } from "./components/agent/NotificationToasts";
+import { ChatPanel } from "./components/peer/ChatPanel";
+import { usePeerStore } from "./app/peerStore";
+import type { PeerMessageEvent, PeerPresenceEvent } from "./app/peerTypes";
 import {
   deriveAgentStatus,
   deriveAgentType,
@@ -200,6 +203,7 @@ export default function TerminalWorkspace() {
   const [draftSeedByPaneId, setDraftSeedByPaneId] = useState<Record<string, string>>({});
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [exposeMode, setExposeMode] = useState(false);
   const platform = useMemo(() => detectPlatform(), []);
   const pendingBindingRef = useRef<PendingBinding[]>([]);
@@ -631,6 +635,16 @@ export default function TerminalWorkspace() {
       const message = parseAgentMessage(event.payload.message);
       if (!message) return;
       useAgentStore.getState().ingest(event.payload.session_id, message);
+    }).then((fn) => unsubs.push(fn));
+
+    void listen<unknown>("bus:event", (event) => {
+      const payload = event.payload as { type?: unknown } | null;
+      const kind = payload && typeof payload === "object" ? payload.type : undefined;
+      if (kind === "peer_message") {
+        usePeerStore.getState().ingestMessage(payload as PeerMessageEvent);
+      } else if (kind === "peer_presence") {
+        usePeerStore.getState().ingestPresence(payload as PeerPresenceEvent);
+      }
     }).then((fn) => unsubs.push(fn));
 
     return () => {
@@ -1681,6 +1695,31 @@ export default function TerminalWorkspace() {
         onClose={() => setSettingsOpen(false)}
       />
       <NotificationToasts sessionInfoById={sessionInfoById} />
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      <button
+        type="button"
+        onClick={() => setChatOpen((open) => !open)}
+        title="Peer chat"
+        aria-label="Toggle peer chat"
+        style={{
+          position: "fixed",
+          right: 14,
+          bottom: 14,
+          width: 36,
+          height: 36,
+          borderRadius: 18,
+          border: "0.5px solid var(--color-border-secondary)",
+          background: "var(--color-background-primary)",
+          color: "var(--color-text-primary)",
+          cursor: "pointer",
+          zIndex: chatOpen ? 59 : 60,
+          display: chatOpen ? "none" : "grid",
+          placeItems: "center",
+          fontSize: 16,
+        }}
+      >
+        💬
+      </button>
     </div>
   );
 }
