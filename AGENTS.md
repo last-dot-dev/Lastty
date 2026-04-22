@@ -94,6 +94,14 @@ Lastty is a Tauri v2 agent-native tiled terminal. Agents run in PTY panes and pu
 - Pushing the tag triggers `.github/workflows/release.yml`: builds signed/notarized macOS arm64 `.dmg`, generates `latest.json` for the Tauri updater, publishes the GitHub Release. `release.yml` runs on the tag, not on main — commits between tag pushes do not produce releases.
 - Never hand-edit version strings. Use the bump script so all version files stay in lockstep.
 
+## Benchmarking
+
+- Primary regression check: `pnpm bench:stress` — boots the packaged app, drives 6 panes of synthetic scenarios for 30s, writes `/tmp/lastty-stress.json`, and prints a summary.
+- Drill-down harnesses (Rust pipeline, `render_full` micro-bench, frontend xterm.js write) live under `./scripts/run-*bench*` and `bench-harness/`. See `docs/bench/README.md` for when to use which, metric definitions, and informal p95 budgets.
+- Run before *and* after any change under `src-tauri/src/terminal/`, `src-tauri/src/render_sync.rs`, the frontend write path, or the IPC payload shape. Not needed for UI-only or pure-refactor work.
+- If numbers move (>10% on any p95), append an entry to `docs/bench/history.md`. The file is append-only — add at the bottom, never rewrite earlier entries.
+- Include headline p95s in the commit message when a commit is specifically a perf change (e.g. `feat: drain all pending sessions per wake — cuts m2e p95 78% under load`).
+
 ## Before finishing
 
 - Rust → `cargo test` (`-p <crate>` when possible). Don't kill cargo by PID; lock contention is expected.
