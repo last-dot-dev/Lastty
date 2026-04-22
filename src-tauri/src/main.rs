@@ -171,7 +171,8 @@ fn main() {
             commands::get_workspace_root,
             commands::terminal_input,
             commands::get_terminal_frame,
-            commands::check_command_available,
+            commands::clone_repo,
+            commands::create_project,
         ])
         .run(tauri::generate_context!())
         .expect("error running lastty");

@@ -50,3 +50,16 @@ pub fn is_git_repo(cwd: &Path) -> bool {
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
+
+pub fn git_clone(url: &str, target: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .args(["clone", "--", url])
+        .arg(target)
+        .output()
+        .with_context(|| format!("failed to invoke git clone for {url}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(anyhow!("git clone failed: {stderr}"));
+    }
+    Ok(())
+}

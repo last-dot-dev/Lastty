@@ -8,6 +8,22 @@ export async function createTerminal(
   return invoke("create_terminal", { cwd, command, args });
 }
 
+export interface CloneResult {
+  path: string;
+  repo_name: string;
+}
+
+export async function cloneRepo(
+  url: string,
+  parentDir: string,
+): Promise<CloneResult> {
+  return invoke("clone_repo", { url, parentDir });
+}
+
+export async function createProject(path: string): Promise<string> {
+  return invoke("create_project", { path });
+}
+
 export interface RestoreTerminalRequest {
   cwd: string;
 }
@@ -132,21 +148,6 @@ export async function terminalInput(
   bytes: number[],
 ): Promise<void> {
   return invoke("terminal_input", { sessionId, bytes });
-}
-
-const commandAvailabilityCache = new Map<string, Promise<boolean>>();
-
-export function checkCommandAvailable(command: string): Promise<boolean> {
-  let existing = commandAvailabilityCache.get(command);
-  if (!existing) {
-    // Fail open: if the IPC itself errors (e.g. missing in test env), treat
-    // the command as available so a broken check never hides a working button.
-    existing = invoke<boolean>("check_command_available", { command }).catch(
-      () => true,
-    );
-    commandAvailabilityCache.set(command, existing);
-  }
-  return existing;
 }
 
 export async function terminalScroll(

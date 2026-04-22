@@ -11,6 +11,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 
 import KeyboardHelpOverlay from "./components/KeyboardHelpOverlay";
+import NewViewWelcome from "./components/NewViewWelcome";
 import SettingsPanel from "./components/SettingsPanel";
 import UpdateBadge from "./components/UpdateBadge";
 import {
@@ -96,6 +97,8 @@ import TerminalViewport from "./components/TerminalViewport";
 import { releaseTerminalHost } from "./components/TerminalHostRegistry";
 import ViewPreview from "./components/agent/ViewPreview";
 import {
+  cloneRepo,
+  createProject,
   createTerminal,
   getBenchmarkMode,
   getPrimarySessionId,
@@ -127,6 +130,12 @@ import {
 import { layoutGraph } from "./lib/graphLayout";
 import type { SidebarGraph } from "./components/agent/Sidebar";
 import { useStressDriver } from "./app/stressDriver";
+import {
+  getRecentProjects,
+  pushRecentProject,
+  removeRecentProject,
+  type RecentProject,
+} from "./app/recentProjects";
 
 function basenameOfPath(path: string): string {
   if (!path) return "";
@@ -204,6 +213,9 @@ export default function TerminalWorkspace() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>(() =>
+    getRecentProjects(),
+  );
   const [exposeMode, setExposeMode] = useState(false);
   const platform = useMemo(() => detectPlatform(), []);
   const pendingBindingRef = useRef<PendingBinding[]>([]);
@@ -509,6 +521,10 @@ export default function TerminalWorkspace() {
               setWorkspace(restored.workspace);
               setRestoredSnapshotsBySessionId(restored.restoredSnapshotsBySessionId);
               setTerminalSnapshotsBySessionId(restored.restoredSnapshotsBySessionId);
+              for (const desktop of restored.workspace.desktops) {
+                if (desktop.projectRoot) pushRecentProject(desktop.projectRoot);
+              }
+              setRecentProjects(getRecentProjects());
               return;
             }
           } catch (error) {
@@ -1217,6 +1233,16 @@ export default function TerminalWorkspace() {
     setWorkspace((current) => (current ? toggleMaximize(current, paneId) : current));
   }
 
+  function rememberRecent(path: string) {
+    pushRecentProject(path);
+    setRecentProjects(getRecentProjects());
+  }
+
+  function forgetRecent(path: string) {
+    removeRecentProject(path);
+    setRecentProjects(getRecentProjects());
+  }
+
   async function handleChangeProjectRoot(desktopId: string) {
     const picked = await openFolderDialog({
       directory: true,
@@ -1230,33 +1256,38 @@ export default function TerminalWorkspace() {
     setWorkspace((current) =>
       current ? setDesktopProjectRoot(current, desktopId, picked) : current,
     );
+    rememberRecent(picked);
   }
 
-  async function handleNewDesktop() {
-    const picked = await openFolderDialog({
-      directory: true,
-      multiple: false,
-      title: "Pick project folder for new view",
-    }).catch((error) => {
-      console.error("folder picker failed", error);
-      return null;
-    });
-    if (!picked || typeof picked !== "string") return;
-    const sessionId = await createTerminal(picked);
+  async function fillActiveDesktop(projectRoot: string, viewName?: string) {
+    if (!workspace) return;
+    const targetDesktopId = workspace.activeDesktopId;
+    const sessionId = await createTerminal(projectRoot);
     const title = `shell ${Object.keys(sessionInfoById).length + 1}`;
     await hydrateSessionInfo(sessionId, title);
-    setWorkspace((current) =>
-      current
-        ? createDesktop(current, createPaneRecord(sessionId, title), picked)
-        : createWorkspace(createPaneRecord(sessionId, title), picked),
-    );
+    const pane = createPaneRecord(sessionId, title);
+    setWorkspace((current) => {
+      if (!current) return current;
+      let next: WorkspaceState = {
+        ...current,
+        panes: { ...current.panes, [pane.id]: pane },
+      };
+      next = attachPaneToDesktop(next, pane.id, targetDesktopId);
+      next = setDesktopProjectRoot(next, targetDesktopId, projectRoot);
+      if (viewName) {
+        next = renameDesktop(next, targetDesktopId, viewName);
+      }
+      return next;
+    });
+    rememberRecent(projectRoot);
   }
 
-  function handleNewTerminalInActiveDesktop() {
-    if (!workspace) return;
-    const desktop = activeDesktop(workspace);
-    if (desktop.layout) return;
-    createDraftPane({ kind: "root", desktopId: workspace.activeDesktopId });
+  function handleNewDesktop() {
+    setWorkspace((current) =>
+      current
+        ? createDesktop(current, null, "")
+        : null,
+    );
   }
 
   function handleSwitchDesktop(desktopId: string) {
@@ -1622,7 +1653,18 @@ export default function TerminalWorkspace() {
                         }}
                       />
                     ) : (
-                      <EmptyDesktop onNewTerminal={() => void handleNewTerminalInActiveDesktop()} />
+                      <NewViewWelcome
+                        recents={recentProjects}
+                        onSubmit={(root, viewName) => fillActiveDesktop(root, viewName)}
+                        onClone={(url, parentDir) => cloneRepo(url, parentDir)}
+                        onCreateProject={(path) => createProject(path)}
+                        onRecentMissing={(path) => {
+                          forgetRecent(path);
+                          setAutoPromoteNotice(
+                            `Recent folder is no longer available: ${path}`,
+                          );
+                        }}
+                      />
                     )}
                   </div>
                 );

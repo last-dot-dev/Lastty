@@ -419,14 +419,14 @@ function nextDefaultDesktopName(desktops: DesktopState[]): string {
 
 export function createDesktop(
   state: WorkspaceState,
-  rootPane: PaneRecord,
+  rootPane: PaneRecord | null,
   projectRoot: string,
   name?: string,
 ): WorkspaceState {
   const desktopName = name || nextDefaultDesktopName(state.desktops);
   const desktop = createDesktopState(rootPane, desktopName, projectRoot);
   return {
-    panes: { ...state.panes, [rootPane.id]: rootPane },
+    panes: rootPane ? { ...state.panes, [rootPane.id]: rootPane } : state.panes,
     desktops: [...state.desktops, desktop],
     activeDesktopId: desktop.id,
   };

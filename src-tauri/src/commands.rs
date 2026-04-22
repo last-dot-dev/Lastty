@@ -719,24 +719,80 @@ pub async fn get_terminal_frame(
     Ok(crate::terminal::render::render_viewport_full(&term))
 }
 
-#[tauri::command]
-pub async fn check_command_available(command: String) -> bool {
-    // Restrict to plain binary names so we can safely interpolate into the
-    // shell script below without quoting. Matches what a PTY would try to run.
-    if command.is_empty()
-        || !command
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-    {
-        return false;
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CloneResult {
+    pub path: String,
+    pub repo_name: String,
+}
+
+fn is_valid_clone_url(url: &str) -> bool {
+    if url.starts_with("https://") || url.starts_with("http://") {
+        return url.len() > "https://".len();
     }
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let script = format!("command -v -- {command}");
-    std::process::Command::new(shell)
-        .args(["-l", "-c", &script])
-        .output()
-        .map(|output| output.status.success() && !output.stdout.is_empty())
-        .unwrap_or(false)
+    if url.starts_with("ssh://") || url.starts_with("git://") {
+        return url.len() > "ssh://".len();
+    }
+    if let Some(rest) = url.strip_prefix("git@") {
+        if let Some((host, path)) = rest.split_once(':') {
+            return !host.is_empty() && !path.is_empty();
+        }
+    }
+    false
+}
+
+fn derive_repo_name(url: &str) -> Option<String> {
+    let trimmed = url.trim_end_matches('/');
+    let tail = trimmed.rsplit(&['/', ':'][..]).next()?;
+    let name = tail.strip_suffix(".git").unwrap_or(tail);
+    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+#[tauri::command]
+pub async fn create_project(path: String) -> Result<String, String> {
+    let target = Path::new(&path);
+    let parent = target
+        .parent()
+        .ok_or_else(|| "project path has no parent directory".to_string())?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "parent directory does not exist: {}",
+            parent.display()
+        ));
+    }
+    if target.exists() {
+        return Err(format!("destination already exists: {}", target.display()));
+    }
+    std::fs::create_dir(target).map_err(|error| error.to_string())?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn clone_repo(url: String, parent_dir: String) -> Result<CloneResult, String> {
+    if !is_valid_clone_url(&url) {
+        return Err("invalid git URL".to_string());
+    }
+    let repo_name = derive_repo_name(&url).ok_or("could not derive repository name from URL")?;
+    let parent = Path::new(&parent_dir);
+    if !parent.is_dir() {
+        return Err(format!("parent directory does not exist: {parent_dir}"));
+    }
+    let target = parent.join(&repo_name);
+    if target.exists() {
+        return Err(format!("destination already exists: {}", target.display()));
+    }
+    if let Err(error) = crate::git_util::git_clone(&url, &target) {
+        if target.exists() {
+            let _ = std::fs::remove_dir_all(&target);
+        }
+        return Err(error.to_string());
+    }
+    Ok(CloneResult {
+        path: target.to_string_lossy().into_owned(),
+        repo_name,
+    })
 }
 
 #[cfg(test)]
@@ -914,5 +970,68 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn is_valid_clone_url_accepts_common_schemes() {
+        for url in [
+            "https://github.com/cli/cli",
+            "https://github.com/cli/cli.git",
+            "http://example.com/repo.git",
+            "ssh://git@github.com/cli/cli.git",
+            "git://example.com/repo.git",
+            "git@github.com:cli/cli.git",
+        ] {
+            assert!(super::is_valid_clone_url(url), "{url} should be valid");
+        }
+    }
+
+    #[test]
+    fn is_valid_clone_url_rejects_bad_input() {
+        for url in [
+            "",
+            "https://",
+            "ssh://",
+            "--upload-pack=/bin/sh",
+            "; rm -rf /",
+            "/tmp/local-path",
+            "git@",
+            "git@github.com",
+            "git@:path",
+        ] {
+            assert!(!super::is_valid_clone_url(url), "{url} should be invalid");
+        }
+    }
+
+    #[test]
+    fn derive_repo_name_handles_common_shapes() {
+        assert_eq!(
+            super::derive_repo_name("https://github.com/cli/cli"),
+            Some("cli".to_string())
+        );
+        assert_eq!(
+            super::derive_repo_name("https://github.com/cli/cli.git"),
+            Some("cli".to_string())
+        );
+        assert_eq!(
+            super::derive_repo_name("https://github.com/cli/cli/"),
+            Some("cli".to_string())
+        );
+        assert_eq!(
+            super::derive_repo_name("git@github.com:cli/cli.git"),
+            Some("cli".to_string())
+        );
+        assert_eq!(
+            super::derive_repo_name("ssh://git@host/group/subgroup/proj.git"),
+            Some("proj".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_repo_name_rejects_empty_or_traversal() {
+        assert_eq!(super::derive_repo_name(""), None);
+        assert_eq!(super::derive_repo_name(".git"), None);
+        assert_eq!(super::derive_repo_name("https://host/."), None);
+        assert_eq!(super::derive_repo_name("https://host/.."), None);
     }
 }
