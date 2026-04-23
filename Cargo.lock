@@ -291,7 +291,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bench-harness"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "alacritty_terminal",
  "lastty",
@@ -2275,7 +2275,7 @@ dependencies = [
 
 [[package]]
 name = "lastty"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "pane-protocol"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "serde",
  "serde_json",
