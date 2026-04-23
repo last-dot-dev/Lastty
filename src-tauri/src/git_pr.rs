@@ -33,7 +33,7 @@ pub struct CreatePrResult {
     pub already_existed: bool,
 }
 
-pub fn create_pull_request(req: &CreatePrRequest) -> Result<CreatePrResult> {
+pub(crate) fn create_pull_request(req: &CreatePrRequest) -> Result<CreatePrResult> {
     let worktree = Path::new(&req.worktree_path);
     let branch = run_git_trim(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])
         .ok_or_else(|| anyhow!("worktree has no branch checked out: {}", worktree.display()))?;
@@ -162,7 +162,7 @@ fn extract_url(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub fn remove_worktree(path: &Path, repo_root: &Path) -> Result<()> {
+pub(crate) fn remove_worktree(path: &Path, repo_root: &Path) -> Result<()> {
     run_git_checked(
         repo_root,
         &["worktree", "remove", path.to_string_lossy().as_ref()],
@@ -201,7 +201,7 @@ fn sanitize_branch_name(value: &str) -> Option<String> {
 ///
 /// PTYs cwd'd into the old path keep that path in the kernel; callers should
 /// refuse the rename when live sessions are attached.
-pub fn rename_worktree(
+pub(crate) fn rename_worktree(
     old_path: &Path,
     new_branch: &str,
     repo_root: &Path,
@@ -275,7 +275,7 @@ pub struct AbandonResult {
 /// Close the PR (if any), delete the remote + local branch, and remove the
 /// worktree. Keeps going on non-fatal errors so a partially-orphaned worktree
 /// still gets cleaned up instead of leaving the caller in a worse state.
-pub fn abandon_worktree(worktree_path: &Path, repo_root: &Path) -> Result<AbandonResult> {
+pub(crate) fn abandon_worktree(worktree_path: &Path, repo_root: &Path) -> Result<AbandonResult> {
     let mut out = AbandonResult::default();
 
     let branch = run_git_trim(worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -373,7 +373,7 @@ pub struct PrunableWorktree {
 /// no `git push`, no remote ref inspection — so we never trigger keychain
 /// prompts on close. Callers that also want remote cleanup should use
 /// `abandon_worktree` through the explicit "✕" button.
-pub fn prune_local_if_clean(
+pub(crate) fn prune_local_if_clean(
     worktree_path: &Path,
     repo_root: &Path,
     base_branch: &str,
@@ -413,7 +413,7 @@ pub fn prune_local_if_clean(
 /// Enumerate worktrees that look abandoned: zero unmerged commits, no
 /// uncommitted files, and (when GitHub is reachable) no open PR. Skips the
 /// main checkout and any non-lastty worktree the user created manually.
-pub fn list_prunable_worktrees(
+pub(crate) fn list_prunable_worktrees(
     repo_root: &Path,
     base_branch: &str,
 ) -> Result<Vec<PrunableWorktree>> {
