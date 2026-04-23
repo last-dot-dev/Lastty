@@ -25,11 +25,11 @@ export function deriveAgentStatus(
 
 export function deriveTaskName(info: SessionInfo | undefined): string {
   if (!info) return "shell";
+  const title = info.title?.trim();
+  if (title && title !== "shell") return title;
   const summary = info.prompt_summary?.trim();
   if (summary) return summary;
-  const title = info.title?.trim();
-  if (title) return title;
-  return "shell";
+  return title || "shell";
 }
 
 export function deriveBranchName(info: SessionInfo | undefined): string {

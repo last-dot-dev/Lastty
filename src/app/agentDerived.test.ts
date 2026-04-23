@@ -71,16 +71,24 @@ describe("deriveAgentStatus", () => {
 });
 
 describe("deriveTaskName", () => {
-  it("prefers prompt_summary", () => {
+  it("prefers live title over prompt_summary", () => {
     expect(
-      deriveTaskName(sessionInfo({ prompt_summary: "JWT auth", title: "claude" })),
+      deriveTaskName(
+        sessionInfo({ prompt_summary: "JWT auth", title: "fixing login redirect" }),
+      ),
+    ).toBe("fixing login redirect");
+  });
+
+  it("falls back to prompt_summary when title is 'shell'", () => {
+    expect(
+      deriveTaskName(sessionInfo({ prompt_summary: "JWT auth", title: "shell" })),
     ).toBe("JWT auth");
   });
 
-  it("falls back to title when prompt_summary is empty", () => {
-    expect(deriveTaskName(sessionInfo({ prompt_summary: "  ", title: "claude" }))).toBe(
-      "claude",
-    );
+  it("falls back to prompt_summary when title is empty", () => {
+    expect(
+      deriveTaskName(sessionInfo({ prompt_summary: "JWT auth", title: "  " })),
+    ).toBe("JWT auth");
   });
 
   it("returns 'shell' when nothing present", () => {

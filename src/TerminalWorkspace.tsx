@@ -530,7 +530,14 @@ export default function TerminalWorkspace() {
             if (restored) {
               setSessionInfoById(
                 Object.fromEntries(
-                  restoredSessions.map((session) => [session.session_id, session]),
+                  restoredSessions.map((session, index) => {
+                    const persistedTitle = persisted.panes[index]?.title?.trim();
+                    const seeded: SessionInfo =
+                      persistedTitle && persistedTitle !== "shell"
+                        ? { ...session, title: persistedTitle }
+                        : session;
+                    return [session.session_id, seeded];
+                  }),
                 ),
               );
               setWorkspace(restored.workspace);
