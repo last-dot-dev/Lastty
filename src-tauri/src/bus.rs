@@ -193,7 +193,7 @@ impl<R: Runtime> EventBus<R> {
         Ok(rule_count)
     }
 
-    pub fn list_recordings(&self) -> Vec<RecordingInfo> {
+    pub(crate) fn list_recordings(&self) -> Vec<RecordingInfo> {
         let Ok(entries) = fs::read_dir(&self.recordings_dir) else {
             return Vec::new();
         };
@@ -213,12 +213,12 @@ impl<R: Runtime> EventBus<R> {
             .collect()
     }
 
-    pub fn read_recording(&self, session_id: &str) -> Result<String, String> {
+    pub(crate) fn read_recording(&self, session_id: &str) -> Result<String, String> {
         let path = self.recordings_dir.join(format!("{session_id}.jsonl"));
         fs::read_to_string(path).map_err(|error| error.to_string())
     }
 
-    pub fn list_history(&self) -> Vec<HistoryEntry> {
+    pub(crate) fn list_history(&self) -> Vec<HistoryEntry> {
         let Ok(entries) = fs::read_dir(&self.recordings_dir) else {
             return Vec::new();
         };
@@ -238,11 +238,11 @@ impl<R: Runtime> EventBus<R> {
         out
     }
 
-    pub fn get_history_entry(&self, session_id: &str) -> Option<HistoryEntry> {
+    pub(crate) fn get_history_entry(&self, session_id: &str) -> Option<HistoryEntry> {
         self.read_sidecar(session_id)
     }
 
-    pub fn delete_history_entry(&self, session_id: &str) -> Result<(), String> {
+    pub(crate) fn delete_history_entry(&self, session_id: &str) -> Result<(), String> {
         let _guard = self.write_guard.lock().unwrap();
         let sidecar = self.sidecar_path(session_id);
         let jsonl = self.recordings_dir.join(format!("{session_id}.jsonl"));
@@ -259,7 +259,11 @@ impl<R: Runtime> EventBus<R> {
         Ok(())
     }
 
-    pub fn set_history_entry_pinned(&self, session_id: &str, pinned: bool) -> Result<(), String> {
+    pub(crate) fn set_history_entry_pinned(
+        &self,
+        session_id: &str,
+        pinned: bool,
+    ) -> Result<(), String> {
         let Some(mut entry) = self.read_sidecar(session_id) else {
             return Err("history entry not found".to_string());
         };
@@ -268,7 +272,7 @@ impl<R: Runtime> EventBus<R> {
         Ok(())
     }
 
-    pub fn finalize_sidecar(&self, session_id: &str, exit_code: Option<i32>) {
+    fn finalize_sidecar(&self, session_id: &str, exit_code: Option<i32>) {
         let now = unix_now_ms();
         let Some(mut entry) = self.read_sidecar(session_id).or_else(|| {
             self.snapshot_live_session(session_id)
@@ -350,7 +354,7 @@ impl<R: Runtime> EventBus<R> {
         Some(session.info())
     }
 
-    pub fn record_agent_ui_message(&self, session_id: &str, message: &serde_json::Value) {
+    pub(crate) fn record_agent_ui_message(&self, session_id: &str, message: &serde_json::Value) {
         self.record_line(
             session_id,
             serde_json::json!({
