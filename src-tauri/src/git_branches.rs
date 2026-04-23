@@ -11,7 +11,7 @@ pub struct GitBranch {
     pub worktree_path: Option<String>,
 }
 
-pub fn list_branches(cwd: &Path) -> Result<Vec<GitBranch>> {
+pub(crate) fn list_branches(cwd: &Path) -> Result<Vec<GitBranch>> {
     if !crate::git_util::is_git_repo(cwd) {
         return Ok(Vec::new());
     }
@@ -34,7 +34,7 @@ pub fn list_branches(cwd: &Path) -> Result<Vec<GitBranch>> {
         .collect()
 }
 
-pub fn checkout_branch(cwd: &Path, name: &str) -> Result<()> {
+pub(crate) fn checkout_branch(cwd: &Path, name: &str) -> Result<()> {
     let output = Command::new("git")
         .current_dir(cwd)
         .args(["checkout", name])

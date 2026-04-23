@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 
-pub fn run_git_trim(cwd: &Path, args: &[&str]) -> Option<String> {
+pub(crate) fn run_git_trim(cwd: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .current_dir(cwd)
         .args(args)
@@ -20,7 +20,7 @@ pub fn run_git_trim(cwd: &Path, args: &[&str]) -> Option<String> {
     }
 }
 
-pub fn run_git_checked(cwd: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn run_git_checked(cwd: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .current_dir(cwd)
         .args(args)
@@ -33,15 +33,7 @@ pub fn run_git_checked(cwd: &Path, args: &[&str]) -> Result<String> {
     String::from_utf8(output.stdout).with_context(|| "git output was not utf-8")
 }
 
-pub fn run_git_status(cwd: &Path, args: &[&str]) -> Result<std::process::Output> {
-    Command::new("git")
-        .current_dir(cwd)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to invoke git {args:?} in {}", cwd.display()))
-}
-
-pub fn is_git_repo(cwd: &Path) -> bool {
+pub(crate) fn is_git_repo(cwd: &Path) -> bool {
     Command::new("git")
         .current_dir(cwd)
         .args(["rev-parse", "--is-inside-work-tree"])
@@ -51,7 +43,7 @@ pub fn is_git_repo(cwd: &Path) -> bool {
         .unwrap_or(false)
 }
 
-pub fn git_clone(url: &str, target: &Path) -> Result<()> {
+pub(crate) fn git_clone(url: &str, target: &Path) -> Result<()> {
     let output = Command::new("git")
         .args(["clone", "--", url])
         .arg(target)

@@ -21,7 +21,7 @@ pub struct GitGraph {
     pub head_ref: Option<String>,
 }
 
-pub fn load(cwd: &Path, limit: u32) -> Result<GitGraph> {
+pub(crate) fn load(cwd: &Path, limit: u32) -> Result<GitGraph> {
     if !crate::git_util::is_git_repo(cwd) {
         return Ok(GitGraph {
             commits: Vec::new(),

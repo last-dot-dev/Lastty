@@ -9,7 +9,7 @@ pub struct GitInfo {
     pub branch: String,
 }
 
-pub fn detect(cwd: &Path) -> Option<GitInfo> {
+pub(crate) fn detect(cwd: &Path) -> Option<GitInfo> {
     let branch = run_git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let branch = if branch == "HEAD" {
         run_git(cwd, &["rev-parse", "--short", "HEAD"])?
