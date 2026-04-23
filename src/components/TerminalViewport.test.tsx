@@ -350,6 +350,25 @@ describe("TerminalViewport", () => {
     expect(harness.terminalScrollMock).toHaveBeenCalledWith("session-1", -2);
   });
 
+  it("does not forward wheel events while a primary-button selection drag is active", async () => {
+    harness.getTerminalFrameMock.mockResolvedValueOnce(
+      makeFrame(false, "[Hvisible", { total_lines: 120, display_offset: 0 }),
+    );
+
+    await renderViewport();
+
+    const host = container.querySelector('[data-testid="terminal-host"]');
+
+    await act(async () => {
+      host?.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -200, buttons: 1, bubbles: true, cancelable: true }),
+      );
+      await flush();
+    });
+
+    expect(harness.terminalScrollMock).not.toHaveBeenCalled();
+  });
+
   it("does not forward wheel events while the alternate screen is active", async () => {
     harness.getTerminalFrameMock.mockResolvedValueOnce(makeFrame(true, "\u001b[?1049hALT"));
 

@@ -242,6 +242,12 @@ function cellHeightPx(entry: Entry): number {
 
 function bindWheelScroll(entry: Entry) {
   const handleWheel = (event: WheelEvent) => {
+    // xterm has scrollback:0, so a Rust-driven scroll rewrites the same buffer
+    // rows with new content while the selection anchor stays on those rows —
+    // the highlight drifts. Freeze viewport during an active primary-button
+    // drag; normal scroll resumes on release.
+    if ((event.buttons & 1) !== 0) return;
+
     const frame = entry.latestFrame;
     if (frame?.alternate_screen) return;
 
