@@ -5,9 +5,10 @@ import {
 } from "../../app/agentDerived";
 import { useAgentSession } from "../../app/agentStore";
 import { formatRelative } from "../../lib/relativeTime";
-import type { SessionInfo } from "../../lib/ipc";
+import type { HistoryEntry, SessionInfo } from "../../lib/ipc";
 
 export interface SessionListRow {
+  key: string;
   sessionId: string;
   paneId: string | null;
   taskName: string;
@@ -15,29 +16,67 @@ export interface SessionListRow {
   projectRoot: string;
   projectLabel: string;
   startedAtUnixMs: number;
+  dormant: boolean;
+  historyEntry: HistoryEntry | null;
 }
 
 export function buildSessionListRows(
   sessionInfoById: Record<string, SessionInfo>,
   sessionIdToPaneId: Record<string, string>,
   projectRootBySessionId: Record<string, string> = {},
+  historyEntries: HistoryEntry[] = [],
 ): SessionListRow[] {
-  return Object.values(sessionInfoById)
-    .map((info) => {
-      const projectRoot =
-        projectRootBySessionId[info.session_id] ??
-        inferProjectRoot(info.worktree_path, info.cwd);
+  const liveSessionIds = new Set(Object.keys(sessionInfoById));
+  const liveAgentSessionIds = new Set(
+    Object.values(sessionInfoById)
+      .map((info) => info.session_id)
+      .filter((id): id is string => Boolean(id)),
+  );
+
+  const liveRows: SessionListRow[] = Object.values(sessionInfoById).map((info) => {
+    const projectRoot =
+      projectRootBySessionId[info.session_id] ??
+      inferProjectRoot(info.worktree_path, info.cwd);
+    return {
+      key: `live:${info.session_id}`,
+      sessionId: info.session_id,
+      paneId: sessionIdToPaneId[info.session_id] ?? null,
+      taskName: shortTaskName(info, projectRoot),
+      agentId: deriveAgentType(info),
+      projectRoot,
+      projectLabel: projectLabel(projectRoot),
+      startedAtUnixMs: info.started_at_unix_ms,
+      dormant: false,
+      historyEntry: null,
+    };
+  });
+
+  const dormantRows: SessionListRow[] = historyEntries
+    .filter((entry) => {
+      if (liveSessionIds.has(entry.session_id)) return false;
+      if (entry.agent_session_id && liveAgentSessionIds.has(entry.agent_session_id))
+        return false;
+      return true;
+    })
+    .map((entry) => {
+      const projectRoot = inferProjectRoot(entry.worktree_path, entry.cwd);
       return {
-        sessionId: info.session_id,
-        paneId: sessionIdToPaneId[info.session_id] ?? null,
-        taskName: shortTaskName(info, projectRoot),
-        agentId: deriveAgentType(info),
+        key: `hist:${entry.session_id}`,
+        sessionId: entry.session_id,
+        paneId: null,
+        taskName: shortHistoryTaskName(entry, projectRoot),
+        agentId: entry.agent_id ?? "shell",
         projectRoot,
         projectLabel: projectLabel(projectRoot),
-        startedAtUnixMs: info.started_at_unix_ms,
+        startedAtUnixMs: entry.last_event_ms || entry.started_at_ms,
+        dormant: true,
+        historyEntry: entry,
       };
-    })
-    .sort((a, b) => b.startedAtUnixMs - a.startedAtUnixMs);
+    });
+
+  return [...liveRows, ...dormantRows].sort(
+    (a, b) => b.startedAtUnixMs - a.startedAtUnixMs,
+  );
 }
 
 export function groupRowsByProject(
@@ -85,8 +124,17 @@ function projectLabel(projectRoot: string): string {
 const TASK_NAME_MAX = 40;
 
 function shortTaskName(info: SessionInfo, projectRoot: string): string {
-  const raw = deriveTaskName(info).trim();
-  const firstLine = raw.split(/\r?\n/)[0]!.trim();
+  return finishShortName(deriveTaskName(info), projectRoot);
+}
+
+function shortHistoryTaskName(entry: HistoryEntry, projectRoot: string): string {
+  const summary = entry.prompt_summary?.trim();
+  const raw = summary || entry.title?.trim() || "shell";
+  return finishShortName(raw, projectRoot);
+}
+
+function finishShortName(raw: string, projectRoot: string): string {
+  const firstLine = raw.trim().split(/\r?\n/)[0]!.trim();
   const stripped = stripPathPrefix(firstLine, projectRoot);
   if (stripped.length <= TASK_NAME_MAX) return stripped;
   return `${stripped.slice(0, TASK_NAME_MAX - 1)}…`;
@@ -111,10 +159,12 @@ function stripPathPrefix(name: string, projectRoot: string): string {
 export default function SessionList({
   rows,
   onFocusPane,
+  onResumeHistory,
   nowMs,
 }: {
   rows: SessionListRow[];
   onFocusPane: (paneId: string) => void;
+  onResumeHistory: (entry: HistoryEntry) => void;
   nowMs: number;
 }) {
   if (rows.length === 0) {
@@ -133,9 +183,10 @@ export default function SessionList({
           </div>
           {group.rows.map((row) => (
             <SessionRow
-              key={row.sessionId}
+              key={row.key}
               row={row}
               onFocusPane={onFocusPane}
+              onResumeHistory={onResumeHistory}
               nowMs={nowMs}
             />
           ))}
@@ -148,28 +199,33 @@ export default function SessionList({
 function SessionRow({
   row,
   onFocusPane,
+  onResumeHistory,
   nowMs,
 }: {
   row: SessionListRow;
   onFocusPane: (paneId: string) => void;
+  onResumeHistory: (entry: HistoryEntry) => void;
   nowMs: number;
 }) {
   const ui = useAgentSession(row.sessionId);
-  const status = deriveAgentStatus(ui, false);
-  const disabled = row.paneId === null;
+  const status = row.dormant ? "done" : deriveAgentStatus(ui, false);
   const relative =
     row.startedAtUnixMs > 0
       ? formatRelative(Math.floor(row.startedAtUnixMs / 1000), nowMs)
       : "—";
+  const className = `agent-session-list__row${row.dormant ? " is-dormant" : ""}`;
   return (
     <button
       type="button"
-      className="agent-session-list__row"
-      disabled={disabled}
+      className={className}
       onClick={() => {
-        if (row.paneId) onFocusPane(row.paneId);
+        if (row.dormant && row.historyEntry) {
+          onResumeHistory(row.historyEntry);
+        } else if (row.paneId) {
+          onFocusPane(row.paneId);
+        }
       }}
-      title={row.taskName}
+      title={row.dormant ? `resume · ${row.taskName}` : row.taskName}
     >
       <span
         className={`agent-dot is-${status}`}

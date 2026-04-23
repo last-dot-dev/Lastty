@@ -47,6 +47,7 @@ tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+which = "7"
 
 [[bench]]
 name = "render_viewport"

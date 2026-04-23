@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -128,6 +129,7 @@ import {
   type Worktree,
   type WorktreeStatus,
   type WorktreeStrategy,
+  listHistory,
   pruneLocalIfClean,
   resumeHistoryEntry,
 } from "./lib/ipc";
@@ -292,6 +294,16 @@ export default function TerminalWorkspace() {
   const [viewingHistoryByPaneId, setViewingHistoryByPaneId] = useState<
     Record<string, HistoryEntry>
   >({});
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
+
+  const refreshHistory = useCallback(async () => {
+    try {
+      const entries = await listHistory();
+      setHistoryEntries(entries);
+    } catch (error) {
+      console.error("failed to list history", error);
+    }
+  }, []);
   const sessionCreationOrder = useMemo(
     () => Object.keys(sessionInfoById),
     [sessionInfoById],
@@ -547,6 +559,7 @@ export default function TerminalWorkspace() {
                 if (desktop.projectRoot) pushRecentProject(desktop.projectRoot);
               }
               setRecentProjects(getRecentProjects());
+              void refreshHistory();
               return;
             }
           } catch (error) {
@@ -560,6 +573,7 @@ export default function TerminalWorkspace() {
         });
         if (cancelled) return;
         setSessionInfoById(Object.fromEntries(sessions.map((session) => [session.session_id, session])));
+        void refreshHistory();
 
         const sessionId = await getPrimarySessionId().catch((error) => {
           console.error("failed to load primary session", error);
@@ -667,6 +681,7 @@ export default function TerminalWorkspace() {
 
     void listen<SessionExitEvent>("session:exit", (event) => {
       cleanupClosedSession(event.payload.session_id);
+      void refreshHistory();
     }).then((fn) => unsubs.push(fn));
 
     void listen<AgentUiEvent>("agent:ui", (event) => {
@@ -1158,6 +1173,42 @@ export default function TerminalWorkspace() {
     }
   }
 
+  async function handleResumeHistoryFromSidebar(entry: HistoryEntry) {
+    try {
+      const result = await resumeHistoryEntry(entry.session_id);
+      const info = await hydrateSessionInfo(
+        result.session_id,
+        entry.title || entry.prompt_summary || "resumed",
+      );
+      setWorkspace((current) => {
+        if (!current) return current;
+        const anchorPaneId = activeDesktop(current).focusedPaneId;
+        const paneRecord = createPaneRecord(result.session_id, info.title);
+        if (!anchorPaneId || !(anchorPaneId in current.panes)) {
+          return {
+            ...current,
+            panes: { ...current.panes, [paneRecord.id]: paneRecord },
+            desktops: current.desktops.map((d) =>
+              d.id === current.activeDesktopId && d.layout === null
+                ? {
+                    ...d,
+                    layout: { type: "leaf", paneId: paneRecord.id },
+                    focusedPaneId: paneRecord.id,
+                  }
+                : d,
+            ),
+          };
+        }
+        return splitPane(current, anchorPaneId, "vertical", paneRecord);
+      });
+      void refreshHistory();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("failed to resume history from sidebar", message);
+      window.alert(`Couldn't resume that conversation:\n\n${message}`);
+    }
+  }
+
   function handleViewHistoryTranscript(paneId: string, entry: HistoryEntry) {
     setHistoryPanelPaneId(null);
     setViewingHistoryByPaneId((current) => ({ ...current, [paneId]: entry }));
@@ -1415,8 +1466,9 @@ export default function TerminalWorkspace() {
         sessionInfoById,
         sessionIdToPaneId,
         sessionIdToProjectRoot,
+        historyEntries,
       ),
-    [sessionInfoById, sessionIdToPaneId, sessionIdToProjectRoot],
+    [sessionInfoById, sessionIdToPaneId, sessionIdToProjectRoot, historyEntries],
   );
 
   const worktreeRows: WorktreeRow[] = (() => {
@@ -1536,6 +1588,7 @@ export default function TerminalWorkspace() {
           <SessionList
             rows={sessionListRows}
             onFocusPane={handleFocusPaneAnywhere}
+            onResumeHistory={(entry) => void handleResumeHistoryFromSidebar(entry)}
             nowMs={clock}
           />
         }

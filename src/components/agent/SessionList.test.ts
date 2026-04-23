@@ -39,6 +39,7 @@ describe("buildSessionListRows", () => {
     );
     expect(rows).toEqual<SessionListRow[]>([
       {
+        key: "live:s1",
         sessionId: "s1",
         paneId: "p1",
         taskName: "fix the bell",
@@ -46,6 +47,8 @@ describe("buildSessionListRows", () => {
         projectRoot: "/repo",
         projectLabel: "repo",
         startedAtUnixMs: 1_700_000_000_200,
+        dormant: false,
+        historyEntry: null,
       },
     ]);
   });
@@ -120,11 +123,14 @@ describe("groupRowsByProject", () => {
       Partial<SessionListRow>,
   ): SessionListRow {
     return {
+      key: overrides.key ?? `live:${overrides.sessionId}`,
       paneId: null,
       taskName: "t",
       agentId: "shell",
       projectLabel: overrides.projectRoot.split("/").filter(Boolean).pop() ?? "",
       startedAtUnixMs: 0,
+      dormant: false,
+      historyEntry: null,
       ...overrides,
     };
   }

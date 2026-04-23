@@ -651,6 +651,14 @@
   opacity: 0.65;
 }
 
+.agent-session-list__row.is-dormant {
+  opacity: 0.6;
+}
+
+.agent-session-list__row.is-dormant:hover {
+  opacity: 1;
+}
+
 .agent-session-list__task {
   flex: 1;
   min-width: 0;
