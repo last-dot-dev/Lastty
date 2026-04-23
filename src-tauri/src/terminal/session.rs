@@ -427,7 +427,7 @@ impl<R: Runtime> TerminalSession<R> {
             prompt_summary: self.prompt_summary.clone(),
             worktree_path: self.worktree_path.clone(),
             control_connected: self.control_connected.load(Ordering::Relaxed),
-            started_at_ms: self.started_at.elapsed().as_millis(),
+            started_at_ms: self.started_at_unix_ms,
             started_at_unix_ms: self.started_at_unix_ms,
         }
     }
