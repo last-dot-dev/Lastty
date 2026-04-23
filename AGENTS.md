@@ -106,7 +106,7 @@ Lastty is a Tauri v2 agent-native tiled terminal. Agents run in PTY panes and pu
 
 - Rust → `cargo test` (`-p <crate>` when possible). Don't kill cargo by PID; lock contention is expected.
 - Rust → `cargo fmt --all` before committing anything that touches Rust. CI (`rust-lint` job) runs `cargo fmt --check` and fails on drift.
-- Frontend → `pnpm test`.
+- Frontend → `pnpm test`. Add `pnpm typecheck` when your change touches types that tests don't exercise.
 - IPC change → Rust handler registration and TS IPC module in the same commit.
 - OSC protocol change → verify with the headless CLI harness before wiring UI.
 - UI change → exercise in a running app. Tests verify code, not UX.

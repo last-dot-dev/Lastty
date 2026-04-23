@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",
     "bench:renderers": "cargo run -p lastty --release --bin bench_renderers -- --iterations 30 --out /tmp/lastty-renderer-bench.json",
