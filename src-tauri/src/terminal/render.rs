@@ -25,7 +25,6 @@ use super::manager::TerminalManager;
 use super::session::SessionId;
 
 const PERF_EMIT_INTERVAL: Duration = Duration::from_millis(250);
-const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(4);
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct TerminalFrame {
@@ -139,34 +138,14 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
         let mut last_perf_emit = Instant::now();
         let mut last_total_wakeups = 0u64;
 
-        let mut last_emit: Option<Instant> = None;
         if let Some(metrics) = emit_frame_for_session(&app_handle, initial_session_id) {
             avg_frame_ms = metrics.frame_ms;
             avg_ansi_bytes = metrics.ansi_bytes as f64;
             frames_since_emit = 1;
-            last_emit = Some(Instant::now());
         }
 
         loop {
-            let mut dirty = render_coordinator.wait_for_next();
-
-            // Cap emit rate during bursts. We use the condvar wait rather than
-            // thread::sleep so marks that arrive during the cap window are
-            // collected into *this* emit batch instead of facing a second full
-            // MIN_FRAME_INTERVAL penalty on the next iteration.
-            if let Some(last) = last_emit {
-                let elapsed = last.elapsed();
-                if elapsed < MIN_FRAME_INTERVAL {
-                    let remaining = MIN_FRAME_INTERVAL - elapsed;
-                    if let Some(more) = render_coordinator.wait_for_next_timeout(remaining) {
-                        for session_id in more.sessions {
-                            if !dirty.sessions.contains(&session_id) {
-                                dirty.sessions.push(session_id);
-                            }
-                        }
-                    }
-                }
-            }
+            let dirty = render_coordinator.wait_for_next();
 
             let mut emitted_any = false;
             for session_id in dirty.sessions {
@@ -178,7 +157,6 @@ pub fn spawn_frame_emitter<R: Runtime + 'static>(
                 }
             }
             if emitted_any {
-                last_emit = Some(Instant::now());
                 let emit_elapsed = last_perf_emit.elapsed();
                 if emit_elapsed >= PERF_EMIT_INTERVAL {
                     let total_wakeups = render_coordinator.total_wakeups();

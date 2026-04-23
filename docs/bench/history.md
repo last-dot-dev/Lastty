@@ -46,3 +46,19 @@ Entry template:
 - ansi_bytes p95=15992
 - Config: duration=30s panes=6, default font (no FontFace registration exercised by the bench)
 - Notes: adds `read_font_bytes` Tauri command (Core Text `kCTFontURLAttribute` → file read) and frontend `ensureCanvasFont` that registers user-picked families via `new FontFace(name, bytes)` before xterm re-rasterizes. WKWebView canvas can't resolve `local()` for user fonts; bytes-based FontFaces it can. Keeps `CanvasAddon` + `customGlyphs: true` for contiguous block/box-drawing glyphs in ASCII-art logos. `frontend_write_ms` p95 +44% vs Apr 22 canvas baseline (1.29 → 1.86ms) — still well under the 3 ms informal budget; the feature-relevant path is effectively flat since the default-font bench never exercises `ensureCanvasFont`. `m2e_us` p95 +268% (2831 → 10409µs) and `render_us` p95 +3024% (70 → 2187µs) are on Rust-only paths that this change doesn't touch; `fade` and `color-cycle` dominate the hotspot ranking and are the two scenarios most sensitive to background system load. No fresh in-session `before` was captured on this machine so I can't separate run variance from genuine backend drift between `d935259` and `b4f897b`. Flagging for the next perf pass rather than blocking the feature.
+
+## 2026-04-22 — ad1d0e8 pre-change baseline (frame cap still in place)
+- m2e_us: p50=84 p95=2921 max=30673
+- frontend_write_ms: p50=0.14 p95=1.43 max=26.00
+- render_us p95=44, emit_us p95=36
+- ansi_bytes p95=7366
+- Config: duration=30s panes=6
+- Notes: same commit as `ad1d0e8` (font-picker), retaken on a quieter machine — m2e and render drift from the prior b4f897b run shrank back toward the `d935259` baseline, confirming most of that swing was system load rather than regression. Captured as the `before` for the frame-cap removal below.
+
+## 2026-04-22 — drop MIN_FRAME_INTERVAL cap in frame emitter — m2e p95 2921→60µs
+- m2e_us: p50=43 p95=60 max=7065
+- frontend_write_ms: p50=0.14 p95=1.29 max=22.00
+- render_us p95=45, emit_us p95=32
+- ansi_bytes p95=7366
+- Config: duration=30s panes=6
+- Notes: removed the 4ms `MIN_FRAME_INTERVAL` gate in `spawn_frame_emitter` (render.rs:150). The cap intended to batch bursty marks was doing no actual coalescing — all scenarios already showed `coalesce_ratio ≈ 1.00` — so it only added up to ~4ms of wait before each emit. `fade` m2e p95 collapsed 4385→49µs (−98.9%) and is no longer in the top-6 hotspots; `frontend_write_ms` now dominates as the actual render-to-screen work. Alacritty's per-batch `Event::Wakeup` + `HashSet` dedup in `mark_dirty` continue to provide natural batching; frontend write p95 1.29ms is far from saturation so no backpressure justifies a cap. Coalesce ratios across all scenarios stayed at 1.00, confirming no regression in frame dedup.
