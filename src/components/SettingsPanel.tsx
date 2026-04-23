@@ -4,9 +4,10 @@ import type { KeyboardMode } from "../app/keybindings";
 import type { ThemeOverride } from "../hooks/useThemeOverride";
 import {
   ACCENT_COLORS,
-  FONT_FAMILIES,
+  DEFAULT_FONT_FAMILY,
   MAX_FONT_SIZE,
   MIN_FONT_SIZE,
+  useInstalledMonospaceFonts,
   type AccentColor,
   type FontFamily,
 } from "../hooks/useAppearance";
@@ -48,6 +49,11 @@ export default function SettingsPanel({
   onClose,
 }: SettingsPanelProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const installedFonts = useInstalledMonospaceFonts();
+  const fontOptions: FontFamily[] = [DEFAULT_FONT_FAMILY, ...installedFonts];
+  if (!fontOptions.includes(fontFamily)) {
+    fontOptions.push(fontFamily);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -174,13 +180,19 @@ export default function SettingsPanel({
               <select
                 aria-label="Font family"
                 className="settings-select"
-                onChange={(event) =>
-                  onFontFamilyChange(event.target.value as FontFamily)
-                }
+                onChange={(event) => onFontFamilyChange(event.target.value)}
                 value={fontFamily}
               >
-                {FONT_FAMILIES.map((family) => (
-                  <option key={family} value={family}>
+                {fontOptions.map((family) => (
+                  <option
+                    key={family}
+                    value={family}
+                    style={
+                      family === DEFAULT_FONT_FAMILY
+                        ? undefined
+                        : { fontFamily: `"${family}", monospace` }
+                    }
+                  >
                     {family}
                   </option>
                 ))}

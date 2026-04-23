@@ -6,6 +6,7 @@ pub mod bus;
 pub mod commands;
 pub mod events;
 pub mod font_config;
+pub mod fonts;
 pub mod git_branches;
 pub mod git_graph;
 pub mod git_info;

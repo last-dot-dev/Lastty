@@ -6,8 +6,8 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 
 import {
-  getFontConfig,
   getTerminalFrame,
+  readFontBytes,
   submitStressFrontendSample,
   terminalInput,
   terminalScroll,
@@ -15,12 +15,52 @@ import {
   type TerminalFrame,
   type TerminalFrameEvent,
 } from "../lib/ipc";
+import { DEFAULT_FONT_FAMILY, xtermFontFamily } from "../hooks/useAppearance";
 import { prepareXtermFrameWrite, type XtermFrameState } from "../app/xtermFrame";
 import { writeSelectionToClipboard } from "../app/xtermSelection";
 import type { PersistedTerminalSnapshot } from "../app/sessionRestore";
 import { xtermThemeFor } from "./terminalTheme";
 
 type EffectiveTheme = "light" | "dark";
+
+function resolvedXtermFont(family: string | undefined): string {
+  return xtermFontFamily(family ?? DEFAULT_FONT_FAMILY);
+}
+
+// WKWebView's <canvas> on macOS can only see fonts installed under
+// /System/Library/Fonts and fonts registered as bytes-based FontFaces. A
+// `local()` source silently fails to cover user-installed fonts, so we ask
+// Rust for the actual file bytes and register them with `new FontFace(name,
+// buffer)` — that form is canvas-visible and lets xterm's CanvasAddon render
+// a user-picked Nerd Font and its PUA glyphs correctly.
+const registeredCanvasFonts = new Map<string, Promise<boolean>>();
+
+function ensureCanvasFont(family: string): Promise<boolean> {
+  if (family === DEFAULT_FONT_FAMILY) return Promise.resolve(true);
+  const cached = registeredCanvasFonts.get(family);
+  if (cached) return cached;
+  const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
+  if (!fonts || typeof FontFace === "undefined") {
+    const skipped = Promise.resolve(false);
+    registeredCanvasFonts.set(family, skipped);
+    return skipped;
+  }
+  const load = (async () => {
+    try {
+      const bytes = await readFontBytes(family);
+      const buffer = Uint8Array.from(bytes).buffer;
+      const face = new FontFace(family, buffer);
+      await face.load();
+      fonts.add(face);
+      return true;
+    } catch (error) {
+      console.warn(`[font] failed to register ${family} for canvas`, error);
+      return false;
+    }
+  })();
+  registeredCanvasFonts.set(family, load);
+  return load;
+}
 
 function focusTerminalIfActive(entry: Entry): void {
   try {
@@ -52,6 +92,7 @@ interface Entry {
   terminal: Terminal;
   fit: FitAddon;
   serialize: SerializeAddon;
+  canvas: CanvasAddon | null;
   frameState: XtermFrameState | null;
   latestFrame: TerminalFrame | null;
   resizeObserver: ResizeObserver;
@@ -64,6 +105,9 @@ interface Entry {
   status: string;
   statusListeners: Set<StatusListener>;
   currentSlot: HTMLElement | null;
+  fontFamily: string;
+  fontSize: number;
+  theme: EffectiveTheme;
   blockedRef: { current: boolean };
   focusedRef: { current: boolean };
   snapshotCallbackRef: { current: ((s: PersistedTerminalSnapshot) => void) | undefined };
@@ -246,13 +290,8 @@ function bindWheelScroll(entry: Entry) {
 async function initEntry(entry: Entry, initialProps: SessionHostProps) {
   const { host, terminal, sessionId } = entry;
 
-  try {
-    const font = await getFontConfig();
-    terminal.options.fontFamily = `${font.family}, NFFallback, Monaco, monospace`;
-    terminal.options.fontSize = font.size_px;
-    terminal.options.lineHeight = font.line_height;
-  } catch {
-    // keep constructor defaults if the host doesn't expose font config
+  if (entry.fontFamily && entry.fontFamily !== DEFAULT_FONT_FAMILY) {
+    await ensureCanvasFont(entry.fontFamily);
   }
 
   entry.fit = new FitAddon();
@@ -287,12 +326,14 @@ async function initEntry(entry: Entry, initialProps: SessionHostProps) {
 
   console.log(`[resume] initEntry terminal.open ${sessionId}`);
   terminal.open(host);
-  // customGlyphs: true is a no-op in DOMRenderer (xterm.js docs: "doesn't
-  // work with the DOM renderer"). Canvas renderer is required so block/box-
-  // drawing glyphs are drawn at exact cell bounds and lineHeight > 1 doesn't
-  // create vertical gaps in pixel-art content like logos.
+  // customGlyphs: true is a no-op in DOMRenderer, so CanvasAddon is required
+  // for contiguous block/box-drawing glyphs (ASCII-art logos, etc.). Canvas
+  // on WKWebView can't see user-installed fonts unless we've pre-registered
+  // their bytes as a FontFace — ensureCanvasFont() handled that above.
   try {
-    terminal.loadAddon(new CanvasAddon());
+    const canvas = new CanvasAddon();
+    terminal.loadAddon(canvas);
+    entry.canvas = canvas;
   } catch {
     // Canvas unavailable — DOMRenderer fallback is fine for non-icon content.
   }
@@ -385,13 +426,16 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
   host.style.width = "100%";
   ensurePool().appendChild(host);
 
+  const fontFamily = props.fontFamily ?? DEFAULT_FONT_FAMILY;
+  const fontSize = props.fontSize ?? 14;
+
   const terminal = new Terminal({
     allowProposedApi: true,
     cursorBlink: true,
     cursorInactiveStyle: "outline",
     customGlyphs: true,
-    fontFamily: "Menlo, NFFallback, Monaco, monospace",
-    fontSize: 14,
+    fontFamily: resolvedXtermFont(fontFamily),
+    fontSize,
     lineHeight: 1.2,
     // Rust's alacritty owns authoritative scrollback and drives wheel scroll
     // through terminalScroll IPC. Giving xterm.js its own scrollback lets
@@ -425,6 +469,7 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     terminal,
     fit: null as unknown as FitAddon,
     serialize: null as unknown as SerializeAddon,
+    canvas: null,
     frameState: null,
     latestFrame: null,
     resizeObserver: null as unknown as ResizeObserver,
@@ -437,6 +482,9 @@ function createEntry(sessionId: string, props: SessionHostProps): Entry {
     status: "initializing",
     statusListeners: new Set(),
     currentSlot: null,
+    fontFamily,
+    fontSize,
+    theme: props.theme,
     blockedRef: { current: props.blocked },
     focusedRef: { current: props.focused },
     snapshotCallbackRef: { current: props.onSnapshotChange },
@@ -511,8 +559,47 @@ export function updateTerminalHostProps(
   }
   if (props.theme && entry.terminal.options) {
     entry.terminal.options.theme = xtermThemeFor(props.theme);
+    entry.theme = props.theme;
   }
+
+  const nextFamily = props.fontFamily ?? entry.fontFamily;
+  const nextSize = props.fontSize ?? entry.fontSize;
+  const familyChanged = nextFamily !== entry.fontFamily;
+  const sizeChanged = nextSize !== entry.fontSize;
+
+  if (familyChanged || sizeChanged) {
+    void applyFontChange(entry, nextFamily, nextSize);
+  }
+
   focusTerminalIfActive(entry);
+}
+
+async function applyFontChange(
+  entry: Entry,
+  nextFamily: string,
+  nextSize: number,
+): Promise<void> {
+  // Register the font's bytes with the document FontFaceSet before we ask
+  // xterm to re-rasterize — CanvasAddon's glyph atlas will otherwise fill with
+  // fallback glyphs and get pinned as the cached render of the new family.
+  if (nextFamily !== entry.fontFamily && nextFamily !== DEFAULT_FONT_FAMILY) {
+    await ensureCanvasFont(nextFamily);
+  }
+  if (entry.disposed) return;
+
+  if (nextFamily !== entry.fontFamily) {
+    entry.terminal.options.fontFamily = resolvedXtermFont(nextFamily);
+    entry.fontFamily = nextFamily;
+  }
+  if (nextSize !== entry.fontSize) {
+    entry.terminal.options.fontSize = nextSize;
+    entry.fontSize = nextSize;
+  }
+  // xterm listens for fontFamily/fontSize option changes, but the CanvasAddon
+  // keeps a texture atlas keyed on the old config. Clear it so the next frame
+  // rasterizes with the new font.
+  entry.canvas?.clearTextureAtlas();
+  syncTerminalViewport(entry);
 }
 
 export function subscribeTerminalHostStatus(

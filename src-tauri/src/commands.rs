@@ -280,6 +280,16 @@ pub fn get_font_config() -> FontConfig {
 }
 
 #[tauri::command]
+pub fn list_monospace_fonts() -> Vec<String> {
+    crate::fonts::list_monospace_fonts()
+}
+
+#[tauri::command]
+pub fn read_font_bytes(family: String) -> Result<Vec<u8>, String> {
+    crate::fonts::read_font_bytes(&family)
+}
+
+#[tauri::command]
 pub async fn get_primary_session_id(
     state: State<'_, TerminalManager>,
 ) -> Result<Option<String>, String> {

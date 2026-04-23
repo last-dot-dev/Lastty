@@ -139,6 +139,14 @@ export async function getFontConfig(): Promise<FontConfig> {
   return invoke("get_font_config");
 }
 
+export async function listMonospaceFonts(): Promise<string[]> {
+  return invoke("list_monospace_fonts");
+}
+
+export async function readFontBytes(family: string): Promise<number[]> {
+  return invoke("read_font_bytes", { family });
+}
+
 export async function getPrimarySessionId(): Promise<string | null> {
   return invoke("get_primary_session_id");
 }

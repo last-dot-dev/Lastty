@@ -2,6 +2,11 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 
 import type { PersistedTerminalSnapshot } from "../app/sessionRestore";
+import {
+  DEFAULT_FONT_FAMILY,
+  DEFAULT_FONT_SIZE,
+  useTerminalFont,
+} from "../hooks/useAppearance";
 import { useEffectiveTheme } from "../hooks/useThemeOverride";
 import { terminalInput } from "../lib/ipc";
 import {
@@ -48,6 +53,8 @@ function CodexLogo() {
 interface TerminalViewportProps {
   blocked?: boolean;
   focused: boolean;
+  fontFamily?: string;
+  fontSize?: number;
   onActivate: () => void;
   onSnapshotChange?: (snapshot: PersistedTerminalSnapshot) => void;
   restoredSnapshot?: PersistedTerminalSnapshot | null;
@@ -57,6 +64,8 @@ interface TerminalViewportProps {
 function TerminalViewportInner({
   blocked = false,
   focused,
+  fontFamily: fontFamilyProp,
+  fontSize: fontSizeProp,
   onActivate,
   onSnapshotChange,
   restoredSnapshot = null,
@@ -65,6 +74,9 @@ function TerminalViewportInner({
   const slotRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState("initializing");
   const effectiveTheme = useEffectiveTheme();
+  const ctxFont = useTerminalFont();
+  const fontFamily = fontFamilyProp ?? ctxFont.fontFamily ?? DEFAULT_FONT_FAMILY;
+  const fontSize = fontSizeProp ?? ctxFont.fontSize ?? DEFAULT_FONT_SIZE;
 
   useEffect(() => {
     const slot = slotRef.current;
@@ -73,6 +85,8 @@ function TerminalViewportInner({
     attachTerminalHost(sessionId, slot, {
       blocked,
       focused,
+      fontFamily,
+      fontSize,
       onSnapshotChange,
       restoredSnapshot,
       theme: effectiveTheme,
@@ -90,11 +104,22 @@ function TerminalViewportInner({
     updateTerminalHostProps(sessionId, {
       blocked,
       focused,
+      fontFamily,
+      fontSize,
       onSnapshotChange,
       restoredSnapshot,
       theme: effectiveTheme,
     });
-  }, [blocked, focused, onSnapshotChange, restoredSnapshot, effectiveTheme, sessionId]);
+  }, [
+    blocked,
+    focused,
+    fontFamily,
+    fontSize,
+    onSnapshotChange,
+    restoredSnapshot,
+    effectiveTheme,
+    sessionId,
+  ]);
 
   const [launched, setLaunched] = useState(false);
 
@@ -174,6 +199,8 @@ const TerminalViewport = memo(TerminalViewportInner, (prev, next) => {
     prev.sessionId === next.sessionId &&
     prev.blocked === next.blocked &&
     prev.focused === next.focused &&
+    prev.fontFamily === next.fontFamily &&
+    prev.fontSize === next.fontSize &&
     prev.restoredSnapshot === next.restoredSnapshot
   );
 });

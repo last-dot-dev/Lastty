@@ -150,6 +150,8 @@ fn main() {
             #[cfg(feature = "bench")]
             commands::finalize_stress_bench,
             commands::get_font_config,
+            commands::list_monospace_fonts,
+            commands::read_font_bytes,
             commands::get_primary_session_id,
             commands::list_sessions,
             commands::restore_terminal_sessions,

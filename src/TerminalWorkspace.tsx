@@ -53,7 +53,7 @@ import type { SidebarGraph } from "./components/agent/Sidebar";
 import MergeDialog from "./components/agent/MergeDialog";
 import type { DesktopEntry } from "./components/agent/DesktopStrip";
 import type { BlockedSessionRef } from "./components/agent/AlertBar";
-import { useAppearance } from "./hooks/useAppearance";
+import { TerminalFontProvider, useAppearance } from "./hooks/useAppearance";
 import { useShowGitGraph } from "./hooks/useShowGitGraph";
 import { useThemeOverride } from "./hooks/useThemeOverride";
 import { useKeyboardMode } from "./hooks/useKeyboardMode";
@@ -1564,6 +1564,10 @@ export default function TerminalWorkspace() {
   const activeSessionCount = Object.keys(sessionInfoById).length;
 
   return (
+    <TerminalFontProvider
+      fontFamily={appearance.fontFamily}
+      fontSize={appearance.fontSize}
+    >
     <div className="agent-root" data-platform={platform}>
       <AgentShell
         blocked={blockedRefs}
@@ -1718,6 +1722,8 @@ export default function TerminalWorkspace() {
                           onViewHistoryTranscript: handleViewHistoryTranscript,
                           onCloseHistoryView: handleCloseHistoryView,
                           draftPaneIds,
+                          fontFamily: appearance.fontFamily,
+                          fontSize: appearance.fontSize,
                           renderDraftLauncher: (paneId) => (
                             <LaunchAgentModal
                               key={paneId}
@@ -1859,6 +1865,7 @@ export default function TerminalWorkspace() {
         💬
       </button>
     </div>
+    </TerminalFontProvider>
   );
 }
 
@@ -1893,6 +1900,8 @@ interface RenderLayoutCtx {
   onCloseHistoryView: (paneId: string) => void;
   draftPaneIds: Set<string>;
   renderDraftLauncher: (paneId: string) => ReactNode;
+  fontFamily: string;
+  fontSize: number;
 }
 
 function DesktopStage({
@@ -2125,6 +2134,8 @@ function PaneTile({
             <TerminalViewport
               blocked={blocked}
               focused={focused}
+              fontFamily={ctx.fontFamily}
+              fontSize={ctx.fontSize}
               onActivate={() => onFocus(pane.id)}
               onSnapshotChange={(snapshot) => onSnapshot(pane.sessionId, snapshot)}
               restoredSnapshot={restoredSnapshotsBySessionId[pane.sessionId] ?? null}

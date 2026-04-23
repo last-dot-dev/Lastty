@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import { createElement } from "react";
+
+import { listMonospaceFonts } from "../lib/ipc";
 
 export type AccentColor = "blue" | "purple" | "green" | "orange" | "pink" | "amber";
 
@@ -11,19 +21,7 @@ export const ACCENT_COLORS: Record<AccentColor, string> = {
   amber: "#BA7517",
 };
 
-export const FONT_FAMILIES = [
-  "System Default",
-  "Menlo",
-  "Monaco",
-  "SF Mono",
-  "JetBrains Mono",
-  "Fira Code",
-  "Hack",
-  "Iosevka Term",
-  "Cascadia Code",
-] as const;
-
-export type FontFamily = (typeof FONT_FAMILIES)[number];
+export type FontFamily = string;
 
 export const DEFAULT_FONT_FAMILY: FontFamily = "System Default";
 export const DEFAULT_FONT_SIZE = 14;
@@ -37,14 +35,10 @@ const ACCENT_KEY = "lastty:accent";
 
 const SYSTEM_MONO_STACK = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
-function isFontFamily(value: string | null): value is FontFamily {
-  return !!value && (FONT_FAMILIES as readonly string[]).includes(value);
-}
-
 function readFontFamily(): FontFamily {
   if (typeof window === "undefined") return DEFAULT_FONT_FAMILY;
   const value = window.localStorage.getItem(FONT_FAMILY_KEY);
-  return isFontFamily(value) ? value : DEFAULT_FONT_FAMILY;
+  return value && value.trim() ? value : DEFAULT_FONT_FAMILY;
 }
 
 function readFontSize(): number {
@@ -64,12 +58,12 @@ function readAccent(): AccentColor {
 }
 
 export function fontFamilyStack(family: FontFamily): string {
-  if (family === "System Default") return SYSTEM_MONO_STACK;
+  if (family === DEFAULT_FONT_FAMILY) return SYSTEM_MONO_STACK;
   return `"${family}", ${SYSTEM_MONO_STACK}`;
 }
 
 export function xtermFontFamily(family: FontFamily): string {
-  if (family === "System Default") return "Menlo, NFFallback, Monaco, monospace";
+  if (family === DEFAULT_FONT_FAMILY) return "Menlo, NFFallback, Monaco, monospace";
   return `"${family}", NFFallback, Menlo, Monaco, monospace`;
 }
 
@@ -121,4 +115,56 @@ export function useAppearance() {
   const setAccent = useCallback((value: AccentColor) => setAccentState(value), []);
 
   return { fontFamily, fontSize, accent, setFontFamily, setFontSize, setAccent };
+}
+
+interface TerminalFontContextValue {
+  fontFamily: FontFamily;
+  fontSize: number;
+}
+
+const TerminalFontContext = createContext<TerminalFontContextValue>({
+  fontFamily: DEFAULT_FONT_FAMILY,
+  fontSize: DEFAULT_FONT_SIZE,
+});
+
+export function TerminalFontProvider({
+  fontFamily,
+  fontSize,
+  children,
+}: {
+  fontFamily: FontFamily;
+  fontSize: number;
+  children: ReactNode;
+}) {
+  return createElement(
+    TerminalFontContext.Provider,
+    { value: { fontFamily, fontSize } },
+    children,
+  );
+}
+
+export function useTerminalFont(): TerminalFontContextValue {
+  return useContext(TerminalFontContext);
+}
+
+export function useInstalledMonospaceFonts(): FontFamily[] {
+  const [fonts, setFonts] = useState<FontFamily[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listMonospaceFonts()
+      .then((list) => {
+        if (cancelled) return;
+        setFonts(list);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFonts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return fonts;
 }
