@@ -165,11 +165,11 @@ impl PromptTransport {
     }
 }
 
-pub fn load_agent_registry(workspace_root: &Path) -> anyhow::Result<Vec<AgentDefinition>> {
+pub(crate) fn load_agent_registry(workspace_root: &Path) -> anyhow::Result<Vec<AgentDefinition>> {
     Ok(load_agent_config(workspace_root)?.agent)
 }
 
-pub fn load_rules(workspace_root: &Path) -> anyhow::Result<Vec<RuleDefinition>> {
+pub(crate) fn load_rules(workspace_root: &Path) -> anyhow::Result<Vec<RuleDefinition>> {
     Ok(load_agent_config(workspace_root)?.rule)
 }
 
@@ -190,7 +190,7 @@ fn load_agent_config(workspace_root: &Path) -> anyhow::Result<AgentConfigFile> {
     Ok(parsed)
 }
 
-pub fn launch_agent<R: Runtime>(
+pub(crate) fn launch_agent<R: Runtime>(
     manager: &TerminalManager<R>,
     workspace_root: &Path,
     request: LaunchAgentRequest,
@@ -396,7 +396,10 @@ fn resolve_strategy(
     }
 }
 
-pub fn resume_command_spec(agent: &AgentDefinition, agent_session_id: &str) -> Option<CommandSpec> {
+pub(crate) fn resume_command_spec(
+    agent: &AgentDefinition,
+    agent_session_id: &str,
+) -> Option<CommandSpec> {
     let program = agent.resume_command.clone()?;
     let args = agent
         .resume_args
