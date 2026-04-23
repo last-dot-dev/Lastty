@@ -48,7 +48,7 @@ const LASTTY_DIRNAME: &str = ".lastty-worktrees";
 // Recognize worktrees created before the rename so they still show as managed.
 const LEGACY_DIRNAME: &str = ".pane-worktrees";
 
-pub fn list_worktrees(repo_root: &Path) -> Result<Vec<Worktree>> {
+pub(crate) fn list_worktrees(repo_root: &Path) -> Result<Vec<Worktree>> {
     if !crate::git_util::is_git_repo(repo_root) {
         return Ok(Vec::new());
     }
@@ -89,7 +89,7 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<Worktree>> {
     Ok(out)
 }
 
-pub fn worktree_status(worktree: &Path, base_branch: &str) -> Result<WorktreeStatus> {
+pub(crate) fn worktree_status(worktree: &Path, base_branch: &str) -> Result<WorktreeStatus> {
     let porcelain = run_git_checked(worktree, &["status", "--porcelain"])?;
     let changed_files: Vec<ChangedFile> = porcelain
         .lines()
