@@ -576,7 +576,8 @@
   top: 2.5px;
 }
 
-.agent-sidebar__section.is-bottom {
+.agent-sidebar__section.is-bottom,
+.agent-sidebar__section.is-sessions {
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -586,6 +587,8 @@
 .agent-sidebar__footer {
   padding: 9px;
   flex-shrink: 0;
+  margin-top: auto;
+  border-top: 0.5px solid var(--color-border-tertiary);
   display: grid;
   gap: 6px;
   grid-template-columns: minmax(0, 1fr);
