@@ -21,6 +21,7 @@ __pycache__/
 .lastty-recordings/
 .lastty-worktrees/
 .pane-worktrees/
+worktrees/
 *.swp
 *.swo
 *~
@@ -37,6 +38,7 @@ Thumbs.db
 references/**
 docs/plan/**
 docs/plans/**
+overnight-report/**
 src-tauri/gen/
 src-tauri/binaries/
 
