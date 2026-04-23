@@ -143,6 +143,31 @@ import {
   type RecentProject,
 } from "./app/recentProjects";
 
+const ARCHIVED_SESSION_KEYS_STORAGE_KEY = "lastty.sidebar.archivedSessionKeys";
+
+function loadArchivedSessionKeys(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(ARCHIVED_SESSION_KEYS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((v): v is string => typeof v === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveArchivedSessionKeys(keys: Set<string>): void {
+  try {
+    window.localStorage.setItem(
+      ARCHIVED_SESSION_KEYS_STORAGE_KEY,
+      JSON.stringify(Array.from(keys)),
+    );
+  } catch {
+    // ignore quota / disabled storage
+  }
+}
+
 function basenameOfPath(path: string): string {
   if (!path) return "";
   const trimmed = path.replace(/\/+$/, "");
@@ -1443,6 +1468,19 @@ export default function TerminalWorkspace() {
     return map;
   }, [workspace]);
 
+  const [archivedSessionKeys, setArchivedSessionKeys] = useState<Set<string>>(
+    () => loadArchivedSessionKeys(),
+  );
+  const handleArchiveSession = useCallback((key: string) => {
+    setArchivedSessionKeys((current) => {
+      if (current.has(key)) return current;
+      const next = new Set(current);
+      next.add(key);
+      saveArchivedSessionKeys(next);
+      return next;
+    });
+  }, []);
+
   const sessionListRows = useMemo(
     () =>
       buildSessionListRows(
@@ -1451,13 +1489,14 @@ export default function TerminalWorkspace() {
         sessionIdToProjectRoot,
         historyEntries,
         resumedHistoryIds,
-      ),
+      ).filter((row) => !archivedSessionKeys.has(row.key)),
     [
       sessionInfoById,
       sessionIdToPaneId,
       sessionIdToProjectRoot,
       historyEntries,
       resumedHistoryIds,
+      archivedSessionKeys,
     ],
   );
 
@@ -1579,6 +1618,7 @@ export default function TerminalWorkspace() {
             rows={sessionListRows}
             onFocusPane={handleFocusPaneAnywhere}
             onResumeHistory={(entry) => void handleResumeHistoryFromSidebar(entry)}
+            onArchive={handleArchiveSession}
             nowMs={clock}
           />
         }

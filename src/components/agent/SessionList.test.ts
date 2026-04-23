@@ -36,6 +36,9 @@ describe("buildSessionListRows", () => {
       },
       { s1: "p1" },
       { s1: "/repo" },
+      [],
+      new Set(),
+      0,
     );
     expect(rows).toEqual<SessionListRow[]>([
       {
@@ -60,6 +63,10 @@ describe("buildSessionListRows", () => {
         new: info({ session_id: "new", started_at_unix_ms: 300 }),
       },
       { new: "p1" },
+      {},
+      [],
+      new Set(),
+      0,
     );
     expect(rows.map((r) => r.sessionId)).toEqual(["new", "old"]);
     expect(rows[1]!.paneId).toBeNull();
@@ -74,6 +81,10 @@ describe("buildSessionListRows", () => {
         }),
       },
       {},
+      {},
+      [],
+      new Set(),
+      0,
     );
     expect(rows[0]!.projectRoot).toBe("/Users/me/ws/lastty");
     expect(rows[0]!.projectLabel).toBe("lastty");
@@ -83,6 +94,10 @@ describe("buildSessionListRows", () => {
     const rows = buildSessionListRows(
       { s1: info({ session_id: "s1", cwd: "/home/me/project-x" }) },
       {},
+      {},
+      [],
+      new Set(),
+      0,
     );
     expect(rows[0]!.projectRoot).toBe("/home/me/project-x");
     expect(rows[0]!.projectLabel).toBe("project-x");
@@ -98,6 +113,9 @@ describe("buildSessionListRows", () => {
       },
       {},
       { s1: "/Users/me/ws/lastty" },
+      [],
+      new Set(),
+      0,
     );
     expect(rows[0]!.taskName).toBe("lastty");
   });
@@ -125,6 +143,7 @@ describe("buildSessionListRows", () => {
       {},
       history,
       new Set(["claude:abc"]),
+      0,
     );
     expect(rows).toEqual([]);
   });
@@ -139,6 +158,9 @@ describe("buildSessionListRows", () => {
       },
       {},
       { s1: "/Users/me/ws/lastty" },
+      [],
+      new Set(),
+      0,
     );
     expect(rows[0]!.taskName).toBe("src/main.rs");
   });

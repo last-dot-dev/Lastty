@@ -20,32 +20,37 @@ export interface SessionListRow {
   historyEntry: HistoryEntry | null;
 }
 
+export const SESSION_LIST_MIN_STARTED_AT_UNIX_MS = Date.now() - 60 * 60 * 1000;
+
 export function buildSessionListRows(
   sessionInfoById: Record<string, SessionInfo>,
   sessionIdToPaneId: Record<string, string>,
   projectRootBySessionId: Record<string, string> = {},
   historyEntries: HistoryEntry[] = [],
   excludedHistoryIds: Set<string> = new Set(),
+  minStartedAtUnixMs: number = SESSION_LIST_MIN_STARTED_AT_UNIX_MS,
 ): SessionListRow[] {
-  const liveRows: SessionListRow[] = Object.values(sessionInfoById).map((info) => {
-    const anchor =
-      projectRootBySessionId[info.session_id] ??
-      info.worktree_path ??
-      info.cwd;
-    const projectRoot = inferProjectRoot(anchor, info.cwd);
-    return {
-      key: `live:${info.session_id}`,
-      sessionId: info.session_id,
-      paneId: sessionIdToPaneId[info.session_id] ?? null,
-      taskName: shortTaskName(info, projectRoot),
-      agentId: deriveAgentType(info),
-      projectRoot,
-      projectLabel: projectLabel(projectRoot),
-      startedAtUnixMs: info.started_at_unix_ms,
-      dormant: false,
-      historyEntry: null,
-    };
-  });
+  const liveRows: SessionListRow[] = Object.values(sessionInfoById)
+    .filter((info) => info.started_at_unix_ms >= minStartedAtUnixMs)
+    .map((info) => {
+      const anchor =
+        projectRootBySessionId[info.session_id] ??
+        info.worktree_path ??
+        info.cwd;
+      const projectRoot = inferProjectRoot(anchor, info.cwd);
+      return {
+        key: `live:${info.session_id}`,
+        sessionId: info.session_id,
+        paneId: sessionIdToPaneId[info.session_id] ?? null,
+        taskName: shortTaskName(info, projectRoot),
+        agentId: deriveAgentType(info),
+        projectRoot,
+        projectLabel: projectLabel(projectRoot),
+        startedAtUnixMs: info.started_at_unix_ms,
+        dormant: false,
+        historyEntry: null,
+      };
+    });
 
   const dormantRows: SessionListRow[] = historyEntries
     .filter((entry) => !excludedHistoryIds.has(entry.session_id))
@@ -64,6 +69,7 @@ export function buildSessionListRows(
         historyEntry: entry,
       };
     })
+    .filter((row) => row.startedAtUnixMs >= minStartedAtUnixMs)
     .sort((a, b) => b.startedAtUnixMs - a.startedAtUnixMs)
     .slice(0, MAX_DORMANT_ROWS);
 
@@ -155,11 +161,13 @@ export default function SessionList({
   rows,
   onFocusPane,
   onResumeHistory,
+  onArchive,
   nowMs,
 }: {
   rows: SessionListRow[];
   onFocusPane: (paneId: string) => void;
   onResumeHistory: (entry: HistoryEntry) => void;
+  onArchive: (key: string) => void;
   nowMs: number;
 }) {
   if (rows.length === 0) {
@@ -182,6 +190,7 @@ export default function SessionList({
               row={row}
               onFocusPane={onFocusPane}
               onResumeHistory={onResumeHistory}
+              onArchive={onArchive}
               nowMs={nowMs}
             />
           ))}
@@ -195,11 +204,13 @@ function SessionRow({
   row,
   onFocusPane,
   onResumeHistory,
+  onArchive,
   nowMs,
 }: {
   row: SessionListRow;
   onFocusPane: (paneId: string) => void;
   onResumeHistory: (entry: HistoryEntry) => void;
+  onArchive: (key: string) => void;
   nowMs: number;
 }) {
   const ui = useAgentSession(row.sessionId);
@@ -210,27 +221,41 @@ function SessionRow({
       : "—";
   const className = `agent-session-list__row${row.dormant ? " is-dormant" : ""}`;
   return (
-    <button
-      type="button"
-      className={className}
-      onClick={() => {
-        if (row.dormant && row.historyEntry) {
-          onResumeHistory(row.historyEntry);
-        } else if (row.paneId) {
-          onFocusPane(row.paneId);
-        }
-      }}
-      title={row.dormant ? `resume · ${row.taskName}` : row.taskName}
-    >
-      <span
-        className={`agent-dot is-${status}`}
-        aria-label={status}
-        aria-hidden="true"
-      />
-      <span className="agent-session-list__task">{row.taskName}</span>
-      <span className="agent-session-list__meta">
-        {row.agentId} · {relative}
-      </span>
-    </button>
+    <div className="agent-session-list__row-wrap">
+      <button
+        type="button"
+        className={className}
+        onClick={() => {
+          if (row.dormant && row.historyEntry) {
+            onResumeHistory(row.historyEntry);
+          } else if (row.paneId) {
+            onFocusPane(row.paneId);
+          }
+        }}
+        title={row.dormant ? `resume · ${row.taskName}` : row.taskName}
+      >
+        <span
+          className={`agent-dot is-${status}`}
+          aria-label={status}
+          aria-hidden="true"
+        />
+        <span className="agent-session-list__task">{row.taskName}</span>
+        <span className="agent-session-list__meta">
+          {row.agentId} · {relative}
+        </span>
+      </button>
+      <button
+        type="button"
+        className="agent-session-list__archive"
+        onClick={(event) => {
+          event.stopPropagation();
+          onArchive(row.key);
+        }}
+        title="archive (hide from list)"
+        aria-label={`archive ${row.taskName}`}
+      >
+        ✕
+      </button>
+    </div>
   );
 }
