@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::bus::{HistoryEntry, HistorySource};
 
-pub fn discover_all() -> Vec<HistoryEntry> {
+pub(crate) fn discover_all() -> Vec<HistoryEntry> {
     let Some(conn) = open_state_db() else {
         return Vec::new();
     };
@@ -48,7 +48,7 @@ pub fn discover_all() -> Vec<HistoryEntry> {
     }
 }
 
-pub fn read_transcript(session_id: &str) -> Result<String, String> {
+pub(crate) fn read_transcript(session_id: &str) -> Result<String, String> {
     let Some(conn) = open_state_db() else {
         return Ok(String::new());
     };

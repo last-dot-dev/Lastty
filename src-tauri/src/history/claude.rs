@@ -30,7 +30,7 @@ struct FileJob {
     mtime_ms: u128,
 }
 
-pub fn discover_all() -> Vec<HistoryEntry> {
+pub(crate) fn discover_all() -> Vec<HistoryEntry> {
     let Some(projects_dir) = super::home_dir().map(|h| h.join(".claude/projects")) else {
         return Vec::new();
     };
@@ -134,7 +134,7 @@ fn parse_jobs_in_parallel(jobs: Vec<FileJob>) -> Vec<(PathBuf, u128, HistoryEntr
     })
 }
 
-pub fn read_transcript(session_uuid: &str) -> Result<String, String> {
+pub(crate) fn read_transcript(session_uuid: &str) -> Result<String, String> {
     let path = find_jsonl(session_uuid).ok_or_else(|| "claude session not found".to_string())?;
     let file = fs::File::open(&path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
