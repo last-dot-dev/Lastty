@@ -28,9 +28,11 @@ export function buildSessionListRows(
   excludedHistoryIds: Set<string> = new Set(),
 ): SessionListRow[] {
   const liveRows: SessionListRow[] = Object.values(sessionInfoById).map((info) => {
-    const projectRoot =
+    const anchor =
       projectRootBySessionId[info.session_id] ??
-      inferProjectRoot(info.worktree_path, info.cwd);
+      info.worktree_path ??
+      info.cwd;
+    const projectRoot = inferProjectRoot(anchor, info.cwd);
     return {
       key: `live:${info.session_id}`,
       sessionId: info.session_id,
@@ -61,7 +63,9 @@ export function buildSessionListRows(
         dormant: true,
         historyEntry: entry,
       };
-    });
+    })
+    .sort((a, b) => b.startedAtUnixMs - a.startedAtUnixMs)
+    .slice(0, MAX_DORMANT_ROWS);
 
   return [...liveRows, ...dormantRows].sort(
     (a, b) => b.startedAtUnixMs - a.startedAtUnixMs,
@@ -74,21 +78,22 @@ export function groupRowsByProject(
   const order: string[] = [];
   const groups = new Map<
     string,
-    { projectLabel: string; rows: SessionListRow[] }
+    { projectRoot: string; rows: SessionListRow[] }
   >();
   for (const row of rows) {
-    const existing = groups.get(row.projectRoot);
+    const key = row.projectLabel || row.projectRoot;
+    const existing = groups.get(key);
     if (existing) {
       existing.rows.push(row);
     } else {
-      order.push(row.projectRoot);
-      groups.set(row.projectRoot, { projectLabel: row.projectLabel, rows: [row] });
+      order.push(key);
+      groups.set(key, { projectRoot: row.projectRoot, rows: [row] });
     }
   }
-  return order.map((projectRoot) => ({
-    projectRoot,
-    projectLabel: groups.get(projectRoot)!.projectLabel,
-    rows: groups.get(projectRoot)!.rows,
+  return order.map((key) => ({
+    projectRoot: groups.get(key)!.projectRoot,
+    projectLabel: key,
+    rows: groups.get(key)!.rows,
   }));
 }
 
@@ -111,6 +116,7 @@ function projectLabel(projectRoot: string): string {
 }
 
 const TASK_NAME_MAX = 40;
+const MAX_DORMANT_ROWS = 20;
 
 function shortTaskName(info: SessionInfo, projectRoot: string): string {
   return finishShortName(deriveTaskName(info), projectRoot);
