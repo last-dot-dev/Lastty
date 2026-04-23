@@ -128,9 +128,7 @@ import {
   type Worktree,
   type WorktreeStatus,
   type WorktreeStrategy,
-  abandonWorktree,
   pruneLocalIfClean,
-  renameWorktree,
   resumeHistoryEntry,
 } from "./lib/ipc";
 import { useStressDriver } from "./app/stressDriver";
@@ -462,34 +460,6 @@ export default function TerminalWorkspace() {
       delete next[path];
       return next;
     });
-  }
-
-  async function handleAbandonWorktree(worktreePath: string) {
-    if (!activeProjectRoot) return;
-    const label = basenameOfPath(worktreePath) || worktreePath;
-    const ok = window.confirm(
-      `Abandon "${label}"?\n\nThis will close the GitHub PR (if any), delete the remote + local branch, and remove the worktree directory.`,
-    );
-    if (!ok) return;
-    try {
-      await abandonWorktree(worktreePath, activeProjectRoot);
-    } catch (error) {
-      console.error("abandon_worktree failed", error);
-      window.alert(
-        `Failed to abandon worktree: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    invalidateWorktreeStatus(worktreePath);
-    reloadWorktrees();
-  }
-
-  async function handleRenameWorktree(worktreePath: string, newBranch: string) {
-    if (!activeProjectRoot) throw new Error("no active project");
-    await renameWorktree(worktreePath, newBranch, activeProjectRoot);
-    invalidateWorktreeStatus(worktreePath);
-    reloadWorktrees();
   }
 
   const theme = useThemeOverride();
@@ -854,73 +824,6 @@ export default function TerminalWorkspace() {
         createPaneRecord(sessionId, `shell ${Object.keys(current.panes).length + 1}`),
       );
     });
-  }
-
-  async function handleAttachToWorktree(
-    worktreePath: string,
-    choice: "shell" | { agentId: string },
-  ) {
-    if (!workspace) return;
-    const desktop = activeDesktop(workspace);
-    const activePaneId = desktop.focusedPaneId;
-    if (!activePaneId) return;
-    const isMainRow = pathsEqual(worktreePath, activeProjectRoot);
-    try {
-      if (choice === "shell") {
-        const sessionId = await createTerminal(worktreePath);
-        const label = basenameOfPath(worktreePath) || "shell";
-        await hydrateSessionInfo(sessionId, label);
-        setWorkspace((current) => {
-          if (!current) return current;
-          return splitPane(
-            current,
-            activePaneId,
-            "vertical",
-            createPaneRecord(sessionId, label),
-          );
-        });
-      } else {
-        const result = await launchAgent({
-          agent_id: choice.agentId,
-          cwd: worktreePath,
-          worktree: isMainRow
-            ? { kind: "in_place" }
-            : { kind: "attach", path: worktreePath },
-        });
-        if (result.auto_promoted) {
-          setAutoPromoteNotice(
-            `another agent is running here — created ${basenameOfPath(
-              result.worktree_path ?? "",
-            )} to isolate`,
-          );
-        }
-        upsertSession({
-          session_id: result.session_id,
-          title: result.pane_title,
-          agent_id: choice.agentId,
-          cwd: result.cwd,
-          prompt: null,
-          prompt_summary: null,
-          worktree_path: result.worktree_path ?? null,
-          control_connected: false,
-          started_at_ms: Date.now(),
-          started_at_unix_ms: Date.now(),
-        });
-        setWorkspace((current) => {
-          if (!current) return current;
-          return splitPane(
-            current,
-            activePaneId,
-            "vertical",
-            createPaneRecord(result.session_id, result.pane_title),
-          );
-        });
-      }
-      invalidateWorktreeStatus(worktreePath);
-      reloadWorktrees();
-    } catch (error) {
-      console.error("attach to worktree failed", error);
-    }
   }
 
   async function handleLaunchAgent(
@@ -1486,9 +1389,27 @@ export default function TerminalWorkspace() {
     return map;
   }, [workspace]);
 
+  const sessionIdToProjectRoot = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (!workspace) return map;
+    for (const desktop of workspace.desktops) {
+      if (!desktop.projectRoot || !desktop.layout) continue;
+      for (const paneId of orderedPaneIds(desktop.layout)) {
+        const pane = workspace.panes[paneId];
+        if (pane) map[pane.sessionId] = desktop.projectRoot;
+      }
+    }
+    return map;
+  }, [workspace]);
+
   const sessionListRows = useMemo(
-    () => buildSessionListRows(sessionInfoById, sessionIdToPaneId),
-    [sessionInfoById, sessionIdToPaneId],
+    () =>
+      buildSessionListRows(
+        sessionInfoById,
+        sessionIdToPaneId,
+        sessionIdToProjectRoot,
+      ),
+    [sessionInfoById, sessionIdToPaneId, sessionIdToProjectRoot],
   );
 
   const worktreeRows: WorktreeRow[] = (() => {
@@ -1517,10 +1438,6 @@ export default function TerminalWorkspace() {
       };
     });
   })();
-
-  const mergeableCount = worktreeRows.filter(
-    (row) => !row.isMain && !row.merged,
-  ).length;
 
   const blockedRefs: BlockedSessionRef[] = blockedSessionIds.map((sessionId) => ({
     sessionId,
@@ -1568,21 +1485,10 @@ export default function TerminalWorkspace() {
       <AgentShell
         blocked={blockedRefs}
         onJumpToBlocked={handleJumpToBlocked}
-        worktreeRows={worktreeRows}
-        agents={agents}
         projectRoot={activeProjectRoot || ""}
         onChangeProjectRoot={() => {
           if (workspace) void handleChangeProjectRoot(workspace.activeDesktopId);
         }}
-        onFocusPane={(paneId) => handleFocusPaneAnywhere(paneId)}
-        onAttach={(worktreePath, choice) =>
-          void handleAttachToWorktree(worktreePath, choice)
-        }
-        onMerge={(worktreePath) => setMergeDialog({ focusPath: worktreePath })}
-        onAbandon={(worktreePath) => void handleAbandonWorktree(worktreePath)}
-        onRename={handleRenameWorktree}
-        mergeable={mergeableCount}
-        onOpenMergeDialog={() => setMergeDialog({ focusPath: null })}
         desktops={desktopEntries}
         activeDesktopId={workspace.activeDesktopId}
         onSwitchDesktop={handleSwitchDesktop}

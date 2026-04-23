@@ -1,8 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
-import WorktreeList, { type WorktreeRow } from "./WorktreeList";
-import MergeButton from "./MergeButton";
-import type { AgentDefinition } from "../../lib/ipc";
 import type { GraphLayout } from "../../lib/graphLayout";
 
 export type SidebarGraph =
@@ -17,11 +14,8 @@ export type SidebarGraph =
     };
 
 const WIDTH_KEY = "lastty.sidebar.width";
-const TOP_HEIGHT_KEY = "lastty.sidebar.topHeight";
 const WIDTH_MIN = 180;
 const WIDTH_MAX = 600;
-const TOP_MIN = 60;
-const BOTTOM_MIN = 120;
 
 function loadNumber(key: string, fallback: number, min: number, max: number): number {
   try {
@@ -44,44 +38,21 @@ function storeNumber(key: string, value: number): void {
 }
 
 export default function Sidebar({
-  rows,
-  agents,
   projectRoot,
   onChangeProjectRoot,
-  onFocusPane,
-  onAttach,
-  onMerge,
-  onAbandon,
-  onRename,
-  mergeable,
-  onOpenMergeDialog,
   footerExtras,
   sessionsSlot,
   graphSlot,
 }: {
-  rows: WorktreeRow[];
-  agents: AgentDefinition[];
   projectRoot: string;
   onChangeProjectRoot: () => void;
-  onFocusPane: (paneId: string) => void;
-  onAttach: (worktreePath: string, choice: "shell" | { agentId: string }) => void;
-  onMerge: (worktreePath: string) => void;
-  onAbandon?: (worktreePath: string) => void;
-  onRename?: (worktreePath: string, newBranch: string) => Promise<void>;
-  mergeable: number;
-  onOpenMergeDialog: () => void;
   footerExtras?: ReactNode;
   sessionsSlot: ReactNode;
   graphSlot?: ReactNode;
 }) {
   const [width, setWidth] = useState(() => loadNumber(WIDTH_KEY, 240, WIDTH_MIN, WIDTH_MAX));
-  const [topHeight, setTopHeight] = useState(() =>
-    loadNumber(TOP_HEIGHT_KEY, 240, TOP_MIN, 10_000),
-  );
-  const asideRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => storeNumber(WIDTH_KEY, width), [width]);
-  useEffect(() => storeNumber(TOP_HEIGHT_KEY, topHeight), [topHeight]);
 
   const startWidthDrag = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -104,35 +75,11 @@ export default function Sidebar({
     handle.addEventListener("pointercancel", onEnd);
   };
 
-  const startTopHeightDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const handle = event.currentTarget;
-    const startY = event.clientY;
-    const startTop = topHeight;
-    const asideHeight = asideRef.current?.clientHeight ?? 0;
-    handle.setPointerCapture(event.pointerId);
-
-    const onMove = (moveEvent: PointerEvent) => {
-      const next = startTop + (moveEvent.clientY - startY);
-      const max = Math.max(TOP_MIN, asideHeight - BOTTOM_MIN);
-      setTopHeight(Math.max(TOP_MIN, Math.min(max, next)));
-    };
-    const onEnd = () => {
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onEnd);
-      handle.removeEventListener("pointercancel", onEnd);
-    };
-    handle.addEventListener("pointermove", onMove);
-    handle.addEventListener("pointerup", onEnd);
-    handle.addEventListener("pointercancel", onEnd);
-  };
-
   return (
     <aside
-      ref={asideRef}
       className="agent-sidebar"
       style={{ width, minWidth: width }}
-      aria-label="worktrees"
+      aria-label="sessions"
     >
       <div className="agent-sidebar__project">
         <span
@@ -150,23 +97,7 @@ export default function Sidebar({
           change
         </button>
       </div>
-      <WorktreeList
-        rows={rows}
-        agents={agents}
-        onFocusPane={onFocusPane}
-        onAttach={onAttach}
-        onMerge={onMerge}
-        onAbandon={onAbandon}
-        onRename={onRename}
-        style={{ height: topHeight, maxHeight: "none", flexShrink: 0 }}
-      />
-      <div
-        className="agent-sidebar__divider is-draggable"
-        role="separator"
-        aria-orientation="horizontal"
-        onPointerDown={startTopHeightDrag}
-      />
-      <div className="agent-sidebar__section is-bottom">
+      <div className="agent-sidebar__section is-sessions">
         <div className="agent-sidebar__label">Sessions</div>
         {sessionsSlot}
       </div>
@@ -176,20 +107,11 @@ export default function Sidebar({
           <div className="agent-sidebar__graph-body">{graphSlot}</div>
         </div>
       )}
-      <div className="agent-sidebar__footer">
-        {mergeable > 0 && (
-          <MergeButton
-            count={mergeable}
-            disabled={false}
-            onClick={onOpenMergeDialog}
-          />
-        )}
-        {footerExtras && (
-          <div className="agent-sidebar__footer-row">
-            {footerExtras}
-          </div>
-        )}
-      </div>
+      {footerExtras && (
+        <div className="agent-sidebar__footer">
+          <div className="agent-sidebar__footer-row">{footerExtras}</div>
+        </div>
+      )}
       <div
         className="agent-sidebar__width-handle"
         role="separator"

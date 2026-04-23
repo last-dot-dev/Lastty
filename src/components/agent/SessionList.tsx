@@ -12,48 +12,100 @@ export interface SessionListRow {
   paneId: string | null;
   taskName: string;
   agentId: string;
-  worktreeBranchName: string;
-  startedAtMs: number;
+  projectRoot: string;
+  projectLabel: string;
+  startedAtUnixMs: number;
 }
 
 export function buildSessionListRows(
   sessionInfoById: Record<string, SessionInfo>,
   sessionIdToPaneId: Record<string, string>,
+  projectRootBySessionId: Record<string, string> = {},
 ): SessionListRow[] {
   return Object.values(sessionInfoById)
-    .map((info) => ({
-      sessionId: info.session_id,
-      paneId: sessionIdToPaneId[info.session_id] ?? null,
-      taskName: deriveTaskName(info),
-      agentId: deriveAgentType(info),
-      worktreeBranchName: branchFromPath(info.worktree_path || info.cwd),
-      startedAtMs: info.started_at_ms,
-    }))
-    .sort((a, b) => b.startedAtMs - a.startedAtMs);
+    .map((info) => {
+      const projectRoot =
+        projectRootBySessionId[info.session_id] ??
+        inferProjectRoot(info.worktree_path, info.cwd);
+      return {
+        sessionId: info.session_id,
+        paneId: sessionIdToPaneId[info.session_id] ?? null,
+        taskName: shortTaskName(info, projectRoot),
+        agentId: deriveAgentType(info),
+        projectRoot,
+        projectLabel: projectLabel(projectRoot),
+        startedAtUnixMs: info.started_at_unix_ms,
+      };
+    })
+    .sort((a, b) => b.startedAtUnixMs - a.startedAtUnixMs);
 }
 
-export function groupRowsByBranch(
+export function groupRowsByProject(
   rows: SessionListRow[],
-): Array<{ branch: string; rows: SessionListRow[] }> {
+): Array<{ projectRoot: string; projectLabel: string; rows: SessionListRow[] }> {
   const order: string[] = [];
-  const groups = new Map<string, SessionListRow[]>();
+  const groups = new Map<
+    string,
+    { projectLabel: string; rows: SessionListRow[] }
+  >();
   for (const row of rows) {
-    const existing = groups.get(row.worktreeBranchName);
+    const existing = groups.get(row.projectRoot);
     if (existing) {
-      existing.push(row);
+      existing.rows.push(row);
     } else {
-      order.push(row.worktreeBranchName);
-      groups.set(row.worktreeBranchName, [row]);
+      order.push(row.projectRoot);
+      groups.set(row.projectRoot, { projectLabel: row.projectLabel, rows: [row] });
     }
   }
-  return order.map((branch) => ({ branch, rows: groups.get(branch)! }));
+  return order.map((projectRoot) => ({
+    projectRoot,
+    projectLabel: groups.get(projectRoot)!.projectLabel,
+    rows: groups.get(projectRoot)!.rows,
+  }));
 }
 
-function branchFromPath(path: string | null | undefined): string {
-  if (!path) return "shell";
-  const trimmed = path.replace(/\/+$/, "");
+function inferProjectRoot(
+  worktreePath: string | null | undefined,
+  cwd: string | null | undefined,
+): string {
+  const path = worktreePath || cwd || "";
+  const match = path.match(/^(.*?)\/\.(lastty|pane)-worktrees\//);
+  if (match) return match[1]!;
+  return path.replace(/\/+$/, "");
+}
+
+function projectLabel(projectRoot: string): string {
+  if (!projectRoot) return "shell";
+  const trimmed = projectRoot.replace(/\/+$/, "");
   const idx = trimmed.lastIndexOf("/");
-  return idx === -1 ? trimmed : trimmed.slice(idx + 1) || trimmed;
+  const base = idx === -1 ? trimmed : trimmed.slice(idx + 1);
+  return base || trimmed;
+}
+
+const TASK_NAME_MAX = 40;
+
+function shortTaskName(info: SessionInfo, projectRoot: string): string {
+  const raw = deriveTaskName(info).trim();
+  const firstLine = raw.split(/\r?\n/)[0]!.trim();
+  const stripped = stripPathPrefix(firstLine, projectRoot);
+  if (stripped.length <= TASK_NAME_MAX) return stripped;
+  return `${stripped.slice(0, TASK_NAME_MAX - 1)}…`;
+}
+
+function stripPathPrefix(name: string, projectRoot: string): string {
+  if (
+    projectRoot &&
+    (name === projectRoot || name.startsWith(`${projectRoot}/`))
+  ) {
+    const rel = name.slice(projectRoot.length).replace(/^\/+/, "");
+    return rel || projectLabel(projectRoot);
+  }
+  if (name.startsWith("/") || name.startsWith("~/")) {
+    const trimmed = name.replace(/\/+$/, "");
+    const idx = trimmed.lastIndexOf("/");
+    return idx === -1 ? trimmed : trimmed.slice(idx + 1) || trimmed;
+  }
+  return name;
 }
 
 export default function SessionList({
@@ -68,12 +120,17 @@ export default function SessionList({
   if (rows.length === 0) {
     return <div className="agent-sidebar__empty">no sessions yet</div>;
   }
-  const groups = groupRowsByBranch(rows);
+  const groups = groupRowsByProject(rows);
   return (
     <div className="agent-session-list">
       {groups.map((group) => (
-        <div key={group.branch} className="agent-session-list__group">
-          <div className="agent-session-list__group-header">{group.branch}</div>
+        <div key={group.projectRoot} className="agent-session-list__group">
+          <div
+            className="agent-session-list__group-header"
+            title={group.projectRoot}
+          >
+            {group.projectLabel}
+          </div>
           {group.rows.map((row) => (
             <SessionRow
               key={row.sessionId}
@@ -100,6 +157,10 @@ function SessionRow({
   const ui = useAgentSession(row.sessionId);
   const status = deriveAgentStatus(ui, false);
   const disabled = row.paneId === null;
+  const relative =
+    row.startedAtUnixMs > 0
+      ? formatRelative(Math.floor(row.startedAtUnixMs / 1000), nowMs)
+      : "—";
   return (
     <button
       type="button"
@@ -117,7 +178,7 @@ function SessionRow({
       />
       <span className="agent-session-list__task">{row.taskName}</span>
       <span className="agent-session-list__meta">
-        {row.agentId} · {formatRelative(Math.floor(row.startedAtMs / 1000), nowMs)}
+        {row.agentId} · {relative}
       </span>
     </button>
   );
