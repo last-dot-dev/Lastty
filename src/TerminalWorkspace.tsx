@@ -295,6 +295,10 @@ export default function TerminalWorkspace() {
     Record<string, HistoryEntry>
   >({});
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
+  const [resumedHistoryIds, setResumedHistoryIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const resumedSessionToHistoryId = useRef<Map<string, string>>(new Map());
 
   const refreshHistory = useCallback(async () => {
     try {
@@ -1180,6 +1184,12 @@ export default function TerminalWorkspace() {
         result.session_id,
         entry.title || entry.prompt_summary || "resumed",
       );
+      resumedSessionToHistoryId.current.set(result.session_id, entry.session_id);
+      setResumedHistoryIds((prev) => {
+        const next = new Set(prev);
+        next.add(entry.session_id);
+        return next;
+      });
       setWorkspace((current) => {
         if (!current) return current;
         const anchorPaneId = activeDesktop(current).focusedPaneId;
@@ -1242,6 +1252,16 @@ export default function TerminalWorkspace() {
     useAgentStore.getState().forgetSession(sessionId);
     setTerminalSnapshotsBySessionId(dropKey);
     setRestoredSnapshotsBySessionId(dropKey);
+    const resumedFromHistoryId = resumedSessionToHistoryId.current.get(sessionId);
+    if (resumedFromHistoryId) {
+      resumedSessionToHistoryId.current.delete(sessionId);
+      setResumedHistoryIds((prev) => {
+        if (!prev.has(resumedFromHistoryId)) return prev;
+        const next = new Set(prev);
+        next.delete(resumedFromHistoryId);
+        return next;
+      });
+    }
     setWorkspace((current) => {
       if (!current) return current;
       const pane = Object.values(current.panes).find(
@@ -1467,8 +1487,15 @@ export default function TerminalWorkspace() {
         sessionIdToPaneId,
         sessionIdToProjectRoot,
         historyEntries,
+        resumedHistoryIds,
       ),
-    [sessionInfoById, sessionIdToPaneId, sessionIdToProjectRoot, historyEntries],
+    [
+      sessionInfoById,
+      sessionIdToPaneId,
+      sessionIdToProjectRoot,
+      historyEntries,
+      resumedHistoryIds,
+    ],
   );
 
   const worktreeRows: WorktreeRow[] = (() => {

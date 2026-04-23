@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { SessionInfo } from "../../lib/ipc";
+import type { HistoryEntry, SessionInfo } from "../../lib/ipc";
 import {
   buildSessionListRows,
   groupRowsByProject,
@@ -100,6 +100,33 @@ describe("buildSessionListRows", () => {
       { s1: "/Users/me/ws/lastty" },
     );
     expect(rows[0]!.taskName).toBe("lastty");
+  });
+
+  it("excludes history entries via excludedHistoryIds", () => {
+    const history: HistoryEntry[] = [
+      {
+        session_id: "claude:abc",
+        title: "old session",
+        agent_id: "claude",
+        cwd: "/repo",
+        worktree_path: null,
+        prompt_summary: "fix a thing",
+        started_at_ms: 100,
+        last_event_ms: 200,
+        exit_code: 0,
+        pinned: false,
+        agent_session_id: "abc",
+        source: "claude_disk",
+      },
+    ];
+    const rows = buildSessionListRows(
+      {},
+      {},
+      {},
+      history,
+      new Set(["claude:abc"]),
+    );
+    expect(rows).toEqual([]);
   });
 
   it("strips project-root prefix from task name", () => {

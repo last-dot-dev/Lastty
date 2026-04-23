@@ -25,14 +25,8 @@ export function buildSessionListRows(
   sessionIdToPaneId: Record<string, string>,
   projectRootBySessionId: Record<string, string> = {},
   historyEntries: HistoryEntry[] = [],
+  excludedHistoryIds: Set<string> = new Set(),
 ): SessionListRow[] {
-  const liveSessionIds = new Set(Object.keys(sessionInfoById));
-  const liveAgentSessionIds = new Set(
-    Object.values(sessionInfoById)
-      .map((info) => info.session_id)
-      .filter((id): id is string => Boolean(id)),
-  );
-
   const liveRows: SessionListRow[] = Object.values(sessionInfoById).map((info) => {
     const projectRoot =
       projectRootBySessionId[info.session_id] ??
@@ -52,12 +46,7 @@ export function buildSessionListRows(
   });
 
   const dormantRows: SessionListRow[] = historyEntries
-    .filter((entry) => {
-      if (liveSessionIds.has(entry.session_id)) return false;
-      if (entry.agent_session_id && liveAgentSessionIds.has(entry.agent_session_id))
-        return false;
-      return true;
-    })
+    .filter((entry) => !excludedHistoryIds.has(entry.session_id))
     .map((entry) => {
       const projectRoot = inferProjectRoot(entry.worktree_path, entry.cwd);
       return {
