@@ -14,7 +14,7 @@ use super::{AdapterYield, AgentAdapter};
 /// Writer that receives adapter-synthesized bytes. In the session path this
 /// is a clone of the PTY master write fd; in tests it's typically a
 /// `Vec<u8>` wrapped in a `Mutex`.
-pub trait AdapterSink: Send + 'static {
+pub(crate) trait AdapterSink: Send + 'static {
     fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()>;
 }
 
@@ -40,7 +40,7 @@ impl AdapterSink for Arc<Mutex<Vec<u8>>> {
 ///
 /// Returns a join handle for the orchestrator thread. The caller can wait
 /// on it to observe completion, or drop it to detach.
-pub fn spawn_adapter<S: AdapterSink>(
+pub(crate) fn spawn_adapter<S: AdapterSink>(
     mut adapter: Box<dyn AgentAdapter>,
     mut sink: S,
 ) -> std::io::Result<JoinHandle<()>> {
