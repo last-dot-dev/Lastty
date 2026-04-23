@@ -387,7 +387,7 @@ pub(super) fn parse_iso_ms(ts: &str) -> Option<u128> {
 
     let unix_days = days_from_civil(year, month, day);
     let total_secs =
-        unix_days as i64 * 86_400 + (hour as i64) * 3600 + (minute as i64) * 60 + second as i64;
+        unix_days * 86_400 + (hour as i64) * 3600 + (minute as i64) * 60 + second as i64;
     if total_secs < 0 {
         return None;
     }
