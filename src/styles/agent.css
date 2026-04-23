@@ -275,6 +275,13 @@
   font-size: 13px;
   line-height: 1;
   border-radius: var(--border-radius-sm);
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+
+.agent-desktop-tab:hover .agent-desktop-tab__close,
+.agent-desktop-tab__close:focus-visible {
+  opacity: 1;
 }
 
 .agent-desktop-tab__close:hover {
@@ -874,6 +881,16 @@
 .agent-worktree-row__action:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.agent-worktree-row__action--abandon {
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+
+.agent-worktree-row:hover .agent-worktree-row__action--abandon,
+.agent-worktree-row__action--abandon:focus-visible {
+  opacity: 1;
 }
 
 .agent-worktree-row__attach-menu {

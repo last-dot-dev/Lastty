@@ -317,7 +317,7 @@ function WorktreeRowView({
         {!row.isMain && onAbandon && (
           <button
             type="button"
-            className="agent-worktree-row__action"
+            className="agent-worktree-row__action agent-worktree-row__action--abandon"
             onClick={(event) => {
               event.stopPropagation();
               onAbandon(row.path);
