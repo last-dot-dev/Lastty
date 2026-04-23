@@ -28,6 +28,42 @@ const STATUS_GLYPH: Record<ChangedFile["status"], string> = {
   other: "·",
 };
 
+export type WorktreeOption = {
+  value: string;
+  label: string;
+  sublabel?: string;
+};
+
+export function buildWorktreeOptions(
+  isShell: boolean,
+  worktrees: WorktreeRow[],
+  basenameOf: (path: string) => string,
+): WorktreeOption[] {
+  return [
+    {
+      value: "in_place",
+      label: "main (in-place)",
+      sublabel: "run in the main checkout",
+    },
+    ...(!isShell
+      ? [
+          {
+            value: "new",
+            label: "new worktree",
+            sublabel: "fresh branch off main",
+          },
+        ]
+      : []),
+    ...worktrees
+      .filter((wt) => !wt.isMain)
+      .map((wt) => ({
+        value: wt.path,
+        label: wt.branchName || basenameOf(wt.path) || "(detached)",
+        sublabel: wt.isLastty ? "lastty worktree" : undefined,
+      })),
+  ];
+}
+
 export default function WorktreeList({
   rows,
   agents,

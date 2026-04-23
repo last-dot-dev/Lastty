@@ -45,7 +45,10 @@ import PaneFooter from "./components/agent/PaneFooter";
 import ProgressBar from "./components/agent/ProgressBar";
 import ReplyInput from "./components/agent/ReplyInput";
 import EdgeSpawner, { type SpawnDirection } from "./components/agent/EdgeSpawner";
-import type { WorktreeRow } from "./components/agent/WorktreeList";
+import {
+  buildWorktreeOptions,
+  type WorktreeRow,
+} from "./components/agent/WorktreeList";
 import SessionList, { buildSessionListRows } from "./components/agent/SessionList";
 import CommitGraph from "./components/agent/CommitGraph";
 import { layoutGraph } from "./lib/graphLayout";
@@ -2397,29 +2400,7 @@ function LaunchAgentModal({
     })),
   ];
 
-  const worktreeOptions = [
-    ...(!isShell
-      ? [
-          {
-            value: "in_place",
-            label: "main (in-place)",
-            sublabel: "run in the main checkout",
-          },
-          {
-            value: "new",
-            label: "new worktree",
-            sublabel: "fresh branch off main",
-          },
-        ]
-      : []),
-    ...worktrees
-      .filter((wt) => !wt.isMain)
-      .map((wt) => ({
-        value: wt.path,
-        label: wt.branchName || basenameOfPath(wt.path) || "(detached)",
-        sublabel: wt.isLastty ? "lastty worktree" : undefined,
-      })),
-  ];
+  const worktreeOptions = buildWorktreeOptions(isShell, worktrees, basenameOfPath);
 
   const effectiveChoice =
     worktreeOptions.some((o) => o.value === worktreeChoice)
