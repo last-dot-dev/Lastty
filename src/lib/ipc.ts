@@ -422,7 +422,12 @@ export type SyncPolicy = "shared" | "clean";
 export type WorktreeStrategy =
   | { kind: "in_place" }
   | { kind: "attach"; path: string }
-  | { kind: "new"; sync?: SyncPolicy; branch?: string | null };
+  | {
+      kind: "new";
+      sync?: SyncPolicy;
+      branch?: string | null;
+      base?: string | null;
+    };
 
 export interface LaunchAgentRequest {
   agent_id: string;

@@ -59,6 +59,7 @@ import { useShowGitGraph } from "./hooks/useShowGitGraph";
 import { useThemeOverride } from "./hooks/useThemeOverride";
 import { useKeyboardMode } from "./hooks/useKeyboardMode";
 import { useLastAgent } from "./hooks/useLastAgent";
+import { useLastLaunchPrefs } from "./hooks/useLastLaunchPrefs";
 import {
   activeDesktop,
   attachPaneToDesktop,
@@ -114,6 +115,7 @@ import {
   killTerminal,
   launchAgent,
   listAgents,
+  listGitBranches,
   listSessions,
   listWorktrees,
   respondToApproval,
@@ -496,6 +498,7 @@ export default function TerminalWorkspace() {
 
   const keyboardMode = useKeyboardMode();
   const { lastAgentId, setLastAgentId } = useLastAgent();
+  const { prefs: launchPrefs, setPrefs: setLaunchPrefs } = useLastLaunchPrefs();
   const resolvedLastAgentId =
     lastAgentId === "shell" || agents.some((a) => a.id === lastAgentId)
       ? lastAgentId
@@ -852,104 +855,64 @@ export default function TerminalWorkspace() {
     });
   }
 
-  async function handleLaunchAgent(
-    draftId: string,
-    config: {
-      agentId: string;
-      prompt: string;
-      worktreeChoice: string;
-      launchCount: number;
-      branchName: string;
-    },
-  ) {
-    if (!workspace || !config.agentId) return;
+  async function handleLaunchAgent(draftId: string, config: LaunchAgentConfig) {
+    if (!workspace || !config.agentId || !config.cwd) return;
     setLastAgentId(config.agentId);
-    const desktop = activeDesktop(workspace);
     setLaunching(true);
     try {
-      const count = Math.max(1, Math.min(5, config.launchCount));
-      const isolate = config.worktreeChoice === "new";
-      const inPlace = config.worktreeChoice === "in_place";
-      const attachPath = isolate || inPlace ? null : config.worktreeChoice;
-      let anchorPaneId: string = draftId;
-      for (let i = 0; i < count; i += 1) {
-        let newSessionId: string;
-        let newTitle: string;
-        const fallbackCwd = attachPath || desktop.projectRoot || undefined;
-        if (config.agentId === "shell") {
-          const cwd = fallbackCwd;
-          if (!cwd) {
-            console.error("handleLaunchAgent: no cwd available");
-            return;
-          }
-          newSessionId = await createTerminal(cwd);
-          newTitle = basenameOfPath(cwd) || "shell";
-          await hydrateSessionInfo(newSessionId, newTitle);
-        } else {
-          const worktree: WorktreeStrategy = isolate
-            ? {
-                kind: "new",
-                branch:
-                  count === 1 && config.branchName ? config.branchName : null,
-              }
-            : attachPath
-              ? { kind: "attach", path: attachPath }
-              : { kind: "in_place" };
-          if (!fallbackCwd) {
-            console.error("handleLaunchAgent: no cwd available");
-            return;
-          }
-          const result = await launchAgent({
-            agent_id: config.agentId,
-            prompt: config.prompt || null,
-            cwd: fallbackCwd,
-            worktree,
-          });
-          if (result.auto_promoted) {
-            setAutoPromoteNotice(
-              `another agent is running here — created ${basenameOfPath(
-                result.worktree_path ?? "",
-              )} to isolate`,
-            );
-          }
-          upsertSession({
-            session_id: result.session_id,
-            title: result.pane_title,
-            agent_id: config.agentId,
-            cwd: result.cwd,
-            prompt: config.prompt || null,
-            prompt_summary: config.prompt || null,
-            worktree_path: result.worktree_path ?? null,
-            control_connected: false,
-            started_at_ms: 0,
-            started_at_unix_ms: 0,
-          });
-          newSessionId = result.session_id;
-          newTitle = result.pane_title;
+      const cwd = config.cwd;
+      let newSessionId: string;
+      let newTitle: string;
+      if (config.agentId === "shell") {
+        newSessionId = await createTerminal(cwd);
+        newTitle = basenameOfPath(cwd) || "shell";
+        await hydrateSessionInfo(newSessionId, newTitle);
+      } else {
+        const worktree: WorktreeStrategy = config.useWorktree
+          ? { kind: "new", branch: null, base: config.baseBranch ?? null }
+          : { kind: "in_place" };
+        const result = await launchAgent({
+          agent_id: config.agentId,
+          prompt: config.prompt || null,
+          cwd,
+          worktree,
+        });
+        if (result.auto_promoted) {
+          setAutoPromoteNotice(
+            `another agent is running here — created ${basenameOfPath(
+              result.worktree_path ?? "",
+            )} to isolate`,
+          );
         }
-        if (i === 0) {
-          setWorkspace((current) => {
-            if (!current || !(draftId in current.panes)) return current;
-            return {
-              ...current,
-              panes: {
-                ...current.panes,
-                [draftId]: {
-                  ...current.panes[draftId],
-                  sessionId: newSessionId,
-                  title: newTitle,
-                },
-              },
-            };
-          });
-        } else {
-          const paneRecord = createPaneRecord(newSessionId, newTitle);
-          setWorkspace((current) => {
-            if (!current || !(anchorPaneId in current.panes)) return current;
-            return splitPane(current, anchorPaneId, "vertical", paneRecord);
-          });
-        }
+        upsertSession({
+          session_id: result.session_id,
+          title: result.pane_title,
+          agent_id: config.agentId,
+          cwd: result.cwd,
+          prompt: config.prompt || null,
+          prompt_summary: config.prompt || null,
+          worktree_path: result.worktree_path ?? null,
+          control_connected: false,
+          started_at_ms: 0,
+          started_at_unix_ms: 0,
+        });
+        newSessionId = result.session_id;
+        newTitle = result.pane_title;
       }
+      setWorkspace((current) => {
+        if (!current || !(draftId in current.panes)) return current;
+        return {
+          ...current,
+          panes: {
+            ...current.panes,
+            [draftId]: {
+              ...current.panes[draftId],
+              sessionId: newSessionId,
+              title: newTitle,
+            },
+          },
+        };
+      });
       setDraftPaneIds((prev) => {
         if (!prev.has(draftId)) return prev;
         const next = new Set(prev);
@@ -1715,16 +1678,17 @@ export default function TerminalWorkspace() {
                             <LaunchAgentModal
                               key={paneId}
                               agents={agents}
-                              worktrees={worktreeRows}
                               launching={launching}
-                              projectLabel={
-                                basenameOfPath(activeProjectRoot || "") || "project"
-                              }
+                              initialCwd={activeProjectRoot || ""}
                               initialAgentId={
                                 draftSeedByPaneId[paneId]
                                 ?? resolvedLastAgentId
                                 ?? agents[0]?.id
                                 ?? ""
+                              }
+                              initialUseWorktree={launchPrefs.useWorktree}
+                              onUseWorktreeChange={(value) =>
+                                setLaunchPrefs({ useWorktree: value })
                               }
                               onClose={() => cancelDraftPane(paneId)}
                               onLaunch={(config) => handleLaunchAgent(paneId, config)}
@@ -2314,28 +2278,30 @@ function PaneDropOverlay({
 interface LaunchAgentConfig {
   agentId: string;
   prompt: string;
-  worktreeChoice: string;
-  launchCount: number;
-  branchName: string;
+  cwd: string;
+  baseBranch: string | null;
+  useWorktree: boolean;
 }
 
 const MAX_PROMPT_PX = 300;
 
 function LaunchAgentModal({
   agents,
-  worktrees,
   launching,
-  projectLabel,
+  initialCwd,
   initialAgentId,
+  initialUseWorktree,
+  onUseWorktreeChange,
   onClose,
   onLaunch,
   onAgentChange,
 }: {
   agents: AgentDefinition[];
-  worktrees: WorktreeRow[];
   launching: boolean;
-  projectLabel: string;
+  initialCwd: string;
   initialAgentId: string;
+  initialUseWorktree: boolean;
+  onUseWorktreeChange: (value: boolean) => void;
   onClose: () => void;
   onLaunch: (config: LaunchAgentConfig) => void;
   onAgentChange?: (agentId: string) => void;
@@ -2348,9 +2314,16 @@ function LaunchAgentModal({
     onAgentChange?.(id);
   };
   const [prompt, setPrompt] = useState("");
-  const [worktreeChoice, setWorktreeChoice] = useState<string>("in_place");
-  const [launchCount, setLaunchCount] = useState<number>(1);
-  const [branchName, setBranchName] = useState<string>("");
+  const [cwd, setCwd] = useState<string>(initialCwd);
+  const [branches, setBranches] = useState<
+    { name: string; is_current: boolean }[] | null
+  >(null);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
+  const [useWorktree, setUseWorktreeState] = useState<boolean>(initialUseWorktree);
+  const setUseWorktree = (value: boolean) => {
+    setUseWorktreeState(value);
+    onUseWorktreeChange(value);
+  };
   const isShell = selectedAgentId === "shell";
   const selectedAgent = isShell
     ? { id: "shell", name: "Shell" }
@@ -2370,6 +2343,54 @@ function LaunchAgentModal({
     if (isShell) launcherRef.current?.focus();
   }, [isShell]);
 
+  useEffect(() => {
+    if (!cwd) {
+      setBranches(null);
+      setSelectedBranch(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const isRepo = await isGitRepo(cwd);
+        if (cancelled) return;
+        if (!isRepo) {
+          setBranches(null);
+          setSelectedBranch(null);
+          return;
+        }
+        const list = await listGitBranches(cwd);
+        if (cancelled) return;
+        setBranches(list);
+        const current = list.find((b) => b.is_current);
+        setSelectedBranch(current?.name ?? list[0]?.name ?? null);
+      } catch (error) {
+        if (cancelled) return;
+        console.error("listGitBranches failed", error);
+        setBranches(null);
+        setSelectedBranch(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd]);
+
+  const pickFolder = async () => {
+    try {
+      const picked = await openFolderDialog({
+        directory: true,
+        multiple: false,
+        defaultPath: cwd || undefined,
+      });
+      if (typeof picked === "string" && picked) {
+        setCwd(picked);
+      }
+    } catch (error) {
+      console.error("folder picker failed", error);
+    }
+  };
+
   const agentOptions = [
     { value: "shell", label: "Shell", sublabel: "plain terminal" },
     ...agents.map((agent) => ({
@@ -2379,51 +2400,24 @@ function LaunchAgentModal({
     })),
   ];
 
-  const worktreeOptions = [
-    ...(!isShell
-      ? [
-          {
-            value: "in_place",
-            label: "main (in-place)",
-            sublabel: "run in the main checkout",
-          },
-          {
-            value: "new",
-            label: "new worktree",
-            sublabel: "fresh branch off main",
-          },
-        ]
-      : []),
-    ...worktrees
-      .filter((wt) => !wt.isMain)
-      .map((wt) => ({
-        value: wt.path,
-        label: wt.branchName || basenameOfPath(wt.path) || "(detached)",
-        sublabel: wt.isLastty ? "lastty worktree" : undefined,
-      })),
-  ];
-
-  const effectiveChoice =
-    worktreeOptions.some((o) => o.value === worktreeChoice)
-      ? worktreeChoice
-      : worktreeOptions[0]?.value ?? "in_place";
-
-  const worktreeLabel = (() => {
-    const opt = worktreeOptions.find((o) => o.value === effectiveChoice);
-    return opt?.label ?? "worktree";
-  })();
-
-  const canLaunch = Boolean(selectedAgentId) && !launching;
+  const canLaunch = Boolean(selectedAgentId) && Boolean(cwd) && !launching;
   const submitLaunch = () => {
     if (!canLaunch) return;
     onLaunch({
       agentId: selectedAgentId,
       prompt,
-      worktreeChoice: effectiveChoice,
-      launchCount,
-      branchName,
+      cwd,
+      baseBranch: selectedBranch,
+      useWorktree: useWorktree && !isShell && branches !== null,
     });
   };
+
+  const folderLabel = basenameOfPath(cwd) || "project";
+  const branchOptions = (branches ?? []).map((b) => ({
+    value: b.name,
+    label: b.name,
+    sublabel: b.is_current ? "current" : undefined,
+  }));
 
   return (
     <div
@@ -2474,44 +2468,40 @@ function LaunchAgentModal({
               value={selectedAgentId}
               onChange={setSelectedAgentId}
             />
-            <span
-              className="agent-launcher__chip is-readonly"
-              title="active view's project folder"
+            <button
+              type="button"
+              className="agent-launcher__chip"
+              onClick={pickFolder}
+              title={cwd || "choose folder"}
             >
               <span aria-hidden="true">📁</span>
-              {projectLabel}
-            </span>
-            <ChipMenu
-              icon="⎇"
-              label={worktreeLabel}
-              options={worktreeOptions}
-              value={effectiveChoice}
-              onChange={setWorktreeChoice}
-            />
-            {!isShell && (
-              <ChipMenu
-                icon="⊞"
-                label={`${launchCount}×`}
-                options={[1, 2, 3, 4, 5].map((n) => ({
-                  value: String(n),
-                  label: `${n}×`,
-                  sublabel:
-                    n === 1 ? "one agent" : `${n} parallel agents, each isolated`,
-                }))}
-                value={String(launchCount)}
-                onChange={(value) => {
-                  const parsed = Number.parseInt(value, 10);
-                  if (!Number.isNaN(parsed)) setLaunchCount(parsed);
-                }}
-              />
-            )}
-            {!isShell && worktreeChoice === "new" && launchCount === 1 && (
-              <input
-                className="agent-launcher__branch-input"
-                placeholder="branch name (optional)"
-                value={branchName}
-                onChange={(event) => setBranchName(event.target.value)}
-              />
+              {folderLabel}
+            </button>
+            {!isShell && branches && branches.length > 0 && (
+              <div className="agent-launcher__branch-pill">
+                <ChipMenu
+                  icon="⎇"
+                  label={selectedBranch ?? "branch"}
+                  options={branchOptions}
+                  value={selectedBranch ?? ""}
+                  onChange={setSelectedBranch}
+                />
+                <div
+                  className="agent-launcher__branch-pill-divider"
+                  aria-hidden="true"
+                />
+                <label
+                  className="agent-launcher__worktree-toggle"
+                  title="create a new worktree off the selected branch"
+                >
+                  <input
+                    type="checkbox"
+                    checked={useWorktree}
+                    onChange={(event) => setUseWorktree(event.target.checked)}
+                  />
+                  worktree
+                </label>
+              </div>
             )}
             <div className="agent-launcher__spacer" />
             <button

@@ -680,6 +680,7 @@ impl RuleEngine {
                         rule.action.branch_name.as_deref(),
                         event,
                     )),
+                    base: None,
                 }
             } else {
                 crate::agents::WorktreeStrategy::InPlace

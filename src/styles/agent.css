@@ -1125,16 +1125,53 @@
   color: var(--color-text-tertiary);
 }
 
-.agent-launcher__branch-input {
-  background: var(--color-background-primary);
+.agent-launcher__branch-pill {
+  display: inline-flex;
+  align-items: stretch;
   border: 0.5px solid var(--color-border-tertiary);
+  background: var(--color-background-primary);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.agent-launcher__branch-pill:hover {
+  border-color: var(--color-border-secondary);
+}
+
+.agent-launcher__branch-pill .agent-launcher__chip {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  padding: 3px 10px;
+}
+
+.agent-launcher__branch-pill .agent-launcher__chip-wrap {
+  display: inline-flex;
+}
+
+.agent-launcher__branch-pill-divider {
+  width: 0.5px;
+  background: var(--color-border-tertiary);
+  align-self: stretch;
+}
+
+.agent-launcher__worktree-toggle {
+  appearance: none;
+  background: transparent;
+  border: none;
+  cursor: pointer;
   color: var(--color-text-primary);
-  font-family: var(--font-mono);
+  font: inherit;
   font-size: 11px;
   padding: 3px 10px;
-  border-radius: 999px;
-  min-width: 180px;
-  outline: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.agent-launcher__worktree-toggle input {
+  margin: 0;
+  cursor: pointer;
 }
 
 .agent-launcher__spacer {

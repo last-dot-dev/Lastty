@@ -73,6 +73,8 @@ pub enum WorktreeStrategy {
         sync: SyncPolicy,
         #[serde(default)]
         branch: Option<String>,
+        #[serde(default)]
+        base: Option<String>,
     },
 }
 
@@ -312,6 +314,7 @@ fn auto_promote_if_busy<R: Runtime>(
         WorktreeStrategy::New {
             sync: SyncPolicy::default(),
             branch: None,
+            base: None,
         },
         true,
     )
@@ -348,7 +351,7 @@ fn resolve_strategy(
                 prepared: None,
             })
         }
-        WorktreeStrategy::New { sync, branch } => {
+        WorktreeStrategy::New { sync, branch, base } => {
             let branch_name = branch
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| {
@@ -370,14 +373,22 @@ fn resolve_strategy(
                     worktree_path.display()
                 ));
             }
+            let mut git_args: Vec<String> = vec![
+                "worktree".into(),
+                "add".into(),
+                "-b".into(),
+                branch_name.clone(),
+                worktree_path.to_string_lossy().into_owned(),
+            ];
+            if let Some(base_branch) = base
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+            {
+                git_args.push(base_branch.to_string());
+            }
             let status = Command::new("git")
-                .args([
-                    "worktree",
-                    "add",
-                    "-b",
-                    &branch_name,
-                    worktree_path.to_string_lossy().as_ref(),
-                ])
+                .args(&git_args)
                 .current_dir(base_cwd)
                 .status()?;
             if !status.success() {
